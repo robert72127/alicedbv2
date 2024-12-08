@@ -5,7 +5,7 @@
 #include "Queue.h"
 
 #include <map>
-#include <list>
+#include <set>
 #include <functional>
 #include <mutex>
 #include <cstring>
@@ -166,6 +166,7 @@ private:
  * current approach with delta might not work if for example right table was negative and then becomes positive for except
  * then out delta should be like delete all? wait but not really cause we actually compare with all versions, so older version will show
  * they updates too, definetely something to think about cause for example maybe in out_queue we want to hold single tuple and deltas for each tuple
+ * but with our current multiset approach we don't need to do that
 */
 // projection can be represented by single node
 template <typename InType, typename OutType>
@@ -296,9 +297,36 @@ public:
 		}
 
 		
-
 		// insert new deltas from in_queues
-
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
+				index match_index = this->next_index_left_;
+				this->next_index_left_++;
+				this->tuple_to_index_left[in_left_tuple->data] = match_index;
+				this->index_to_deltas_left.emplace_back({in_left_tuple->delta}).
+			}
+			else{
+				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in->left_tuple->delta);
+			}
+		}
+		while (this->in_queue_right_->GetNext(&in_data_right)) {
+			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_right.contains(in_left_tuple->data)){
+				index match_index = this->next_index_right_;
+				this->next_index_right_++;
+				this->tuple_to_index_right[in_right_tuple->data] = match_index;
+				this->index_to_deltas_right.emplace_back({in_right_tuple->delta}).
+			}
+			else{
+				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in->left_tuple->delta);
+			}
+		}
+		
 		// clean in_queues	
 		this->in_queue_left_->Clean();
 		this->in_queue_right_->Clean();
@@ -328,6 +356,43 @@ public:
 	}
 
 private:
+	void Compact(){
+		for(int index = 0; index < this->index_to_deltas_left_.size(); index++){
+			auto &deltas = this->index_to_deltas_left_[index];
+			int previous_count = 0;
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ++it) {
+				if(it->ts < this->ts_ - frontier_ts_){
+					previous_count += it->count;
+					// erase this version
+					auto base_it = std::next(it).base();
+            		it = std::multiset<Delta>::reverse_iterator(deltas.erase(base_it));
+				}
+				// update oldest delta version and continue with next index
+				else{
+					it->count += previouse_count;
+					break; 
+				}
+			}
+		}
+		for(int index = 0; index < this->index_to_deltas_right_.size(); index++){
+			auto &deltas = this->index_to_deltas_right_[index];
+			int previous_count = 0;
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ++it) {
+				if(it->ts < this->ts_ - frontier_ts_){
+					previous_count += it->count;
+					// erase this version
+					auto base_it = std::next(it).base();
+            		it = std::multiset<Delta>::reverse_iterator(deltas.erase(base_it));
+				}
+				// update oldest delta version and continue with next index
+				else{
+					it->count += previouse_count;
+					break; 
+				}
+			}		
+		}
+	}
+
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
@@ -346,14 +411,18 @@ private:
 
 	std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function_;
 
+	size_t next_index_left_=0;
+	size_t next_index_right_=0;
+
+
     // we can treat whole tuple as a key, this will return it's index  
 	// we will later use some persistent storage for that mapping, maybe rocksdb or something
     std::unordered_map<char[sizeof(Type)], index> tuple_to_index_left;
     std::unordered_map<char[sizeof(Type)], index> tuple_to_index_right;
-    // from index we can get list of changes to the input, later
-	// we will use some better data structure for that
-    std::vector< std::list<Delta>> index_to_deltas_left_;
-    std::vector< std::list<Delta>> index_to_deltas_right_;
+    // from index we can get multiset of changes to the input, later
+	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
 
 
 	std::mutex node_mutex;

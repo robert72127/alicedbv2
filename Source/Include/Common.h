@@ -8,6 +8,10 @@ using index = long long;
 
 using timestamp = long long;
 
+// for automatically sorting by delta
+bool deltaComparator(const Delta& a, const Delta& b) {
+    return a.ts < b.ts;
+}
 
 struct Delta{
 	timestamp ts;

@@ -22,7 +22,6 @@ public:
 
 	virtual void Compute() = 0;
 
-
     /** 
      * @brief update lowest ts this node will need to hold
     */
@@ -52,7 +51,7 @@ public:
 template <typename Type>
 class Source : public Node {
 public:
-	Source(void (*produce)(Type **out_data));
+	Source(std::function<void(Type **out_data)>produce) : produce_{produce} {}
 
 	void Compute() {
 		if (this->update_ts_) {
@@ -63,7 +62,7 @@ public:
 		/** @todo produce using this->produce_ */
 	}
 
-	Queue<Type> *Output() {
+	Queue *Output() {
 		return this->out_queue_;
 	}
 
@@ -79,9 +78,6 @@ public:
 		}
 	}
 
-    bool Pull(){
-        if(this->map_pull_index_ == this->tupl)
-    }
 	
 	timestamp GetFrontierTs() const{
 		return this->frontier_ts_;
@@ -96,9 +92,8 @@ private:
     // what is oldest timestamp that needs to be keept by this table
     timestamp ts_;
 
-
-	void (*produce_)(Type **);
-
+	std::function<void(Type **out_data)>produce_;
+	
 	Queue *out_queue_;
     Queue *produce_queue_;
 
@@ -107,7 +102,7 @@ private:
     std::unordered_map<char[sizeof(Type)], index> tuple_to_index_;
     // from index we can get list of changes to the input, later
 	// we will use some better data structure for that
-    std::vector< std::list<Delta>> index_to_deltas_;
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_;
 
 };
 
@@ -117,8 +112,8 @@ private:
 template <typename Type>
 class Filter : public Node {
 public:
-	Filter(Node *in_node, std::function<bool>(const Type &) > condition)
-	    : condition_ {condition}, in_node_ {in_node}, in_queue_ {in_node->Output()} , 
+	Filter(Node *in_node, std::function<bool(const Type &) > condition)
+	    : condition_{condition}, in_node_ {in_node}, in_queue_ {in_node->Output()} , 
 		frontier_ts_{in_node->GetFrontierTs()}
 	{
 		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
@@ -149,7 +144,7 @@ public:
 	}
 
 private:
-	std::function<bool>(const Type *) > condition_;
+	std::function<bool(const Type *) > condition_;
 
 	// acquired from in node, this will be passed to output node
 	timestamp frontier_ts_;
@@ -173,9 +168,9 @@ template <typename InType, typename OutType>
 class Projection : public Node {
 public:
 	Projection(Node *in_node,  std::function<OutType(const InType&)>projection)
-	    : projection_ {projection}, in_queue_ {in_queue}, in_node_ {in_node}, in_queue_ {in_node->Output()} frontier_ts_{in_node->GetFrontierTs()} 
+	    : projection_ {projection}, in_node_ {in_node}, in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} 
 	{
-		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
 	}
 
 	void Compute() {
@@ -210,7 +205,7 @@ public:
 	}
 
 private:
-	std::function<OutType(InType)>projection_
+	std::function<OutType(InType)>projection_;
 	
 	// track this for global timestamp state update
 	Node *in_node_;
@@ -230,14 +225,14 @@ class SimpleBinaryNode {
 public:
 	SimpleBinaryNode(Node *in_node_left, Node *in_node_right,
 		// it's just using different ways to compute delta for each different kind of node
-		std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function;
+		std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function
 	):
-		in_node_left_{in_node_left}, in_node_right{in_node_right}, 
+		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
 		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
-		delta_function_{delta_function}, this->frontier_ts{std::max(in_node_left_->GetFrontierTs(), in_node_right_->GetFrontierTs())}
+		delta_function_{delta_function}, frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
 	{
 		this->ts_ = 0;
-		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<Type>));
 	}
 
 	Queue *Output() {
@@ -255,10 +250,10 @@ public:
 			while(this->in_queue_right_->GetNext(&in_data_right)){
 				Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 				// if left and right queues match on data put it into out_queue with new delta
-				if(std::memcp(in_left_tuple->data, in_right_tuple->data, sizeof(Type))){
+				if(std::memcmp(in_left_tuple->data, in_right_tuple->data, sizeof(Type))){
 					this->out_queue_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
-					Tuple<OutType> *out_tuple = (Tuple<InType> *)(out_data);
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
 					out_tuple->data = in_left_tuple->data;
 					out_tuple->delta = out_delta;
 				}
@@ -269,13 +264,13 @@ public:
 		// compute left queue against right table
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-			char left_data* = (char *)&in_left_tuple->data;
+			char *left_data = (char *)&in_left_tuple->data;
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_right[left_data];
-			for(it = this->index_to_deltas_right.begin(); it != this->index_to_deltas_right.end(); it++){
+			for(auto it = this->index_to_deltas_right.begin(); it != this->index_to_deltas_right.end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
-				Tuple<OutType> *out_tuple = (Tuple<InType> *)(out_data);
+				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
 				out_tuple->data = in_left_tuple->data;
 				out_tuple->delta = out_delta;
 			}
@@ -284,13 +279,13 @@ public:
 		// compute right queue against left table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-			char right_data* = (char *)&in_right_tuple->data;
+			char *right_data = (char *)&in_right_tuple->data;
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_left[right_data];
-			for(it = this->index_to_deltas_left.begin(); it != this->index_to_deltas_left.end(); it++){
+			for(auto it = this->index_to_deltas_left.begin(); it != this->index_to_deltas_left.end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
-				Tuple<OutType> *out_tuple = (Tuple<InType> *)(out_data);
+				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
 				out_tuple->data = in_right_tuple->data;
 				out_tuple->delta = out_delta;
 			}
@@ -305,25 +300,25 @@ public:
 				index match_index = this->next_index_left_;
 				this->next_index_left_++;
 				this->tuple_to_index_left[in_left_tuple->data] = match_index;
-				this->index_to_deltas_left.emplace_back({in_left_tuple->delta}).
+				this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
 			}
 			else{
 				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
-				this->index_to_deltas_left[match_index].insert(in->left_tuple->delta);
+				this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
 			}
 		}
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_right.contains(in_left_tuple->data)){
+			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
 				index match_index = this->next_index_right_;
 				this->next_index_right_++;
 				this->tuple_to_index_right[in_right_tuple->data] = match_index;
-				this->index_to_deltas_right.emplace_back({in_right_tuple->delta}).
+				this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
-				this->index_to_deltas_left[match_index].insert(in->left_tuple->delta);
+				index match_index = this->tuple_to_index_left[&in_right_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
 			}
 		}
 		
@@ -333,7 +328,7 @@ public:
 		
 		
 		if (this->compact_){
-			this->Compact()
+			this->Compact();
 		}
 	}
 
@@ -357,40 +352,69 @@ public:
 
 private:
 	void Compact(){
-		for(int index = 0; index < this->index_to_deltas_left_.size(); index++){
-			auto &deltas = this->index_to_deltas_left_[index];
+	// Example setup: vector of multisets
+		std::vector<std::multiset<Delta>> index_to_deltas_left_;
+
+		// Populate with some sample data
+		index_to_deltas_left_.emplace_back(std::multiset<Delta>{ {10, 1}, {15, 2}, {20, 3}, {25, 4} });
+		index_to_deltas_left_.emplace_back(std::multiset<Delta>{ {5, 5}, {12, 6}, {18, 7}, {22, 8} });
+
+		// Define ts_ and frontier_ts_ for the example
+		timestamp ts_ = 30;
+		timestamp frontier_ts_ = 10;
+
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_left_.size(); index++){
+			auto &deltas = index_to_deltas_left_[index];
 			int previous_count = 0;
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ++it) {
-				if(it->ts < this->ts_ - frontier_ts_){
-					previous_count += it->count;
-					// erase this version
-					auto base_it = std::next(it).base();
-            		it = std::multiset<Delta>::reverse_iterator(deltas.erase(base_it));
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
 				}
-				// update oldest delta version and continue with next index
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
 				else{
-					it->count += previouse_count;
-					break; 
+					deltas.insert(Delta{ts, previous_count});
+					break;
 				}
 			}
 		}
-		for(int index = 0; index < this->index_to_deltas_right_.size(); index++){
-			auto &deltas = this->index_to_deltas_right_[index];
+
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_right_.size(); index++){
+			auto &deltas = index_to_deltas_right_[index];
 			int previous_count = 0;
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ++it) {
-				if(it->ts < this->ts_ - frontier_ts_){
-					previous_count += it->count;
-					// erase this version
-					auto base_it = std::next(it).base();
-            		it = std::multiset<Delta>::reverse_iterator(deltas.erase(base_it));
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
 				}
-				// update oldest delta version and continue with next index
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
 				else{
-					it->count += previouse_count;
-					break; 
+					deltas.insert(Delta{ts, previous_count});
+					break;
 				}
-			}		
+			}
 		}
+
 	}
 
 	// timestamp will be used to track valid tuples
@@ -427,6 +451,32 @@ private:
 
 	std::mutex node_mutex;
 };
+
+template <typename T>
+class Union: SimpleBinaryNode<T>{
+	Union(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
+	{}
+	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
+		return {std::max(left_delta.ts, right_delta.ts), left_delta.count + right_delta.count};
+	}
+};
+template <typename T>
+class Intersect: SimpleBinaryNode<T>{
+	Intersect(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
+	{}
+	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
+		return {std::max(left_delta.ts, right_delta.ts), left_delta.count - right_delta.count};
+	}
+};
+template <typename T>
+class Except: SimpleBinaryNode<T>{
+	Except(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
+	{}
+	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
+		return {std::max(left_delta.ts, right_delta.ts), left_delta.count * right_delta.count};
+	}
+};
+
 
 
 }

@@ -50,7 +50,7 @@ struct Queue {
 	 * and assume user will insert's data there thus
 	 * increase metadata as in Insert
 	 */
-	void ReservetNext(char **data) {
+	void ReserveNext(char **data) {
 		if (this->current_size_ + this->tuple_size_ > this->queue_size_) {
 			this->Resize(current_size_ * 2);
 		}
@@ -72,14 +72,13 @@ struct Queue {
 	 * @return true if there are tuples left
 	 * false otherwise, then also reset current_offset to allow for new iteration
 	 */
-	bool GetNext(char **tuple) {
+	bool GetNext(const char **tuple) {
 		if (this->current_offset_ + this->tuple_size_ > this->queue_size_) {
 			this->current_offset_ = 0;
 			return false;
 		}
-		char *current = this->storage_ + current_offset_;
-		current_offset_ += tuple_size_;
 		*tuple = this->storage_ + this->current_offset_;
+		current_offset_ += tuple_size_;
 		return true;
 	}
 

@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "Queue.h"
 
+#include <type_traits>
 #include <map>
 #include <set>
 #include <functional>
@@ -267,7 +268,7 @@ public:
 			char *left_data = (char *)&in_left_tuple->data;
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_right[left_data];
-			for(auto it = this->index_to_deltas_right.begin(); it != this->index_to_deltas_right.end(); it++){
+			for(auto it = this->index_to_deltas_right[match_index].begin(); it != this->index_to_deltas_right[match_index].end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
 				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
@@ -282,7 +283,7 @@ public:
 			char *right_data = (char *)&in_right_tuple->data;
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_left[right_data];
-			for(auto it = this->index_to_deltas_left.begin(); it != this->index_to_deltas_left.end(); it++){
+			for(auto it = this->index_to_deltas_left[match_index].begin(); it != this->index_to_deltas_left[match_index].end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
 				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
@@ -352,17 +353,6 @@ public:
 
 private:
 	void Compact(){
-	// Example setup: vector of multisets
-		std::vector<std::multiset<Delta>> index_to_deltas_left_;
-
-		// Populate with some sample data
-		index_to_deltas_left_.emplace_back(std::multiset<Delta>{ {10, 1}, {15, 2}, {20, 3}, {25, 4} });
-		index_to_deltas_left_.emplace_back(std::multiset<Delta>{ {5, 5}, {12, 6}, {18, 7}, {22, 8} });
-
-		// Define ts_ and frontier_ts_ for the example
-		timestamp ts_ = 30;
-		timestamp frontier_ts_ = 10;
-
 		// Iterate over each multiset in the vector
 		for(int index = 0; index < index_to_deltas_left_.size(); index++){
 			auto &deltas = index_to_deltas_left_[index];
@@ -477,7 +467,457 @@ class Except: SimpleBinaryNode<T>{
 	}
 };
 
+template <typename InLeft, typename InRight, typename OutType>
+class CrossJoinNode: public Node {
+public:
+	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<OutType(InLeft,InRight)>join_layout)
+	 	join_layout_{join_layout},
+		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
+		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
+		frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
+	{
+		this->ts_ = 0;
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+	}
 
+	Queue *Output() {
+		return this->out_queue_;
+	}
+
+	void Compute() {
+
+		// compute right_queue against left_queue
+		// they are small and hold no indexes so we do it just by nested loop
+		const char *in_data_left;
+		const char *in_data_right;
+		char *out_data;
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			while(this->in_queue_right_->GetNext(&in_data_right)){
+				Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+				// if left and right queues match on data put it into out_queue with new delta
+				this->out_queue_->ReserveNext(&out_data);
+				Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
+				out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
+				&out_tuple->data = this->join_layout_(in_left_tuple, in_right_tuple);
+			}
+		}
+
+		// compute left queue against right table
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			char *left_data = (char *)&in_left_tuple->data;
+			// get all matching on data from right
+			index match_index = this->tuple_to_index_right[left_data];
+			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
+				this->out_queue_->ReserveNext(&out_data);
+				for(auto it = this->index_to_deltas_right[table_idx].begin(); it != this->index_to_deltas_right[table_idx].end(); it++){
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->data =  this->join_layout_(in_left_tuple->data, table_data);
+					out_tuple->delta = out_delta;
+				}
+			}
+		}
+
+		// compute right queue against left table
+		while (this->in_queue_right_->GetNext(&in_data_right)) {
+			Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+			char *right_data = (char *)&in_right_tuple->data;
+			// get all matching on data from right
+			index match_index = this->tuple_to_index_left[right_data];
+			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
+				this->out_queue_->ReserveNext(&out_data);
+				for(auto it = this->index_to_deltas_left[table_idx].begin(); it != this->index_to_deltas_left[table_idx].end(); it++){
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					out_tuple->data =  this->join_layout_(table_data, in_left_tuple->data);
+					out_tuple->delta = out_delta;
+				}
+			}
+		}
+
+
+		// insert new deltas from in_queues
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
+				index match_index = this->next_index_left_;
+				this->next_index_left_++;
+				this->tuple_to_index_left[in_left_tuple->data] = match_index;
+				this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
+			}
+		}
+
+		while (this->in_queue_right_->GetNext(&in_data_right)) {
+			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
+				index match_index = this->next_index_right_;
+				this->next_index_right_++;
+				this->tuple_to_index_right[in_right_tuple->data] = match_index;
+				this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_left[&in_right_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
+			}
+		}
+		
+		// clean in_queues	
+		this->in_queue_left_->Clean();
+		this->in_queue_right_->Clean();
+		
+		
+		if (this->compact_){
+			this->Compact();
+		}
+	}
+
+	void UpdateTimestamp(timestamp ts) {
+		if (ts <= this->ts_) {
+			return;
+		}
+		// way to keep track on when we can get rid of old tuple deltas
+		this->ts = ts_;
+		if(this->ts_ - this->previous_ts > this->frontier_ts){
+			this->compact_ = true;
+			this->previous_ts = ts;
+		}
+		if (this->in_node_left_ != nullptr) {
+			this->in_node_left_->UpdateTimestamp(ts);
+		}
+		if (this->in_node_right_ != nullptr) {
+			this->in_node_right_->UpdateTimestamp(ts);
+		}
+	}
+
+private:
+	void Compact(){
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_left_.size(); index++){
+			auto &deltas = index_to_deltas_left_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_right_.size(); index++){
+			auto &deltas = index_to_deltas_right_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+
+	}
+
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+	timestamp previous_ts;
+	
+	timestamp frontier_ts_;
+	
+	Node *in_node_left_;
+	Node *in_node_right_;
+
+	Queue *in_queue_left_;
+	Queue *in_queue_right_;
+
+	Queue *out_queue_;
+
+	size_t next_index_left_=0;
+	size_t next_index_right_=0;
+ 	
+	std::function<OutType(InLeft,InRight)>join_layout_;
+  
+    // we can treat whole tuple as a key, this will return it's index  
+	// we will later use some persistent storage for that mapping, maybe rocksdb or something
+    std::unordered_map<char[sizeof(InLeft)], index> tuple_to_index_left;
+    std::unordered_map<char[sizeof(InRight)], index> tuple_to_index_right;
+    // from index we can get multiset of changes to the input, later
+	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
+
+
+	std::mutex node_mutex;
+};
+
+
+// join on
+// match type could be even char[] in this case
+template <typename InLeft, typename InRight, typename MatchType , typename OutType>
+class CrossJoinNode: public Node {
+public:
+	CrossJoinNode(Node *in_node_left, Node *in_node_right, 
+		std::function<MatchType(InLeft *)>get_match_left,
+		std::function<MatchType(InRight*)>get_match_right,
+		std::function<OutType(InLeft*, InRight *)>get_match_right)
+
+	 	join_layout_{join_layout},
+		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
+		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
+		frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
+	{
+		this->ts_ = 0;
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+	}
+
+	Queue *Output() {
+		return this->out_queue_;
+	}
+
+	void Compute() {
+
+		// compute right_queue against left_queue
+		// they are small and hold no indexes so we do it just by nested loop
+		const char *in_data_left;
+		const char *in_data_right;
+		char *out_data;
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			while(this->in_queue_right_->GetNext(&in_data_right)){
+				Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+				// if left and right queues match on data put it into out_queue with new delta
+				this->out_queue_->ReserveNext(&out_data);
+				Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
+				out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
+				&out_tuple->data = this->join_layout_(in_left_tuple, in_right_tuple);
+			}
+		}
+
+		// compute left queue against right table
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			char *left_data = (char *)&in_left_tuple->data;
+			// get all matching on data from right
+			index match_index = this->tuple_to_index_right[left_data];
+			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
+				this->out_queue_->ReserveNext(&out_data);
+				for(auto it = this->index_to_deltas_right[table_idx].begin(); it != this->index_to_deltas_right[table_idx].end(); it++){
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->data =  this->join_layout_(in_left_tuple->data, table_data);
+					out_tuple->delta = out_delta;
+				}
+			}
+		}
+
+		// compute right queue against left table
+		while (this->in_queue_right_->GetNext(&in_data_right)) {
+			Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+			char *right_data = (char *)&in_right_tuple->data;
+			// get all matching on data from right
+			index match_index = this->tuple_to_index_left[right_data];
+			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
+				this->out_queue_->ReserveNext(&out_data);
+				for(auto it = this->index_to_deltas_left[table_idx].begin(); it != this->index_to_deltas_left[table_idx].end(); it++){
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					out_tuple->data =  this->join_layout_(table_data, in_left_tuple->data);
+					out_tuple->delta = out_delta;
+				}
+			}
+		}
+
+
+		// insert new deltas from in_queues
+		while (this->in_queue_left_->GetNext(&in_data_left)) {
+			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
+				index match_index = this->next_index_left_;
+				this->next_index_left_++;
+				this->tuple_to_index_left[in_left_tuple->data] = match_index;
+				this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
+			}
+		}
+
+		while (this->in_queue_right_->GetNext(&in_data_right)) {
+			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
+				index match_index = this->next_index_right_;
+				this->next_index_right_++;
+				this->tuple_to_index_right[in_right_tuple->data] = match_index;
+				this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_left[&in_right_tuple->data];
+				this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
+			}
+		}
+		
+		// clean in_queues	
+		this->in_queue_left_->Clean();
+		this->in_queue_right_->Clean();
+		
+		
+		if (this->compact_){
+			this->Compact();
+		}
+	}
+
+	void UpdateTimestamp(timestamp ts) {
+		if (ts <= this->ts_) {
+			return;
+		}
+		// way to keep track on when we can get rid of old tuple deltas
+		this->ts = ts_;
+		if(this->ts_ - this->previous_ts > this->frontier_ts){
+			this->compact_ = true;
+			this->previous_ts = ts;
+		}
+		if (this->in_node_left_ != nullptr) {
+			this->in_node_left_->UpdateTimestamp(ts);
+		}
+		if (this->in_node_right_ != nullptr) {
+			this->in_node_right_->UpdateTimestamp(ts);
+		}
+	}
+
+private:
+	void Compact(){
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_left_.size(); index++){
+			auto &deltas = index_to_deltas_left_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_right_.size(); index++){
+			auto &deltas = index_to_deltas_right_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+
+	}
+
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+	timestamp previous_ts;
+	
+	timestamp frontier_ts_;
+	
+	Node *in_node_left_;
+	Node *in_node_right_;
+
+	Queue *in_queue_left_;
+	Queue *in_queue_right_;
+
+	Queue *out_queue_;
+
+	size_t next_index_left_=0;
+	size_t next_index_right_=0;
+ 	
+	std::function<OutType(InLeft,InRight)>join_layout_;
+  
+    // we can treat whole tuple as a key, this will return it's index  
+	// we will later use some persistent storage for that mapping, maybe rocksdb or something
+    std::unordered_map<char[sizeof(InLeft)], index> tuple_to_index_left;
+    std::unordered_map<char[sizeof(InRight)], index> tuple_to_index_right;
+    // from index we can get multiset of changes to the input, later
+	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
+
+
+	std::mutex node_mutex;
+};
+
+
+
+
+// aggregations
 
 }
 #endif

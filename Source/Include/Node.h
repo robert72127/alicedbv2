@@ -219,26 +219,146 @@ private:
 	Queue *out_queue_;
 };
 
+/**
+ * @brief this will implement all but Compute functions for Stateful binary nodes
+ */
 
-// this is node behind Union, Except and Intersect, there InType is equal to OutType
-template <typename Type>
-class SimpleBinaryNode {
-public:
-	SimpleBinaryNode(Node *in_node_left, Node *in_node_right,
-		// it's just using different ways to compute delta for each different kind of node
-		std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function
-	):
+template<typename LeftType, typename RightType, typename OutType>
+class StatefulBinaryNode : Node {
+
+	StatefulBinaryNode(Node *in_node_left, Node *in_node_right):
 		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
 		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
-		delta_function_{delta_function}, frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
+		frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
 	{
 		this->ts_ = 0;
-		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<Type>));
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
 	}
 
 	Queue *Output() {
 		return this->out_queue_;
 	}
+
+	virtual void Compute() = 0;
+
+	void UpdateTimestamp(timestamp ts) {
+		if (ts <= this->ts_) {
+			return;
+		}
+		// way to keep track on when we can get rid of old tuple deltas
+		this->ts = ts_;
+		if(this->ts_ - this->previous_ts > this->frontier_ts){
+			this->compact_ = true;
+			this->previous_ts = ts;
+		}
+		if (this->in_node_left_ != nullptr) {
+			this->in_node_left_->UpdateTimestamp(ts);
+		}
+		if (this->in_node_right_ != nullptr) {
+			this->in_node_right_->UpdateTimestamp(ts);
+		}
+	}
+
+private:
+	void Compact(){
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_left_.size(); index++){
+			auto &deltas = index_to_deltas_left_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_right_.size(); index++){
+			auto &deltas = index_to_deltas_right_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+
+	}
+
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+	timestamp previous_ts;
+	
+	timestamp frontier_ts_;
+	
+	Node *in_node_left_;
+	Node *in_node_right_;
+
+	Queue *in_queue_left_;
+	Queue *in_queue_right_;
+
+	Queue *out_queue_;
+
+	size_t next_index_left_=0;
+	size_t next_index_right_=0;
+
+
+    // we can treat whole tuple as a key, this will return it's index  
+	// we will later use some persistent storage for that mapping, maybe rocksdb or something
+    std::unordered_map<char[sizeof(LeftType)], index> tuple_to_index_left;
+    std::unordered_map<char[sizeof(RightType)], index> tuple_to_index_right;
+    // from index we can get multiset of changes to the input, later
+	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
+
+	std::mutex node_mutex;
+};
+
+
+// this is node behind Union, Except and Intersect, there InType is equal to OutType
+/** @todo it needs better name :) */
+template <typename Type>
+class SimpleBinaryNode: public StatefulBinaryNode<Type, Type, Type> {
+public:
+	SimpleBinaryNode(Node *in_node_left, Node *in_node_right,
+		// it's just using different ways to compute delta for each different kind of node
+		std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function
+	): SimpleBinaryNode<Type, Type, Type>(in_node_left, in_node_right),
+		delta_function_{delta_function}, frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
+	{}
 
 	void Compute() {
 		// compute right_queue against left_queue
@@ -332,114 +452,8 @@ public:
 			this->Compact();
 		}
 	}
-
-	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
-		// way to keep track on when we can get rid of old tuple deltas
-		this->ts = ts_;
-		if(this->ts_ - this->previous_ts > this->frontier_ts){
-			this->compact_ = true;
-			this->previous_ts = ts;
-		}
-		if (this->in_node_left_ != nullptr) {
-			this->in_node_left_->UpdateTimestamp(ts);
-		}
-		if (this->in_node_right_ != nullptr) {
-			this->in_node_right_->UpdateTimestamp(ts);
-		}
-	}
-
-private:
-	void Compact(){
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_left_.size(); index++){
-			auto &deltas = index_to_deltas_left_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_right_.size(); index++){
-			auto &deltas = index_to_deltas_right_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-	}
-
-	// timestamp will be used to track valid tuples
-	// after update propagate it to input nodes
-	bool compact_ = false;
-	timestamp ts_;
-	timestamp previous_ts;
-	
-	timestamp frontier_ts_;
-	
-	Node *in_node_left_;
-	Node *in_node_right_;
-
-	Queue *in_queue_left_;
-	Queue *in_queue_right_;
-
-	Queue *out_queue_;
-
+	// extra state beyond StatefulNode is only deltafunction
 	std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function_;
-
-	size_t next_index_left_=0;
-	size_t next_index_right_=0;
-
-
-    // we can treat whole tuple as a key, this will return it's index  
-	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<char[sizeof(Type)], index> tuple_to_index_left;
-    std::unordered_map<char[sizeof(Type)], index> tuple_to_index_right;
-    // from index we can get multiset of changes to the input, later
-	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
-
-
-	std::mutex node_mutex;
 };
 
 template <typename T>
@@ -467,22 +481,12 @@ class Except: SimpleBinaryNode<T>{
 	}
 };
 
-template <typename InLeft, typename InRight, typename OutType>
-class CrossJoinNode: public Node {
+template <typename InTypeLeft, typename InTypeRight, typename OutType>
+class CrossJoinNode: public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
-	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<OutType(InLeft,InRight)>join_layout)
-	 	join_layout_{join_layout},
-		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
-		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
-		frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
-	{
-		this->ts_ = 0;
-		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
-	}
-
-	Queue *Output() {
-		return this->out_queue_;
-	}
+	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<OutType(InLeft,InRight)>join_layout):
+	 	StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
+	 	join_layout_{join_layout} {}
 
 	void Compute() {
 
@@ -578,139 +582,29 @@ public:
 			this->Compact();
 		}
 	}
-
-	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
-		// way to keep track on when we can get rid of old tuple deltas
-		this->ts = ts_;
-		if(this->ts_ - this->previous_ts > this->frontier_ts){
-			this->compact_ = true;
-			this->previous_ts = ts;
-		}
-		if (this->in_node_left_ != nullptr) {
-			this->in_node_left_->UpdateTimestamp(ts);
-		}
-		if (this->in_node_right_ != nullptr) {
-			this->in_node_right_->UpdateTimestamp(ts);
-		}
-	}
-
 private:
-	void Compact(){
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_left_.size(); index++){
-			auto &deltas = index_to_deltas_left_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
 
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_right_.size(); index++){
-			auto &deltas = index_to_deltas_right_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-	}
-
-	// timestamp will be used to track valid tuples
-	// after update propagate it to input nodes
-	bool compact_ = false;
-	timestamp ts_;
-	timestamp previous_ts;
-	
-	timestamp frontier_ts_;
-	
-	Node *in_node_left_;
-	Node *in_node_right_;
-
-	Queue *in_queue_left_;
-	Queue *in_queue_right_;
-
-	Queue *out_queue_;
-
-	size_t next_index_left_=0;
-	size_t next_index_right_=0;
- 	
-	std::function<OutType(InLeft,InRight)>join_layout_;
-  
-    // we can treat whole tuple as a key, this will return it's index  
-	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<char[sizeof(InLeft)], index> tuple_to_index_left;
-    std::unordered_map<char[sizeof(InRight)], index> tuple_to_index_right;
-    // from index we can get multiset of changes to the input, later
-	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
-
-
-	std::mutex node_mutex;
+	// only state beyound StatefulNode state is join_layout_function
+	std::function<OutType(InLeft,InRight)>join_layout_;  
 };
+
 
 
 // join on
 // match type could be even char[] in this case
-template <typename InLeft, typename InRight, typename MatchType , typename OutType>
-class CrossJoinNode: public Node {
+template <typename InTypeLeft, typename InTypeRight, typename MatchType , typename OutType>
+class JoinNode: public StatefulBinaryNode<InLeft, In> {
 public:
 	CrossJoinNode(Node *in_node_left, Node *in_node_right, 
-		std::function<MatchType(InLeft *)>get_match_left,
-		std::function<MatchType(InRight*)>get_match_right,
-		std::function<OutType(InLeft*, InRight *)>get_match_right)
+		std::function<MatchType(InTypeLeft *)>get_match_left,
+		std::function<MatchType(InTypeRight*)>get_match_right,
+		std::function<OutType(InTypeLeft*, InTypeRight *)>get_match_right):
+	StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
+	get_match_left_(get_match_left) get_match_right_{get_match_right}, join_layout_{join_layout}
+	{}
 
-	 	join_layout_{join_layout},
-		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
-		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
-		frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
-	{
-		this->ts_ = 0;
-		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
-	}
 
-	Queue *Output() {
-		return this->out_queue_;
-	}
-
+	// this function changes
 	void Compute() {
 
 		// compute right_queue against left_queue
@@ -806,112 +700,17 @@ public:
 		}
 	}
 
-	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
-		// way to keep track on when we can get rid of old tuple deltas
-		this->ts = ts_;
-		if(this->ts_ - this->previous_ts > this->frontier_ts){
-			this->compact_ = true;
-			this->previous_ts = ts;
-		}
-		if (this->in_node_left_ != nullptr) {
-			this->in_node_left_->UpdateTimestamp(ts);
-		}
-		if (this->in_node_right_ != nullptr) {
-			this->in_node_right_->UpdateTimestamp(ts);
-		}
-	}
-
 private:
-	void Compact(){
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_left_.size(); index++){
-			auto &deltas = index_to_deltas_left_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
 
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_right_.size(); index++){
-			auto &deltas = index_to_deltas_right_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-	}
-
-	// timestamp will be used to track valid tuples
-	// after update propagate it to input nodes
-	bool compact_ = false;
-	timestamp ts_;
-	timestamp previous_ts;
-	
-	timestamp frontier_ts_;
-	
-	Node *in_node_left_;
-	Node *in_node_right_;
-
-	Queue *in_queue_left_;
-	Queue *in_queue_right_;
-
-	Queue *out_queue_;
-
-	size_t next_index_left_=0;
-	size_t next_index_right_=0;
- 	
+	// we need those functions to calculate matchfields from tuples on left and righ
+	std::function<MatchType(InLeft *)>get_match_left_;
+	std::function<MatchType(InRight*)>get_match_right_;	
 	std::function<OutType(InLeft,InRight)>join_layout_;
   
-    // we can treat whole tuple as a key, this will return it's index  
-	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<char[sizeof(InLeft)], index> tuple_to_index_left;
-    std::unordered_map<char[sizeof(InRight)], index> tuple_to_index_right;
-    // from index we can get multiset of changes to the input, later
-	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
+	// we need to get corresponding tuples using only match chars, this maps will help us with it
+    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InLeft)]> > match_to_tuple_left_;
+    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InLeft)]> > match_to_tuple_right_;
 
-
-	std::mutex node_mutex;
 };
 
 

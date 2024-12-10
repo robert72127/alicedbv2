@@ -613,46 +613,51 @@ public:
 		const char *in_data_right;
 		char *out_data;
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
-			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			while(this->in_queue_right_->GetNext(&in_data_right)){
-				Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+				Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 				// if left and right queues match on data put it into out_queue with new delta
-				this->out_queue_->ReserveNext(&out_data);
-				Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
-				out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
-				&out_tuple->data = this->join_layout_(in_left_tuple, in_right_tuple);
+				if (JoinNode.Compare(&in_left->tuple->data, &in_right_tuple->data) ){
+					this->out_queue_->ReserveNext(&out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
+					&out_tuple->data = this->join_layout_(in_left_tuple, in_right_tuple);
+				}
 			}
 		}
 
 		// compute left queue against right table
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
-			char *left_data = (char *)&in_left_tuple->data;
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_right[left_data];
-			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
-				this->out_queue_->ReserveNext(&out_data);
-				for(auto it = this->index_to_deltas_right[table_idx].begin(); it != this->index_to_deltas_right[table_idx].end(); it++){
+			MatchType *match = this->get_match_left_(in_left_tuple->data);
+			// all tuples from right table that match this left tuple
+			for(auto tpl_it = this->match_to_tuple_right_[match].begin(); tpl_it != this->match_to_tuple_right_.end(); tpl_it++){
+				// now iterate all version of this tuple
+				char &right[sizeof(InTypeRight)] right_data = *tpl_it;
+				for(auto it = this->index_to_deltas_right[right_data].begin(); it != this->index_to_deltas_right[right_data].end(); it++){
+					this->out_queue_->ReserveNext(&out_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data =  this->join_layout_(in_left_tuple->data, table_data);
+					out_tuple->data =  this->join_layout_(in_left_tuple->data, right_data);
 					out_tuple->delta = out_delta;
 				}
 			}
 		}
-
-		// compute right queue against left table
+		// compute left queue against right table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
-			Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
-			char *right_data = (char *)&in_right_tuple->data;
+			Tuple<InLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_left[right_data];
-			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
-				this->out_queue_->ReserveNext(&out_data);
-				for(auto it = this->index_to_deltas_left[table_idx].begin(); it != this->index_to_deltas_left[table_idx].end(); it++){
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data =  this->join_layout_(table_data, in_left_tuple->data);
+			MatchType *match = this->get_match_right_(in_left_tuple->data);
+			// all tuples from right table that match this left tuple
+			for(auto tpl_it = this->match_to_tuple_left_[match].begin(); tpl_it != this->match_to_tuple_left_.end(); tpl_it++){
+				// now iterate all version of this tuple
+				char &left[sizeof(InTypeLeft)] left_data = *tpl_it;
+				for(auto it = this->index_to_deltas_left[left_data].begin(); it != this->index_to_deltas_left[left_data].end(); it++){
+					this->out_queue_->ReserveNext(&out_data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->data =  this->join_layout_(in_left_data, &in_right_tuple->data);
 					out_tuple->delta = out_delta;
 				}
 			}
@@ -701,6 +706,10 @@ public:
 	}
 
 private:
+
+	Static inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) { 
+			return std::memcmp(this->get_match_left(left_data), this->get_match_right(right_data), sizeof(MatchType));
+	}
 
 	// we need those functions to calculate matchfields from tuples on left and righ
 	std::function<MatchType(InLeft *)>get_match_left_;

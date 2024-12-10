@@ -724,8 +724,128 @@ private:
 
 
 
+/** @todo do we really need to keep and send to out_queue this initial value? maybe delta would be enough */
+// aggregations, is only Unary stateful node and there are two kinds of aggregates, normal and aggregate by
+// lets start with simple aggregate
+template <typename InType, typename OutType>
+class AggregateNode: Node{
+	AggregateNode(Node *in_node, std::function<R(OutType, InType)> aggr_func, OutType initial_value):
+	in_node_{in_node},
+	in_queue_{in_node->Out()},
+	frontier_ts{in_node->GetFrontierTs()}
+	initial_value_{initial_value};
+	aggr_func_{aggr_func}
+	{
+		this->ts_ = 0;
+		// there will be single tuple emited at once probably, if not it will get resized so chill
+		this->out_queue_ = new Queue( 2, sizeof(Tuple<OutType>));
+	}
 
-// aggregations
+	Queue *Output() {
+		return this->out_queue_;
+	}
+
+	void Compute() {
+
+    	std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  new_deltas_;
+		con
+		st char *in_data;
+		while (this->in_queue_left_->GetNext(&in_data)) {
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
+			while(this->in_queue_right_->GetNext(&in_data_right)){
+
+				Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data_right);
+				// compute against all version of current value
+				for(auto &{ts, count} : this->deltas_){
+					new_deltas.insert({std::max(ts, in_tuple->delta.ts), aggr_function(count, in_tuple->data)});
+				}	
+		
+			}
+		}
+
+		// merge deltas
+		this->deltas_.insert(new_deltas_.begin(), new_deltas.end());
+
+
+		// emit only those with right timestamp
+		for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+			if (it->ts < this->ts_ - this->frontier_ts_){
+				char *out_data;
+				this->out_queue_->ReserveNext(&out_data);
+				Tuple<OutType> out_tuple = (Tuple<OutType> *)(out_data);
+				out_tuple->delta = it->delta;
+				out_tuple->data = initial_value_;	
+			}
+			// next will be only newer so we can skip
+			else{
+				break;
+			}			
+		}	
+	}
+
+	void UpdateTimestamp(timestamp ts) {
+		if (ts <= this->ts_) {
+			return;
+		}
+		// way to keep track on when we can get rid of old tuple deltas
+		this->ts = ts_;
+		if(this->ts_ - this->previous_ts > this->frontier_ts){
+			this->compact_ = true;
+			this->previous_ts = ts;
+		}
+		if (this->in_node_ != nullptr) {
+			this->in_node_->UpdateTimestamp(ts);
+		}
+	}
+
+private:
+	void Compact(){
+		// Iterate over each multiset in the vector
+		for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+			previous_count += it->count;
+			ts = it->ts;
+			auto base_it = std::next(it).base();
+			base_it = deltas.erase(base_it);
+			it = std::reverse_iterator<decltype(base_it)>(base_it);
+			if(it == deltas.rend()) {
+				break;
+			}
+			// Check the condition: ts < ts_ - frontier_ts_
+			if(it->ts < (ts_ - frontier_ts_)){
+				continue;
+			}
+			else{
+				deltas.insert(Delta{ts, previous_count});
+				break;
+			}
+		}
+	}
+
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+	timestamp previous_ts;
+	
+	timestamp frontier_ts_;
+	
+	Node *in_node_;
+
+	Queue *in_queue_;
+
+	Queue *out_queue_;
+
+	// there will be only single out tuple with multiple version, so we don't need indexing
+    std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  deltas_;
+ 
+ 	std::function<R(OutType, InType)> aggr_func_;
+	
+	OutType initial_value_;
+	
+	std::mutex node_mutex;
+
+};
+
 
 }
 #endif

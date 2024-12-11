@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <map>
 #include <set>
+#include <list>
 #include <functional>
 #include <mutex>
 #include <cstring>
@@ -356,8 +357,8 @@ public:
 	SimpleBinaryNode(Node *in_node_left, Node *in_node_right,
 		// it's just using different ways to compute delta for each different kind of node
 		std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function
-	): SimpleBinaryNode<Type, Type, Type>(in_node_left, in_node_right),
-		delta_function_{delta_function}, frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
+	): StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right),
+		delta_function_{delta_function}
 	{}
 
 	void Compute() {
@@ -484,7 +485,7 @@ class Except: SimpleBinaryNode<T>{
 template <typename InTypeLeft, typename InTypeRight, typename OutType>
 class CrossJoinNode: public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
-	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<OutType(InLeft,InRight)>join_layout):
+	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<OutType(InTypeLeft,InTypeRight)>join_layout):
 	 	StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
 	 	join_layout_{join_layout} {}
 
@@ -496,9 +497,9 @@ public:
 		const char *in_data_right;
 		char *out_data;
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
-			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			while(this->in_queue_right_->GetNext(&in_data_right)){
-				Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+				Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 				// if left and right queues match on data put it into out_queue with new delta
 				this->out_queue_->ReserveNext(&out_data);
 				Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
@@ -509,34 +510,32 @@ public:
 
 		// compute left queue against right table
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
-			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			char *left_data = (char *)&in_left_tuple->data;
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_right[left_data];
-			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
-				this->out_queue_->ReserveNext(&out_data);
+			for(auto &[table_data, table_idx] : this->tuple_to_index_right){
 				for(auto it = this->index_to_deltas_right[table_idx].begin(); it != this->index_to_deltas_right[table_idx].end(); it++){
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
+					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
 					out_tuple->data =  this->join_layout_(in_left_tuple->data, table_data);
-					out_tuple->delta = out_delta;
 				}
 			}
 		}
 
 		// compute right queue against left table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
-			Tuple<InRight> *in_right_tuple = (Tuple<InRight> *)(in_data_right);
+			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			char *right_data = (char *)&in_right_tuple->data;
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_left[right_data];
-			for(auto &{ table_data, table_idx} : this->tuple_to_index_right){
-				this->out_queue_->ReserveNext(&out_data);
+			for(auto &[ table_data, table_idx] : this->tuple_to_index_right){
 				for(auto it = this->index_to_deltas_left[table_idx].begin(); it != this->index_to_deltas_left[table_idx].end(); it++){
+					this->out_queue_->ReserveNext(&out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data =  this->join_layout_(table_data, in_left_tuple->data);
-					out_tuple->delta = out_delta;
+					out_tuple->data =  this->join_layout_(table_data, in_right_tuple->data);
 				}
 			}
 		}
@@ -544,7 +543,7 @@ public:
 
 		// insert new deltas from in_queues
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// if this data wasn't present insert with new index
 			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
 				index match_index = this->next_index_left_;
@@ -559,7 +558,7 @@ public:
 		}
 
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
-			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// if this data wasn't present insert with new index
 			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
 				index match_index = this->next_index_right_;
@@ -585,7 +584,7 @@ public:
 private:
 
 	// only state beyound StatefulNode state is join_layout_function
-	std::function<OutType(InLeft,InRight)>join_layout_;  
+	std::function<OutType(InTypeLeft,InTypeRight)>join_layout_;  
 };
 
 
@@ -593,14 +592,14 @@ private:
 // join on
 // match type could be even char[] in this case
 template <typename InTypeLeft, typename InTypeRight, typename MatchType , typename OutType>
-class JoinNode: public StatefulBinaryNode<InLeft, In> {
+class JoinNode: public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
-	CrossJoinNode(Node *in_node_left, Node *in_node_right, 
+	JoinNode(Node *in_node_left, Node *in_node_right, 
 		std::function<MatchType(InTypeLeft *)>get_match_left,
 		std::function<MatchType(InTypeRight*)>get_match_right,
-		std::function<OutType(InTypeLeft*, InTypeRight *)>get_match_right):
+		std::function<OutType(InTypeLeft*, InTypeRight *)>join_layout):
 	StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
-	get_match_left_(get_match_left) get_match_right_{get_match_right}, join_layout_{join_layout}
+	get_match_left_(get_match_left), get_match_right_{get_match_right}, join_layout_{join_layout}
 	{}
 
 
@@ -617,7 +616,7 @@ public:
 			while(this->in_queue_right_->GetNext(&in_data_right)){
 				Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 				// if left and right queues match on data put it into out_queue with new delta
-				if (JoinNode.Compare(&in_left->tuple->data, &in_right_tuple->data) ){
+				if (this->Compare(&in_left_tuple->data, &in_right_tuple->data) ){
 					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
@@ -628,37 +627,35 @@ public:
 
 		// compute left queue against right table
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
-			Tuple<InLeft> *in_left_tuple = (Tuple<InLeft> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// get all matching on data from right
 			MatchType *match = this->get_match_left_(in_left_tuple->data);
 			// all tuples from right table that match this left tuple
 			for(auto tpl_it = this->match_to_tuple_right_[match].begin(); tpl_it != this->match_to_tuple_right_.end(); tpl_it++){
 				// now iterate all version of this tuple
-				char &right[sizeof(InTypeRight)] right_data = *tpl_it;
+				char (&right_data)[sizeof(InTypeRight)] = *tpl_it;
 				for(auto it = this->index_to_deltas_right[right_data].begin(); it != this->index_to_deltas_right[right_data].end(); it++){
 					this->out_queue_->ReserveNext(&out_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
 					out_tuple->data =  this->join_layout_(in_left_tuple->data, right_data);
-					out_tuple->delta = out_delta;
 				}
 			}
 		}
 		// compute left queue against right table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
-			Tuple<InLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
+			Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// get all matching on data from right
-			MatchType *match = this->get_match_right_(in_left_tuple->data);
+			MatchType *match = this->get_match_right_(in_right_tuple->data);
 			// all tuples from right table that match this left tuple
 			for(auto tpl_it = this->match_to_tuple_left_[match].begin(); tpl_it != this->match_to_tuple_left_.end(); tpl_it++){
 				// now iterate all version of this tuple
-				char &left[sizeof(InTypeLeft)] left_data = *tpl_it;
+				char (&left_data)[sizeof(InTypeLeft)] = *tpl_it;
 				for(auto it = this->index_to_deltas_left[left_data].begin(); it != this->index_to_deltas_left[left_data].end(); it++){
 					this->out_queue_->ReserveNext(&out_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data =  this->join_layout_(in_left_data, &in_right_tuple->data);
-					out_tuple->delta = out_delta;
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
+					out_tuple->data =  this->join_layout_(left_data, &in_right_tuple->data);
 				}
 			}
 		}
@@ -666,7 +663,7 @@ public:
 
 		// insert new deltas from in_queues
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// if this data wasn't present insert with new index
 			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
 				index match_index = this->next_index_left_;
@@ -681,7 +678,7 @@ public:
 		}
 
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
-			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// if this data wasn't present insert with new index
 			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
 				index match_index = this->next_index_right_;
@@ -707,21 +704,27 @@ public:
 
 private:
 
-	Static inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) { 
+	inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) { 
 			return std::memcmp(this->get_match_left(left_data), this->get_match_right(right_data), sizeof(MatchType));
 	}
 
 	// we need those functions to calculate matchfields from tuples on left and righ
-	std::function<MatchType(InLeft *)>get_match_left_;
-	std::function<MatchType(InRight*)>get_match_right_;	
-	std::function<OutType(InLeft,InRight)>join_layout_;
+	std::function<MatchType(InTypeLeft *)>get_match_left_;
+	std::function<MatchType(InTypeRight*)>get_match_right_;	
+	std::function<OutType(InTypeLeft,InTypeRight)>join_layout_;
   
 	// we need to get corresponding tuples using only match chars, this maps will help us with it
-    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InLeft)]> > match_to_tuple_left_;
-    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InLeft)]> > match_to_tuple_right_;
+    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InTypeLeft)]> > match_to_tuple_left_;
+    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InTypeLeft)]> > match_to_tuple_right_;
 
 };
 
+
+/**
+ * OK for this node we might want to use bit different model of computation
+ * it will only emit single value at right time, and it need to delete old value,
+ * it also need to compute next value based not only on data but also on delta
+ */
 
 
 /** @todo do we really need to keep and send to out_queue this initial value? maybe delta would be enough */
@@ -729,11 +732,13 @@ private:
 // lets start with simple aggregate
 template <typename InType, typename OutType>
 class AggregateNode: Node{
-	AggregateNode(Node *in_node, std::function<R(OutType, InType)> aggr_func, OutType initial_value):
+	// now output of aggr might be also dependent of count of in tuple, for example i sum inserting 5 Alice's should influence it different than one Alice
+	// but with min it should not, so it will be dependent on aggregate function
+	AggregateNode(Node *in_node, std::function<OutType(OutType, InType, int count)> aggr_func, OutType initial_value):
 	in_node_{in_node},
-	in_queue_{in_node->Out()},
-	frontier_ts{in_node->GetFrontierTs()}
-	initial_value_{initial_value};
+	in_queue_{in_node->Output()},
+	frontier_ts_{in_node->GetFrontierTs()},
+	initial_value_{initial_value},
 	aggr_func_{aggr_func}
 	{
 		this->ts_ = 0;
@@ -745,42 +750,54 @@ class AggregateNode: Node{
 		return this->out_queue_;
 	}
 
+	// output should be single tuple with updated values for different times
+	// so what we can do there? if we emit new count as part of value, then it will be treated as separate tuple
+	// if we emit new value as part of delta it also will be wrong
+	// what if we would do : insert previous value with count -1 and insert current with count 1 at the same time
+	// then old should get discarded
 	void Compute() {
 
-    	std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  new_deltas_;
-		con
-		st char *in_data;
+    	std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  new_deltas;
+		const char *in_data;
 		while (this->in_queue_left_->GetNext(&in_data)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			while(this->in_queue_right_->GetNext(&in_data_right)){
-
-				Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data_right);
+				Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
 				// compute against all version of current value
-				for(auto &{ts, count} : this->deltas_){
-					new_deltas.insert({std::max(ts, in_tuple->delta.ts), aggr_function(count, in_tuple->data)});
+				for(auto &[ts, count] : this->deltas_){
+					new_deltas.insert({std::max(ts, in_tuple->delta.ts), aggr_function(count, in_tuple->data, in_tuple->delta.count)});
 				}	
-		
-			}
 		}
 
 		// merge deltas
-		this->deltas_.insert(new_deltas_.begin(), new_deltas.end());
+		this->deltas_.insert(new_deltas.begin(), new_deltas.end());
 
+		auto oldest = deltas_.end()--;
+		// emit only single one  with right timestamp
+		for (auto it = deltas_.rbegin(); it != deltas_.rend(); ) {
+			// if this is first to new to be emited try emiting previous one
+			if (it->ts > this->ts_ - this->frontier_ts_){
+				auto prev = it--;
+				if(it != deltas_.rbegin()){
 
-		// emit only those with right timestamp
-		for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-			if (it->ts < this->ts_ - this->frontier_ts_){
-				char *out_data;
-				this->out_queue_->ReserveNext(&out_data);
-				Tuple<OutType> out_tuple = (Tuple<OutType> *)(out_data);
-				out_tuple->delta = it->delta;
-				out_tuple->data = initial_value_;	
-			}
-			// next will be only newer so we can skip
-			else{
+					char *out_data;
+					this->out_queue_->ReserveNext(&out_data);
+					char *del_data;
+					this->out_queue_->ReserveNext(&del_data);
+
+					// emit new
+					Tuple<OutType> out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple.data = prev->count;
+					out_tuple.delta = {prev->ts, 1};
+
+					// delete oldest
+					Tuple<OutType> del_tuple = (Tuple<OutType> *)(del_data) = {oldest->ts, -1, oldest->count};
+
+					// compact
+					this->Compact();
+				}
+				
 				break;
-			}			
-		}	
+			}
+		}
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -799,26 +816,20 @@ class AggregateNode: Node{
 	}
 
 private:
+	// let's store full version data and not deltas in this node, so we can just discard old versions
 	void Compact(){
 		// Iterate over each multiset in the vector
-		for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-			previous_count += it->count;
-			ts = it->ts;
-			auto base_it = std::next(it).base();
-			base_it = deltas.erase(base_it);
-			it = std::reverse_iterator<decltype(base_it)>(base_it);
-			if(it == deltas.rend()) {
-				break;
+		for (auto it = deltas_.rbegin(); it != deltas_.rend(); it++ ) {
+			if (it->ts <= this->previous_ts){
+				auto base_it = std::next(it).base();
+				base_it = deltas_.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
 			}
-			// Check the condition: ts < ts_ - frontier_ts_
-			if(it->ts < (ts_ - frontier_ts_)){
-				continue;
-			}
-			else{
-				deltas.insert(Delta{ts, previous_count});
+			else {
 				break;
 			}
 		}
+		this->compact = false;
 	}
 
 	// timestamp will be used to track valid tuples
@@ -838,13 +849,14 @@ private:
 	// there will be only single out tuple with multiple version, so we don't need indexing
     std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  deltas_;
  
- 	std::function<R(OutType, InType)> aggr_func_;
-	
+ 	std::function<OutType(OutType, InType, int)> aggr_func_;
 	OutType initial_value_;
 	
 	std::mutex node_mutex;
 
 };
+
+// and finally aggregate_by, so we are aggregating but also with grouping by fields
 
 
 }

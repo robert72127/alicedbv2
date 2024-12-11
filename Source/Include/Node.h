@@ -11,6 +11,7 @@
 #include <functional>
 #include <mutex>
 #include <cstring>
+#include <algorithm>
 
 #define DEFAULT_QUEUE_SIZE (200)
 
@@ -51,9 +52,9 @@ public:
 /* Source node is responsible for producing data through Compute function and then writing output to both out_queue, and
  * persistent table */
 template <typename Type>
-class Source : public Node {
+class SourceNode : public Node {
 public:
-	Source(std::function<void(Type **out_data)>produce) : produce_{produce} {}
+	SourceNode(std::function<void(Type **out_data)>produce) : produce_{produce} {}
 
 	void Compute() {
 		if (this->update_ts_) {
@@ -112,9 +113,9 @@ private:
 
 
 template <typename Type>
-class Filter : public Node {
+class FilterNode : public Node {
 public:
-	Filter(Node *in_node, std::function<bool(const Type &) > condition)
+	FilterNode(Node *in_node, std::function<bool(const Type &) > condition)
 	    : condition_{condition}, in_node_ {in_node}, in_queue_ {in_node->Output()} , 
 		frontier_ts_{in_node->GetFrontierTs()}
 	{
@@ -167,9 +168,9 @@ private:
 */
 // projection can be represented by single node
 template <typename InType, typename OutType>
-class Projection : public Node {
+class ProjectionNode : public Node {
 public:
-	Projection(Node *in_node,  std::function<OutType(const InType&)>projection)
+	ProjectionNode(Node *in_node,  std::function<OutType(const InType&)>projection)
 	    : projection_ {projection}, in_node_ {in_node}, in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} 
 	{
 		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
@@ -458,24 +459,24 @@ public:
 };
 
 template <typename T>
-class Union: SimpleBinaryNode<T>{
-	Union(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
+class UnionNode: SimpleBinaryNode<T>{
+	UnionNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
 		return {std::max(left_delta.ts, right_delta.ts), left_delta.count + right_delta.count};
 	}
 };
 template <typename T>
-class Intersect: SimpleBinaryNode<T>{
-	Intersect(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
+class IntersectNode: SimpleBinaryNode<T>{
+	IntersectNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
 		return {std::max(left_delta.ts, right_delta.ts), left_delta.count - right_delta.count};
 	}
 };
 template <typename T>
-class Except: SimpleBinaryNode<T>{
-	Except(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
+class ExceptNode: SimpleBinaryNode<T>{
+	ExceptNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
 		return {std::max(left_delta.ts, right_delta.ts), left_delta.count * right_delta.count};
@@ -855,6 +856,30 @@ private:
 	std::mutex node_mutex;
 
 };
+
+
+// simple two concrete aggregate types
+
+template <typename InType, Arithmetic OutType>
+class SumNode: AggregateNode<InType, OutType>{
+	SumNode(Node *in_node):
+	AggregateNode<InType, Output>(in_node, sum, 0) {}
+	
+	static OutType sum(cons OutType &prev_val, const InType &new_val, int count){
+		return prev_val + new_val * count;
+	}
+};
+
+template <typename InType, Arithmetic OutType>
+class MaxNode: AggregateNode<InType, OutType>{
+	MaxNode(Node *in_node):
+	AggregateNode<InType, Output>(in_node, max, 0) {}
+	
+	static OutType max(cons OutType &prev_val, const InType &new_val, int count){
+		return std::max(prev_val, new_val);
+	}
+};
+
 
 // and finally aggregate_by, so we are aggregating but also with grouping by fields
 

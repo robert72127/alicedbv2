@@ -25,6 +25,11 @@ Starting: BufferPool start first then disk manager
 Stopping: Stop buffer pool, send all write requests, then stop DiskManager
 
 */
+
+template<typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+
 } // namespace AliceDB
 
 #endif

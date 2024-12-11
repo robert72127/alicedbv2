@@ -1,6 +1,7 @@
 #include <iostream>
 
 #include "Include/Node.h"
+#include "Include/Graph.h"
 
 struct Person {
     char name[50];

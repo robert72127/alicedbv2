@@ -17,81 +17,113 @@ class Graph{
 
 
    template <typename Type>
-   void Source(std::function<void(Type **out_data)>produce){
+   Node *Source(std::function<void(Type **out_data)>produce){
         Node *source_node =  new SourceNode(produce);
-        nodes_.push_back(source_node);
+        this->nodes_.push_back(source_node);
+        return source_node;
    }
 
 
     template <typename Type>
-    void Filter(Node *in_node, std::function<bool(const Type &) > condition){
-        Node *filter_node =  new FilterNode<Type>(in_node, condition);
-        nodes_.push_back(source_node);
+    Node *Filter(Node *in_node, std::function<bool(const Type &) > condition){
+        Node *filter =  new FilterNode<Type>(in_node, condition);
+        this->nodes_.push_back(filter);
+        this->create_edge(in_node, filter);
+        return filter;
     }
 
     template <typename InType, typename OutType>
-	void Projection(Node *in_node,  std::function<OutType(const InType&)>projection){
-        Node *projection =  new ProjectionNode<InType, OutType>(in_node, projection);
-        nodes_.push_back(source_node);
+	Node *Projection(Node *in_node,  std::function<OutType(const InType&)>projection_function){
+        Node *projection =  new ProjectionNode<InType, OutType>(in_node, projection_function);
+        this->nodes_.push_back(projection);
+        this->create_edge(in_node, projection);
+        return projection;
     }
 
 
     template <typename Type>
-	void Union(Node *in_node_left, Node *in_node_right){
-        Node *union =  new UnionNode<Type>(in_node_left, in_node_right);
-        nodes_.push_back(union);
+	Node *Union(Node *in_node_left, Node *in_node_right){
+        Node *_union =  new UnionNode<Type>(in_node_left, in_node_right);
+        this->nodes_.push_back(_union);
+        this->create_edge(in_node_left, _union);
+        this->create_edge(in_node_right, _union);
+        return _union;
     }
 	
     template <typename Type>
-	void Intersect(Node *in_node_left, Node *in_node_right){
+	Node *Intersect(Node *in_node_left, Node *in_node_right){
         Node *intersect =  new IntersectNode<Type>(in_node_left, in_node_right);
-        nodes_.push_back(intersect);
+        this->nodes_.push_back(intersect);
+        this->create_edge(in_node_left, intersect);
+        this->create_edge(in_node_right, intersect);
+        return intersect;
     }
 	
     template <typename Type>
-	void Except(Node *in_node_left, Node *in_node_right){
+	Node *Except(Node *in_node_left, Node *in_node_right){
         Node *except =  new ExceptNode<Type>(in_node_left, in_node_right);
-        nodes_.push_back(except);
+        this->nodes_.push_back(except);
+        this->create_edge(in_node_left, except);
+        this->create_edge(in_node_right, except);
+        return except;
     }
 
 
     template <typename InTypeLeft, typename InTypeRight, typename OutType>
-	void CrossJoin(Node *in_node_left, Node *in_node_right, std::function<OutType(InTypeLeft,InTypeRight)>join_layout){
+	Node *CrossJoin(Node *in_node_left, Node *in_node_right, std::function<OutType(InTypeLeft,InTypeRight)>join_layout){
         Node *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, join_layout);
-        nodes_.push_back(cross_join);
+        this->nodes_.push_back(cross_join);
+        this->create_edge(in_node_left, cross_join);
+        this->create_edge(in_node_right, cross_join);
+        return cross_join;
     }
 
     template <typename InTypeLeft, typename InTypeRight, typename MatchType , typename OutType>
-	void Join(Node *in_node_left, Node *in_node_right, 
+	Node *Join(Node *in_node_left, Node *in_node_right, 
 		std::function<MatchType(InTypeLeft *)>get_match_left,
 		std::function<MatchType(InTypeRight*)>get_match_right,
 		std::function<OutType(InTypeLeft*, InTypeRight *)>join_layout){
             Node *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(in_node_left, in_node_right, get_match_left, get_match_right, join_layout);
-            nodes_.push_back(join);
+            this->nodes_.push_back(join);
+            this->create_edge(in_node_left, join);
+            this->create_edge(in_node_right, join);
+            return join;
         }
 	
     template <typename InType, Arithmetic OutType>
-    void Sum(Node *in_node){
+    Node *Sum(Node *in_node){
         Node *sum = new SumNode<InType, OutType>(in_node);
-        nodes_.push_back(sum);
+        this->nodes_.push_back(sum);
+        this->create_edge(in_node, sum);
+        return sum;
     }   
 
     template <typename InType, Arithmetic OutType>
-    void Max(Node *in_node){
+    Node *Max(Node *in_node){
         Node *max = new MaxNode<InType, OutType>(in_node);
-        nodes_.push_back(sum);
+        this->nodes_.push_back(max);
+        this->create_edge(in_node, max);
+        return max;
     }   
-
 
 
 
 private:
+    void create_edge(Node *in_node, Node *out_node){
+        if(!out_nodes_.contains(in_node)){
+            out_nodes_[in_node] = {out_node};
+        } else{
+            out_nodes_[in_node].push_back(out_node);
+        }
+    }
+
     // vector of all created nodes
     std::vector<Node*> nodes_;
 
+    // maps list of out nodes for given Node
+    std::map<Node*, std::list<Node*>> out_nodes_;
+
     // store topological order
-
-
 };
 
 

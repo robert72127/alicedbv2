@@ -863,9 +863,9 @@ private:
 template <typename InType, Arithmetic OutType>
 class SumNode: AggregateNode<InType, OutType>{
 	SumNode(Node *in_node):
-	AggregateNode<InType, Output>(in_node, sum, 0) {}
+	AggregateNode<InType, OutType>(in_node, sum, 0) {}
 	
-	static OutType sum(cons OutType &prev_val, const InType &new_val, int count){
+	static OutType sum(const OutType &prev_val, const InType &new_val, int count){
 		return prev_val + new_val * count;
 	}
 };
@@ -873,9 +873,9 @@ class SumNode: AggregateNode<InType, OutType>{
 template <typename InType, Arithmetic OutType>
 class MaxNode: AggregateNode<InType, OutType>{
 	MaxNode(Node *in_node):
-	AggregateNode<InType, Output>(in_node, max, 0) {}
+	AggregateNode<InType, OutType>(in_node, max, 0) {}
 	
-	static OutType max(cons OutType &prev_val, const InType &new_val, int count){
+	static OutType max(const OutType &prev_val, const InType &new_val, int count){
 		return std::max(prev_val, new_val);
 	}
 };

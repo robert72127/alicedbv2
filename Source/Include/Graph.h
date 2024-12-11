@@ -4,11 +4,13 @@
 #include "Node.h"
 #include "Common.h"
 
+#include <unordered_set>
 #include <vector>
 
 
 namespace AliceDB
 {
+
 
 class Graph{
     // creates graph instance, later it will also store and load from file info about nodes
@@ -18,11 +20,30 @@ class Graph{
 
    template <typename Type>
    Node *Source(std::function<void(Type **out_data)>produce){
-        Node *source_node =  new SourceNode(produce);
-        this->nodes_.push_back(source_node);
-        return source_node;
-   }
+        Node *source_node =  new SourceNode<Type>(produce);
+        // create new subgraph
+        Subgraph *sg = new Subgraph;
+        sg->nodes_.insert(source_node);
+        sg->sources_.insert
 
+
+        this->nodes_.push_back(source_node);
+        this->sources_.insert(source_node);
+        return source_node;
+    }
+
+    /**
+     * @brief creates sink node and start's processing data 
+     */
+    template <typename InType>
+    Node *Sink(Node *in_node){
+        Node *sink = New SinkNode<InType>();
+        this->nodes_.push_back(sink);
+        this->create_edge(in_node, sink);
+        this->sinks_.insert(sink);
+
+        // find all source Nodes that leads to this sink and append them to source's
+    }
 
     template <typename Type>
     Node *Filter(Node *in_node, std::function<bool(const Type &) > condition){
@@ -107,7 +128,6 @@ class Graph{
     }   
 
 
-
 private:
     void create_edge(Node *in_node, Node *out_node){
         if(!out_nodes_.contains(in_node)){
@@ -117,13 +137,18 @@ private:
         }
     }
 
-    // vector of all created nodes
+    // vector of all nodes in this subgraph
     std::vector<Node*> nodes_;
 
     // maps list of out nodes for given Node
     std::map<Node*, std::list<Node*>> out_nodes_;
 
-    // store topological order
+    // store all source nodes
+    std::unordered_set<Node*> sources_;
+
+    // store sink node, sink node might also be used as source node so their intersection isn't neccesary nullset
+    std::set<Node*> sinks_;
+
 };
 
 

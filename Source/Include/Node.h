@@ -46,6 +46,10 @@ public:
      * @brief returns Queue corresponding to output from this Tuple
      */
 	virtual Queue *Output() = 0;
+
+	/** returns vector of all inputs to this node */
+	virtual std::vector<Node*> Inputs() = 0;
+
 };
 
 
@@ -69,6 +73,8 @@ public:
 		return this->out_queue_;
 	}
 
+	// source has no inputs
+	std::vector<Node*> Inputs() {return {};}
 
 	void UpdateTimestamp(timestamp ts) {
 		if (ts <= this->ts_) {
@@ -109,8 +115,11 @@ private:
 
 };
 
+/** @todo implement */
+template<typename Type>
+class SinkNode: public Node{
 
-
+};
 
 template <typename Type>
 class FilterNode : public Node {
@@ -135,6 +144,13 @@ public:
 		}
 		this->in_queue_->Clean();
 	}
+
+	Queue *Output() {
+			return this->out_queue_;
+	}
+
+	std::vector<Node*> Inputs() {return {this->in_node_};}
+
 
 	// timestamp is not used here but will be used for global state for propagation
 	void UpdateTimestamp(timestamp ts) {
@@ -196,6 +212,8 @@ public:
 		return this->out_queue_;
 	}
 
+	std::vector<Node*> Inputs() {return {this->in_node_};}
+	
 	// timestamp is not used here but might be helpful to store for propagatio
 	void UpdateTimestamp(timestamp ts) {
 		if (ts <= this->ts_) {
@@ -241,6 +259,9 @@ class StatefulBinaryNode : Node {
 		return this->out_queue_;
 	}
 
+	std::vector<Node*> Inputs() {return {this->in_node_left_, this->in_node_right_};}
+	
+	
 	virtual void Compute() = 0;
 
 	void UpdateTimestamp(timestamp ts) {
@@ -751,6 +772,8 @@ class AggregateNode: Node{
 		return this->out_queue_;
 	}
 
+	std::vector<Node*> Inputs() {return {this->in_node_};}
+	
 	// output should be single tuple with updated values for different times
 	// so what we can do there? if we emit new count as part of value, then it will be treated as separate tuple
 	// if we emit new value as part of delta it also will be wrong

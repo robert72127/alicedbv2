@@ -4,9 +4,10 @@
 #include "Node.h"
 #include "Common.h"
 
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
-
+#include <stack>
 
 namespace AliceDB
 {
@@ -21,43 +22,58 @@ class Graph{
    template <typename Type>
    Node *Source(std::function<void(Type **out_data)>produce){
         Node *source_node =  new SourceNode<Type>(produce);
-        // create new subgraph
-        Subgraph *sg = new Subgraph;
-        sg->nodes_.insert(source_node);
-        sg->sources_.insert
-
-
-        this->nodes_.push_back(source_node);
+        this->all_nodes_.insert(source_node);
         this->sources_.insert(source_node);
         return source_node;
     }
 
     /**
-     * @brief creates sink node and start's processing data 
+     * @brief creates sink node  & topological order of nodes 
      */
     template <typename InType>
     Node *Sink(Node *in_node){
-        Node *sink = New SinkNode<InType>();
-        this->nodes_.push_back(sink);
-        this->create_edge(in_node, sink);
+        Node *sink = new SinkNode<InType>();
+        this->make_edge(in_node, sink);
+        this->all_nodes_.insert(sink);
         this->sinks_.insert(sink);
 
-        // find all source Nodes that leads to this sink and append them to source's
+        // get list of all nodes creating this subgraph
+        std::set<Node *> current_graph;
+        std::stack<Node*> next_to_process;
+        next_to_process.emplace(sink);
+        while(!next_to_process.empty()){
+            Node *current = next_to_process.top();
+            next_to_process.pop();
+            current_graph.emplace(current);
+            for(Node * in: current->Inputs){
+                // well one node might be input to two different node, and we don't want to process it two times
+                // also this will prevent infinite loop in case of cycle but won't detect it
+                if(!current_graph.contains(in)){
+                    next_to_process.emplace(in);
+                }
+            }
+        }
+
+        // find all source Nodes that leads to this sink and create toposort
+        this->topo_sort(current_graph);
+
+        // return sink which will already be producing resoults
+        return sink;
     }
 
     template <typename Type>
     Node *Filter(Node *in_node, std::function<bool(const Type &) > condition){
         Node *filter =  new FilterNode<Type>(in_node, condition);
-        this->nodes_.push_back(filter);
-        this->create_edge(in_node, filter);
+        this->all_nodes_.insert(filter);
+        this->make_edge(in_node, filter);
         return filter;
     }
 
     template <typename InType, typename OutType>
 	Node *Projection(Node *in_node,  std::function<OutType(const InType&)>projection_function){
         Node *projection =  new ProjectionNode<InType, OutType>(in_node, projection_function);
-        this->nodes_.push_back(projection);
-        this->create_edge(in_node, projection);
+        this->all_nodes_.insert(projection);
+        this->make_edge(in_node, projection);
         return projection;
     }
 
@@ -65,27 +81,27 @@ class Graph{
     template <typename Type>
 	Node *Union(Node *in_node_left, Node *in_node_right){
         Node *_union =  new UnionNode<Type>(in_node_left, in_node_right);
-        this->nodes_.push_back(_union);
-        this->create_edge(in_node_left, _union);
-        this->create_edge(in_node_right, _union);
+        this->all_nodes_.insert(_union);
+        this->make_edge(in_node_left, _union);
+        this->make_edge(in_node_right, _union);
         return _union;
     }
 	
     template <typename Type>
 	Node *Intersect(Node *in_node_left, Node *in_node_right){
         Node *intersect =  new IntersectNode<Type>(in_node_left, in_node_right);
-        this->nodes_.push_back(intersect);
-        this->create_edge(in_node_left, intersect);
-        this->create_edge(in_node_right, intersect);
+        this->all_nodes_.insert(intersect);
+        this->make_edge(in_node_left, intersect);
+        this->make_edge(in_node_right, intersect);
         return intersect;
     }
 	
     template <typename Type>
 	Node *Except(Node *in_node_left, Node *in_node_right){
         Node *except =  new ExceptNode<Type>(in_node_left, in_node_right);
-        this->nodes_.push_back(except);
-        this->create_edge(in_node_left, except);
-        this->create_edge(in_node_right, except);
+        this->all_nodes_.insert(except);
+        this->make_edge(in_node_left, except);
+        this->make_edge(in_node_right, except);
         return except;
     }
 
@@ -93,9 +109,9 @@ class Graph{
     template <typename InTypeLeft, typename InTypeRight, typename OutType>
 	Node *CrossJoin(Node *in_node_left, Node *in_node_right, std::function<OutType(InTypeLeft,InTypeRight)>join_layout){
         Node *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, join_layout);
-        this->nodes_.push_back(cross_join);
-        this->create_edge(in_node_left, cross_join);
-        this->create_edge(in_node_right, cross_join);
+        this->all_nodes_.insert(cross_join);
+        this->make_edge(in_node_left, cross_join);
+        this->make_edge(in_node_right, cross_join);
         return cross_join;
     }
 
@@ -105,49 +121,102 @@ class Graph{
 		std::function<MatchType(InTypeRight*)>get_match_right,
 		std::function<OutType(InTypeLeft*, InTypeRight *)>join_layout){
             Node *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(in_node_left, in_node_right, get_match_left, get_match_right, join_layout);
-            this->nodes_.push_back(join);
-            this->create_edge(in_node_left, join);
-            this->create_edge(in_node_right, join);
+            this->all_nodes_.insert(join);
+            this->make_edge(in_node_left, join);
+            this->make_edge(in_node_right, join);
             return join;
         }
 	
     template <typename InType, Arithmetic OutType>
     Node *Sum(Node *in_node){
         Node *sum = new SumNode<InType, OutType>(in_node);
-        this->nodes_.push_back(sum);
-        this->create_edge(in_node, sum);
+        this->all_nodes_.insert(sum);
+        this->make_edge(in_node, sum);
         return sum;
     }   
 
     template <typename InType, Arithmetic OutType>
     Node *Max(Node *in_node){
         Node *max = new MaxNode<InType, OutType>(in_node);
-        this->nodes_.push_back(max);
-        this->create_edge(in_node, max);
+        this->all_nodes_.insert(max);
+        this->make_edge(in_node, max);
         return max;
     }   
 
 
 private:
-    void create_edge(Node *in_node, Node *out_node){
-        if(!out_nodes_.contains(in_node)){
-            out_nodes_[in_node] = {out_node};
-        } else{
-            out_nodes_[in_node].push_back(out_node);
+    void topo_sort(std::set<Node*> graph){
+        std::set<Node*> visited;
+        std::stack<Node*> stack;
+        
+        // for each node:
+        for(auto it = graph.begin(); it != graph.end(); it++){
+            Node *current = *it;
+
+            if(visited.contains(current)){
+                continue;
+            }
+
+            std::set<Node*> current_run = {current};
+
+            // if visit return's 1 there was a cycle
+            if(visit(current, visited, stack, current_run)){
+                throw std::runtime_error("[Error] graph contains cycle");
+            }
+        }
+
+        // save this topo_graph as list
+        std::list<Node*> topo_order;
+        while(!topo_graphs_.empty()){
+           topo_order.push_back(stack.top());
+           stack.pop();
+        }
+        topo_graphs_.emplace(topo_order);
+    
+    }
+    bool visit(Node* current, std::set<Node*> &visited, std::stack<Node*> &stack, std::set<Node*> &current_run){
+            bool has_cycle = 0;
+            if(current_run.contains(current)){
+                return true;
+            }
+            if(visited.contains(current)){
+                return false;
+            }
+            
+            visited.insert(current);
+            current_run.insert(current);
+            if(out_edges_.contains(current)){
+                for(Node *neighbour : out_edges_[current]){
+                    has_cycle |=  visit(neighbour, visited, stack, current_run);
+                }
+            }
+            stack.emplace(current);
+            return has_cycle;
+    }
+
+
+    void make_edge(Node* in_node, Node* out_node){
+        if(out_edges_.contains(in_node)){
+            out_edges_[in_node].emplace_front(out_node);
+        }
+        else{
+            out_edges_[in_node] = {out_node};
         }
     }
 
-    // vector of all nodes in this subgraph
-    std::vector<Node*> nodes_;
 
-    // maps list of out nodes for given Node
-    std::map<Node*, std::list<Node*>> out_nodes_;
 
-    // store all source nodes
-    std::unordered_set<Node*> sources_;
+    std::unordered_map<Node*, std::list<Node*>> out_edges_;
 
-    // store sink node, sink node might also be used as source node so their intersection isn't neccesary nullset
+    std::set<Node*> all_nodes_;
+    
+    // two kinds of nodes that are allowed to be part of more than one graph
     std::set<Node*> sinks_;
+    std::set<Node*> sources_;
+
+
+    // set of lists of nodes representing topological orders
+    std::set<std::list<Node*>> topo_graphs_;
 
 };
 

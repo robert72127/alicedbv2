@@ -12,6 +12,8 @@
 #include <mutex>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
+
 
 #define DEFAULT_QUEUE_SIZE (200)
 
@@ -118,8 +120,133 @@ private:
 /** @todo implement */
 template<typename Type>
 class SinkNode: public Node{
+public:
+	SinkNode(Node *in_node): in_node_(in_node_), in_queue_{in_node->Output()} {}
 
+	void Compute() {
+		
+		// write in queue into out_queue
+		const char *in_data;
+		while (this->in_queue_->GetNext(&in_data)) {
+		Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_.contains(in_tuple->data)){
+				index match_index = this->next_index_left_;
+				this->next_index_left_++;
+				this->tuple_to_index_[in_tuple->data] = match_index;
+				this->index_to_deltas_.emplace_back({in_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_[&in_tuple->data];
+				this->index_to_deltas_[match_index].insert(in_tuple->delta);
+			}
+		}
+		
+		// get current timestamp that can be considered 
+		auto now = std::chrono::system_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+		timestamp unix_timestamp = duration.count();
+		this->UpdateTimestamp(unix_timestamp);
+		
+		if (this->compact_){
+			this->Compact();
+		}
+	}
+
+	// print state of table at this moment
+	void Print(timestamp ts){
+		for( const auto& pair : this->tuple_to_index_){
+			char (&current_data)[sizeof(Type)] = pair.first;
+				// iterate deltas from oldest till current
+				int total = 0;
+				index current_index = pair.second;
+
+    			std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  &deltas = this->index_to_deltas_[current_index];
+				for(auto dit = deltas.begin(); dit != deltas.end(); dit++){
+					Delta &delta = *dit;
+					if(delta.ts > ts){
+						break;
+					}else{
+						total += delta.count;
+					}
+				}
+				// now print positive's
+				for(int i =0; i < total; i++){
+					std::cout<< (Type)(current_data) << std::endl;
+				}
+		}
+	}
+
+	Queue *Output() {return nullptr;}
+
+	// source has no inputs
+	std::vector<Node*> Inputs() {return {this->in_node_};}
+
+	void UpdateTimestamp(timestamp ts) {
+		if (ts - this->frontier_ts_ <= this->ts_) {
+			return;
+		}
+		this->update_ts_ = true;
+
+		if (this->in_node_ != nullptr) {
+			this->in_node_->UpdateTimestamp(ts);
+		}
+	}
+
+	
+	timestamp GetFrontierTs() const{
+		return this->frontier_ts_;
+	}
+
+private:
+	void Compact(){
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_.size(); index++){
+			auto &deltas = index_to_deltas_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+	}
+
+
+	bool update_ts_ = false;
+
+    // how much time back from current time do we have to store values
+	timestamp frontier_ts_;
+
+    // what is oldest timestamp that needs to be keept by this table
+    timestamp ts_;
+	
+	Node *in_node_; 
+	Queue *in_queue_;
+
+    // we can treat whole tuple as a key, this will return it's index  
+	// we will later use some persistent storage for that mapping, maybe rocksdb or something
+    std::unordered_map<char[sizeof(Type)], index> tuple_to_index_;
+    // from index we can get list of changes to the input, later
+	// we will use some better data structure for that
+    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_;
 };
+
 
 template <typename Type>
 class FilterNode : public Node {

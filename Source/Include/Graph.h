@@ -11,13 +11,19 @@
 
 namespace AliceDB
 {
+// ok now it should work with static non overlaping graphs
+
+// after it will we can add mechanism to merge graphs dynamically (allow single source for multiple nodes, and also sinks to act as sources)
+
+// change storage layer
+
+// add sql layer
 
 
 class Graph{
     // creates graph instance, later it will also store and load from file info about nodes
     // for now we don't store persistent state
     Graph() {}
-
 
    template <typename Type>
    Node *Source(std::function<void(Type **out_data)>produce){
@@ -53,6 +59,17 @@ class Graph{
                 }
             }
         }
+
+        /** @todo we should merge graph that share common node actually */
+        /*
+        // finally verify that there is no such node in this subgraph that is neither sink nor source and belong to other subgraph
+        for(auto it = current_graph.begin(); it!= current_graph.end(); it++){
+            if(this->all_nodes_[*it] == 1 && !this->sinks_.contains(*it) && !this->sources_.contains(*it)){
+                throw std::runtime_error("Only sources and sinks cna belong to more than one graph");
+            }
+        }
+        */
+
 
         // find all source Nodes that leads to this sink and create toposort
         this->topo_sort(current_graph);
@@ -171,8 +188,13 @@ private:
            topo_order.push_back(stack.top());
            stack.pop();
         }
+
+        // mark all nodes as belonging to graph
+        //for(auto it = graph.begin(); it != graph.end(); it++){
+        //    this->all_nodes_[*it] = true;
+        //}
+
         topo_graphs_.emplace(topo_order);
-    
     }
     bool visit(Node* current, std::set<Node*> &visited, std::stack<Node*> &stack, std::set<Node*> &current_run){
             bool has_cycle = 0;
@@ -208,7 +230,10 @@ private:
 
     std::unordered_map<Node*, std::list<Node*>> out_edges_;
 
-    std::set<Node*> all_nodes_;
+    // all nodes, being marked means it allready belongs to some subgraph
+    //std::unordered_map<Node*, bool> all_nodes_;
+    //std::unordered_map<Node*, bool> all_nodes_;
+    std::unordered_set<Node*, bool> all_nodes_;
     
     // two kinds of nodes that are allowed to be part of more than one graph
     std::set<Node*> sinks_;

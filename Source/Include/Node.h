@@ -3,7 +3,7 @@
 
 #include "Common.h"
 #include "Queue.h"
-//#include "Producer.h"
+#include "Producer.h"
 
 #include <type_traits>
 #include <map>
@@ -33,8 +33,6 @@ struct KeyHash {
 
 namespace AliceDB{
 
-template <typename T>
-class Producer;
 
 class Node {
 
@@ -841,9 +839,9 @@ template <typename InTypeLeft, typename InTypeRight, typename MatchType , typena
 class JoinNode: public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
 	JoinNode(Node *in_node_left, Node *in_node_right, 
-		std::function<MatchType(InTypeLeft *)>get_match_left,
-		std::function<MatchType(InTypeRight*)>get_match_right,
-		std::function<OutType(InTypeLeft*, InTypeRight *)>join_layout):
+		std::function<void(InTypeLeft *, MatchType*)>get_match_left,
+		std::function<void(InTypeRight*, MatchType*)>get_match_right,
+		std::function<void(InTypeLeft*, InTypeRight *, OutType*)>join_layout):
 	StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
 	get_match_left_(get_match_left), get_match_right_{get_match_right}, join_layout_{join_layout}
 	{}
@@ -866,7 +864,7 @@ public:
 					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
-					&out_tuple->data = this->join_layout_(in_left_tuple, in_right_tuple);
+					this->join_layout_(&in_left_tuple->data, &in_right_tuple->data, &out_tuple->data);
 				}
 			}
 		}
@@ -875,33 +873,40 @@ public:
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// get all matching on data from right
-			MatchType *match = this->get_match_left_(in_left_tuple->data);
+			MatchType match;
+			this->get_match_left_(&in_left_tuple->data, &match);
 			// all tuples from right table that match this left tuple
-			for(auto tpl_it = this->match_to_tuple_right_[match].begin(); tpl_it != this->match_to_tuple_right_.end(); tpl_it++){
+			for(auto tpl_it = this->match_to_tuple_right_[Key<MatchType>(match)].begin(); tpl_it != this->match_to_tuple_right_[Key<MatchType>(match)].end(); tpl_it++){
 				// now iterate all version of this tuple
-				char (&right_data)[sizeof(InTypeRight)] = *tpl_it;
-				for(auto it = this->index_to_deltas_right[right_data].begin(); it != this->index_to_deltas_right[right_data].end(); it++){
+				std::array<char, sizeof(InTypeLeft)> left_key = *tpl_it;
+				int idx = this->tuple_to_index_right[left_key];
+
+				for(auto it = this->index_to_deltas_right_[idx].begin(); it != this->index_to_deltas_right_[idx].end(); it++){
 					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
-					out_tuple->data =  this->join_layout_(in_left_tuple->data, right_data);
+					this->join_layout_(&in_left_tuple->data, reinterpret_cast<InTypeRight *>(&left_key), &out_tuple->data);
 				}
 			}
 		}
-		// compute left queue against right table
+		// compute right queue against left table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// get all matching on data from right
-			MatchType *match = this->get_match_right_(in_right_tuple->data);
+			MatchType match;
+			this->get_match_right_(&in_right_tuple->data, &match);
 			// all tuples from right table that match this left tuple
-			for(auto tpl_it = this->match_to_tuple_left_[match].begin(); tpl_it != this->match_to_tuple_left_.end(); tpl_it++){
+			for(auto tpl_it = this->match_to_tuple_left_[Key<MatchType>(match)].begin(); tpl_it != this->match_to_tuple_left_[Key<MatchType>(match)].end(); tpl_it++){
 				// now iterate all version of this tuple
-				char (&left_data)[sizeof(InTypeLeft)] = *tpl_it;
-				for(auto it = this->index_to_deltas_left[left_data].begin(); it != this->index_to_deltas_left[left_data].end(); it++){
+				std::array<char, sizeof(InTypeRight)> right_key = *tpl_it;
+				int idx = this->tuple_to_index_left[right_key];
+
+				for(auto it = this->index_to_deltas_left_[idx].begin(); it != this->index_to_deltas_left_[idx].end(); it++){
 					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
-					out_tuple->data =  this->join_layout_(left_data, &in_right_tuple->data);
+					this->join_layout_( reinterpret_cast<InTypeLeft*>(&right_key) , &in_right_tuple->data, &out_tuple->data);
+
 				}
 			}
 		}
@@ -929,7 +934,7 @@ public:
 			if(!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))){
 				index match_index = this->next_index_right_;
 				this->next_index_right_++;
-				this->tuple_to_index_right_[Key<InTypeRight>(in_right_tuple->data)] = match_index;
+				this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
 				this->index_to_deltas_right_.emplace_back(std::multiset<Delta,DeltaComparator>{in_right_tuple->delta});
 			}
 			else{
@@ -951,19 +956,21 @@ public:
 private:
 
 	inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) { 
-			char left_match [sizeof(MatchType)] = this->get_match_left_(left_data);
-			char right_match [sizeof(MatchType)] = this->get_match_right_(right_data);
-			return std::memcmp(&left_data, &right_data, sizeof(MatchType));
+			MatchType left_match;  
+			this->get_match_left_(left_data, &left_match);
+			MatchType right_match;
+			this->get_match_right_(right_data, &right_match);
+			return std::memcmp(&left_match, &right_match, sizeof(MatchType));
 	}
 
 	// we need those functions to calculate matchfields from tuples on left and righ
-	std::function<MatchType(InTypeLeft *)>get_match_left_;
-	std::function<MatchType(InTypeRight*)>get_match_right_;	
-	std::function<OutType(InTypeLeft*, InTypeRight *)>join_layout_:
+	std::function<void(InTypeLeft *, MatchType *)>get_match_left_;
+	std::function<void(InTypeRight*, MatchType* )>get_match_right_;	
+	std::function<void(InTypeLeft*, InTypeRight *, OutType*)>join_layout_;
 	
 	// we need to get corresponding tuples using only match chars, this maps will help us with it
-    std::unordered_map<std::array<char, sizeof(MatchType)>,std::list< std::array<char, sizeof(InTypeLeft)> >,KeyHash<MatchType> > match_to_tuple_left_;
-    std::unordered_map<std::array<char, sizeof(MatchType)>, std::list< std::array<char, sizeof(InTypeRight)> >, KeyHash<MatchType> > match_to_tuple_right_;
+    std::unordered_map<std::array<char, sizeof(MatchType)>, std::list< std::array<char,  sizeof(InTypeLeft) > > ,KeyHash<MatchType> > match_to_tuple_left_;
+    std::unordered_map<std::array<char, sizeof(MatchType)>, std::list< std::array<char,  sizeof(InTypeRight)> > ,KeyHash<MatchType> > match_to_tuple_right_;
 
 };
 

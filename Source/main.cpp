@@ -104,15 +104,12 @@ int main(){
 
     file_writer.close();
 
-    /*
-    AliceDB::Producer<Person> *p = new AliceDB::FileProducer<Person>(file_name,parseLine);
+    AliceDB::Producer<Person> *prod = new AliceDB::FileProducer<Person>(file_name,parseLine);
 
     AliceDB::Tuple<Person> *tpl = new AliceDB::Tuple<Person>;
 
-
-    while(p->next(tpl)){
-        std::cout<<tpl->delta.ts << " " << tpl->delta.count << " " <<tpl->data.name << " " << tpl->data.surname << " " << tpl->data.age << std::endl; 
-    }
-    */
+    AliceDB::Node *source = new AliceDB::SourceNode<Person>(prod, 5);
+    
+    AliceDB::Node *sink = new AliceDB::SinkNode<Person>(source);
 
 }

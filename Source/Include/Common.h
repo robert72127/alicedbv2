@@ -17,9 +17,11 @@ struct Delta{
 };
 
 // for automatically sorting by delta
-bool deltaComparator(const Delta& a, const Delta& b) {
-    return a.ts < b.ts;
-}
+struct DeltaComparator {
+    bool operator()(const Delta& a, const Delta& b) const {
+        return a.ts < b.ts; // Sort based on the timestamp
+    }
+};
 
 /* use buffer pool and memory arena for queue as two separate memory pools
 

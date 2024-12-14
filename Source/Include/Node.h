@@ -15,6 +15,20 @@
 #include <algorithm>
 
 
+template <typename Type>
+std::array<char, sizeof(Type)> Key(const Type& type) {
+    std::array<char, sizeof(Type)> key;
+    std::memcpy(key.data(), &type, sizeof(Type));
+    return key;
+}
+template <typename Type>
+struct KeyHash {
+    std::size_t operator()(const std::array<char, sizeof(Type)>& key) const {
+        // You can use any suitable hash algorithm. Here, we'll use std::hash with std::string_view
+        return std::hash<std::string_view>()(std::string_view(key.data(), key.size()));
+    }
+};
+
 #define DEFAULT_QUEUE_SIZE (200)
 
 namespace AliceDB{
@@ -75,14 +89,12 @@ public:
 		while (true){
 			produce_queue_->ReserveNext(&prod_data);
 			Tuple<Type> *prod_tuple = (Tuple<Type> *)(prod_data);
-			prod_tuple->ts = get_current_timestamp(); 
-			bool insert_;
-			if(!prod_tuple->data = this->produce_.next(&prod_tuple->data, &insert_)){
+			prod_tuple->delta.ts = get_current_timestamp(); 
+			if(!this->produce_->next(prod_tuple)){
 				// we reserved but won't insert so have to remove it from queue
 				produce_queue_->RemoveLast();
 				break;
 			}
-			prod_tuple->count = insert_? 1: -1 ;
 		}
 
 		/** @todo produce using this->produce_ */
@@ -92,14 +104,14 @@ public:
 		while (this->produce_queue_->GetNext(&in_data)) {
 		Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_.contains(in_tuple->data)){
-				index match_index = this->next_index_left_;
-				this->next_index_left_++;
-				this->tuple_to_index_[in_tuple->data] = match_index;
-				this->index_to_deltas_.emplace_back({in_tuple->delta});
+			if(!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))){
+				index match_index = this->next_index_;
+				this->next_index_++;
+				this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
+				this->index_to_deltas_.emplace_back(std::multiset<Delta,DeltaComparator>{in_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_[&in_tuple->data];
+				index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
 				this->index_to_deltas_[match_index].insert(in_tuple->delta);
 			}
 		}
@@ -125,9 +137,6 @@ public:
 		}
 		this->update_ts_ = true;
 
-		if (this->in_node_ != nullptr) {
-			this->in_node_->UpdateTimestamp(ts);
-		}
 	}
 	
 	timestamp GetFrontierTs() const{
@@ -135,6 +144,36 @@ public:
 	}
 
 private:
+	void Compact(){
+		// Iterate over each multiset in the vector
+		for(int index = 0; index < index_to_deltas_.size(); index++){
+			auto &deltas = index_to_deltas_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				if(it == deltas.rend()) {
+					break;
+				}
+				// Check the condition: ts < ts_ - frontier_ts_
+				if(it->ts < (ts_ - frontier_ts_)){
+					continue;
+				}
+				else{
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+			}
+		}
+	}
+
+	size_t next_index_=0;
+
 	bool update_ts_ = false;
 
     // how much time back from current time do we have to store values
@@ -143,17 +182,17 @@ private:
     // what is oldest timestamp that needs to be keept by this table
     timestamp ts_;
 
-	Producer<Type> produce_;
+	Producer<Type> *produce_;
 	
 	// data from producer is put into this queue from it it's written into both table and passed to output nodes
     Queue *produce_queue_;
 
     // we can treat whole tuple as a key, this will return it's index  
 	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<char[sizeof(Type)], index> tuple_to_index_;
+    std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
     // from index we can get list of changes to the input, later
 	// we will use some better data structure for that
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_;
+    std::vector< std::multiset<Delta,DeltaComparator >>  index_to_deltas_;
 
 };
 
@@ -169,14 +208,14 @@ public:
 		while (this->in_queue_->GetNext(&in_data)) {
 		Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_.contains(in_tuple->data)){
-				index match_index = this->next_index_left_;
-				this->next_index_left_++;
-				this->tuple_to_index_[in_tuple->data] = match_index;
-				this->index_to_deltas_.emplace_back({in_tuple->delta});
+			if(!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))){
+				index match_index = this->next_index_;
+				this->next_index_++;
+				this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
+				this->index_to_deltas_.emplace_back(std::multiset<Delta,DeltaComparator>{in_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_[&in_tuple->data];
+				index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
 				this->index_to_deltas_[match_index].insert(in_tuple->delta);
 			}
 		}
@@ -261,8 +300,12 @@ private:
 				}
 			}
 		}
+
+		this->update_ts_ = false;
 	}
 
+	size_t next_index_=0;
+	bool compact_;
 
 	bool update_ts_ = false;
 
@@ -277,10 +320,13 @@ private:
 
     // we can treat whole tuple as a key, this will return it's index  
 	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<char[sizeof(Type)], index> tuple_to_index_;
+
+	std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
     // from index we can get list of changes to the input, later
 	// we will use some better data structure for that
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_;
+    std::vector< std::multiset<Delta,DeltaComparator >>  index_to_deltas_;
+
+
 };
 
 

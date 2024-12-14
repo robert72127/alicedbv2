@@ -13,6 +13,21 @@ struct Person {
     int age;
 };
 
+struct Name{
+    char name[50]; 
+};
+
+bool filter_adult(const Person &p){
+    return p.age > 18;
+}
+
+Name proj_names(const Person &p){
+    Name N;
+    std::memcpy(N.name, p.name, 50);
+    return N;
+}
+
+
 bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
 
             std::istringstream iss(line);
@@ -110,6 +125,12 @@ int main(){
 
     AliceDB::Node *source = new AliceDB::SourceNode<Person>(prod, 5);
     
-    AliceDB::Node *sink = new AliceDB::SinkNode<Person>(source);
+    AliceDB::Node *adults = new AliceDB::FilterNode<Person>(source, filter_adult);
+    
+    AliceDB::Node *name_getter = new AliceDB::ProjectionNode<Person, Name>(source, proj_names);
+ 
+    AliceDB::Node *sink = new AliceDB::SinkNode<Person>(name_getter);
+
+    AliceDB::Node *unn = new AliceDB::UnionNode<Person>(source, source);
 
 }

@@ -359,6 +359,10 @@ public:
 	}
 
 	std::vector<Node*> Inputs() {return {this->in_node_};}
+	
+	timestamp GetFrontierTs() const{
+		return this->frontier_ts_;
+	}
 
 
 	// timestamp is not used here but will be used for global state for propagation
@@ -372,7 +376,7 @@ public:
 	}
 
 private:
-	std::function<bool(const Type *) > condition_;
+	std::function<bool(const Type &) > condition_;
 
 	// acquired from in node, this will be passed to output node
 	timestamp frontier_ts_;
@@ -407,21 +411,26 @@ public:
 		while (in_queue_->GetNext(&in_data)) {
 			this->out_queue_->ReserveNext(&out_data);
 			Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
-			Tuple<OutType> *out_tuple = (Tuple<InType> *)(out_data);
+			Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 
-			out_tuple->ts = in_tuple->ts;
-			out_tuple->count = in_tuple->count;
+			out_tuple->delta.ts = in_tuple->delta.ts;
+			out_tuple->delta.count = in_tuple->delta.count;
 			out_tuple->data = this->projection_(in_tuple->data);
 		}
 
 		this->in_queue_->Clean();
 	}
 
-	Queue *Output() const {
+	Queue *Output() {
 		return this->out_queue_;
 	}
 
 	std::vector<Node*> Inputs() {return {this->in_node_};}
+	
+	timestamp GetFrontierTs() const{
+		return this->frontier_ts_;
+	}
+
 	
 	// timestamp is not used here but might be helpful to store for propagatio
 	void UpdateTimestamp(timestamp ts) {
@@ -453,8 +462,8 @@ private:
  */
 
 template<typename LeftType, typename RightType, typename OutType>
-class StatefulBinaryNode : Node {
-
+class StatefulBinaryNode : public Node {
+public:
 	StatefulBinaryNode(Node *in_node_left, Node *in_node_right):
 		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
 		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
@@ -471,6 +480,9 @@ class StatefulBinaryNode : Node {
 	std::vector<Node*> Inputs() {return {this->in_node_left_, this->in_node_right_};}
 	
 	
+	timestamp GetFrontierTs() const{
+		return this->frontier_ts_;
+	}
 	virtual void Compute() = 0;
 
 	void UpdateTimestamp(timestamp ts) {
@@ -478,8 +490,8 @@ class StatefulBinaryNode : Node {
 			return;
 		}
 		// way to keep track on when we can get rid of old tuple deltas
-		this->ts = ts_;
-		if(this->ts_ - this->previous_ts > this->frontier_ts){
+		this->ts_ = ts;
+		if(this->ts_ - this->previous_ts > this->frontier_ts_){
 			this->compact_ = true;
 			this->previous_ts = ts;
 		}
@@ -491,7 +503,7 @@ class StatefulBinaryNode : Node {
 		}
 	}
 
-private:
+protected:
 	void Compact(){
 		// Iterate over each multiset in the vector
 		for(int index = 0; index < index_to_deltas_left_.size(); index++){
@@ -569,12 +581,12 @@ private:
 
     // we can treat whole tuple as a key, this will return it's index  
 	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<char[sizeof(LeftType)], index> tuple_to_index_left;
-    std::unordered_map<char[sizeof(RightType)], index> tuple_to_index_right;
+    std::unordered_map<std::array<char ,sizeof(LeftType)>, index, KeyHash<LeftType>> tuple_to_index_left;
+    std::unordered_map<std::array<char, sizeof(RightType)>, index, KeyHash<RightType>> tuple_to_index_right;
     // from index we can get multiset of changes to the input, later
 	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_left_;
-    std::vector< std::multiset<Delta,bool(*)(const Delta&, const Delta&)>>  index_to_deltas_right_;
+    std::vector< std::multiset<Delta,DeltaComparator>>  index_to_deltas_left_;
+    std::vector< std::multiset<Delta,DeltaComparator>>  index_to_deltas_right_;
 
 	std::mutex node_mutex;
 };
@@ -603,7 +615,7 @@ public:
 			while(this->in_queue_right_->GetNext(&in_data_right)){
 				Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 				// if left and right queues match on data put it into out_queue with new delta
-				if(std::memcmp(in_left_tuple->data, in_right_tuple->data, sizeof(Type))){
+				if(std::memcmp(&in_left_tuple->data, &in_right_tuple->data, sizeof(Type))){
 					this->out_queue_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
@@ -617,10 +629,11 @@ public:
 		// compute left queue against right table
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-			char *left_data = (char *)&in_left_tuple->data;
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_right[left_data];
-			for(auto it = this->index_to_deltas_right[match_index].begin(); it != this->index_to_deltas_right[match_index].end(); it++){
+			index match_index = this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
+				
+			
+			for(auto it = this->index_to_deltas_right_[match_index].begin(); it != this->index_to_deltas_right_[match_index].end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
 				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
@@ -632,10 +645,9 @@ public:
 		// compute right queue against left table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-			char *right_data = (char *)&in_right_tuple->data;
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_left[right_data];
-			for(auto it = this->index_to_deltas_left[match_index].begin(); it != this->index_to_deltas_left[match_index].end(); it++){
+			index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
+			for(auto it = this->index_to_deltas_left_[match_index].begin(); it != this->index_to_deltas_left_[match_index].end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
 				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
@@ -649,29 +661,29 @@ public:
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
+			if(!this->tuple_to_index_left.contains(Key<Type>(in_left_tuple->data))){
 				index match_index = this->next_index_left_;
 				this->next_index_left_++;
-				this->tuple_to_index_left[in_left_tuple->data] = match_index;
-				this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
+				this->tuple_to_index_left[Key<Type>(in_left_tuple->data)] = match_index;
+				this->index_to_deltas_left_.emplace_back(std::multiset<Delta,DeltaComparator>{in_left_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
-				this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
+				index match_index = this->tuple_to_index_left[Key<Type>(in_left_tuple->data)];
+				this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
 			}
 		}
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
+			if(!this->tuple_to_index_right.contains(Key<Type>(in_right_tuple->data))){
 				index match_index = this->next_index_right_;
 				this->next_index_right_++;
-				this->tuple_to_index_right[in_right_tuple->data] = match_index;
-				this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
+				this->tuple_to_index_right[Key<Type>(in_right_tuple->data)] = match_index;
+				this->index_to_deltas_left_.emplace_back(std::multiset<Delta,DeltaComparator>{in_right_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_right_tuple->data];
-				this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
+				index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
+				this->index_to_deltas_right_[match_index].insert(in_right_tuple->delta);
 			}
 		}
 		
@@ -689,7 +701,8 @@ public:
 };
 
 template <typename T>
-class UnionNode: SimpleBinaryNode<T>{
+class UnionNode: public SimpleBinaryNode<T>{
+public:
 	UnionNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
@@ -697,7 +710,8 @@ class UnionNode: SimpleBinaryNode<T>{
 	}
 };
 template <typename T>
-class IntersectNode: SimpleBinaryNode<T>{
+class IntersectNode: public SimpleBinaryNode<T>{
+public:
 	IntersectNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
@@ -705,7 +719,8 @@ class IntersectNode: SimpleBinaryNode<T>{
 	}
 };
 template <typename T>
-class ExceptNode: SimpleBinaryNode<T>{
+class ExceptNode: public SimpleBinaryNode<T>{
+public:
 	ExceptNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
@@ -962,7 +977,7 @@ private:
 // aggregations, is only Unary stateful node and there are two kinds of aggregates, normal and aggregate by
 // lets start with simple aggregate
 template <typename InType, typename OutType>
-class AggregateNode: Node{
+class AggregateNode: public Node{
 	// now output of aggr might be also dependent of count of in tuple, for example i sum inserting 5 Alice's should influence it different than one Alice
 	// but with min it should not, so it will be dependent on aggregate function
 	AggregateNode(Node *in_node, std::function<OutType(OutType, InType, int count)> aggr_func, OutType initial_value):
@@ -1093,7 +1108,7 @@ private:
 // simple two concrete aggregate types
 
 template <typename InType, Arithmetic OutType>
-class SumNode: AggregateNode<InType, OutType>{
+class SumNode: public AggregateNode<InType, OutType>{
 	SumNode(Node *in_node):
 	AggregateNode<InType, OutType>(in_node, sum, 0) {}
 	
@@ -1103,7 +1118,7 @@ class SumNode: AggregateNode<InType, OutType>{
 };
 
 template <typename InType, Arithmetic OutType>
-class MaxNode: AggregateNode<InType, OutType>{
+class MaxNode: public AggregateNode<InType, OutType>{
 	MaxNode(Node *in_node):
 	AggregateNode<InType, OutType>(in_node, max, 0) {}
 	

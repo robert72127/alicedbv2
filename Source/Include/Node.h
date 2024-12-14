@@ -759,7 +759,7 @@ public:
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			char *left_data = (char *)&in_left_tuple->data;
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_right[left_data];
+			index match_index = this->tuple_to_index_right[Key<InTypeLeft>(left_data)];
 			for(auto &[table_data, table_idx] : this->tuple_to_index_right){
 				for(auto it = this->index_to_deltas_right[table_idx].begin(); it != this->index_to_deltas_right[table_idx].end(); it++){
 					this->out_queue_->ReserveNext(&out_data);
@@ -775,7 +775,7 @@ public:
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			char *right_data = (char *)&in_right_tuple->data;
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_left[right_data];
+			index match_index = this->tuple_to_index_left[Key<InTypeRight>(right_data)];
 			for(auto &[ table_data, table_idx] : this->tuple_to_index_right){
 				for(auto it = this->index_to_deltas_left[table_idx].begin(); it != this->index_to_deltas_left[table_idx].end(); it++){
 					this->out_queue_->ReserveNext(&out_data);
@@ -791,14 +791,14 @@ public:
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
+			if(!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))){
 				index match_index = this->next_index_left_;
 				this->next_index_left_++;
-				this->tuple_to_index_left[in_left_tuple->data] = match_index;
+				this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
 				this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
+				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
 				this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
 			}
 		}
@@ -806,14 +806,14 @@ public:
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
+			if(!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))){
 				index match_index = this->next_index_right_;
 				this->next_index_right_++;
-				this->tuple_to_index_right[in_right_tuple->data] = match_index;
+				this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
 				this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_right_tuple->data];
+				index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
 				this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
 			}
 		}
@@ -911,30 +911,30 @@ public:
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_left.contains(in_left_tuple->data)){
+			if(!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))){
 				index match_index = this->next_index_left_;
 				this->next_index_left_++;
-				this->tuple_to_index_left[in_left_tuple->data] = match_index;
-				this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
+				this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
+				this->index_to_deltas_left_.emplace_back(std::multiset<Delta,DeltaComparator>{in_left_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_left_tuple->data];
-				this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
+				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
+				this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
 			}
 		}
 
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// if this data wasn't present insert with new index
-			if(!this->tuple_to_index_right.contains(in_right_tuple->data)){
+			if(!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))){
 				index match_index = this->next_index_right_;
 				this->next_index_right_++;
-				this->tuple_to_index_right[in_right_tuple->data] = match_index;
-				this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
+				this->tuple_to_index_right_[Key<InTypeRight>(in_right_tuple->data)] = match_index;
+				this->index_to_deltas_right_.emplace_back(std::multiset<Delta,DeltaComparator>{in_right_tuple->delta});
 			}
 			else{
-				index match_index = this->tuple_to_index_left[&in_right_tuple->data];
-				this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
+				index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
+				this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
 			}
 		}
 		
@@ -951,17 +951,19 @@ public:
 private:
 
 	inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) { 
-			return std::memcmp(this->get_match_left(left_data), this->get_match_right(right_data), sizeof(MatchType));
+			char left_match [sizeof(MatchType)] = this->get_match_left_(left_data);
+			char right_match [sizeof(MatchType)] = this->get_match_right_(right_data);
+			return std::memcmp(&left_data, &right_data, sizeof(MatchType));
 	}
 
 	// we need those functions to calculate matchfields from tuples on left and righ
 	std::function<MatchType(InTypeLeft *)>get_match_left_;
 	std::function<MatchType(InTypeRight*)>get_match_right_;	
-	std::function<OutType(InTypeLeft,InTypeRight)>join_layout_;
-  
+	std::function<OutType(InTypeLeft*, InTypeRight *)>join_layout_:
+	
 	// we need to get corresponding tuples using only match chars, this maps will help us with it
-    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InTypeLeft)]> > match_to_tuple_left_;
-    std::unordered_map<char[sizeof(MatchType)], std::list<char[sizeof(InTypeLeft)]> > match_to_tuple_right_;
+    std::unordered_map<std::array<char, sizeof(MatchType)>,std::list< std::array<char, sizeof(InTypeLeft)> >,KeyHash<MatchType> > match_to_tuple_left_;
+    std::unordered_map<std::array<char, sizeof(MatchType)>, std::list< std::array<char, sizeof(InTypeRight)> >, KeyHash<MatchType> > match_to_tuple_right_;
 
 };
 

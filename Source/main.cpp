@@ -133,4 +133,10 @@ int main(){
 
     AliceDB::Node *unn = new AliceDB::UnionNode<Person>(source, source);
 
+    auto fun_fields = [](Person *P){ return *P; };
+    auto join_layout = [](Person *left_p, Person *right_p){ return *left_p;};
+
+    AliceDB::Node *join = new AliceDB::JoinNode<Person, Person, Person, Person>(unn,unn,  fun_fields, fun_fields, join_layout);
+
+
 }

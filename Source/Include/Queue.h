@@ -88,6 +88,10 @@ struct Queue {
 	}
 
 
+	void RemoveLast(){
+		current_size_ -= tuple_size_;
+	}
+
 	char *storage_;
 	size_t queue_size_;
 	size_t tuple_size_;

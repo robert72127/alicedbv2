@@ -7,9 +7,9 @@
 
 namespace AliceDB {
 
-template <typename Type>
 
 // this will be used by queue to transfer data
+template <typename Type>
 struct Tuple {
 	Delta delta;
 	Type data;

@@ -3,6 +3,7 @@
 
 #include "Common.h"
 #include "Queue.h"
+//#include "Producer.h"
 
 #include <type_traits>
 #include <map>
@@ -12,13 +13,14 @@
 #include <mutex>
 #include <cstring>
 #include <algorithm>
-#include <chrono>
 
 
 #define DEFAULT_QUEUE_SIZE (200)
 
 namespace AliceDB{
 
+template <typename T>
+class Producer;
 
 class Node {
 
@@ -56,30 +58,69 @@ public:
 
 
 /* Source node is responsible for producing data through Compute function and then writing output to both out_queue, and
- * persistent table */
+ * persistent table 
+ * creator of this node needs to specify how long delayed data might arrive
+ */
 template <typename Type>
 class SourceNode : public Node {
 public:
-	SourceNode(std::function<void(Type **out_data)>produce) : produce_{produce} {}
+	SourceNode(Producer<Type> *prod, timestamp frontier_ts) : produce_{prod}, frontier_ts_{frontier_ts} 
+	{
+		this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+	}
 
 	void Compute() {
-		if (this->update_ts_) {
-			this->table->UpdateTimestamp(this->ts_);
-			this->update_ts_ = false;
+	// produce some data with time limit set
+		char *prod_data;
+		while (true){
+			produce_queue_->ReserveNext(&prod_data);
+			Tuple<Type> *prod_tuple = (Tuple<Type> *)(prod_data);
+			prod_tuple->ts = get_current_timestamp(); 
+			bool insert_;
+			if(!prod_tuple->data = this->produce_.next(&prod_tuple->data, &insert_)){
+				// we reserved but won't insert so have to remove it from queue
+				produce_queue_->RemoveLast();
+				break;
+			}
+			prod_tuple->count = insert_? 1: -1 ;
 		}
 
 		/** @todo produce using this->produce_ */
+		// but how long will we compute	
+		// write in queue into out_table
+		const char *in_data;
+		while (this->produce_queue_->GetNext(&in_data)) {
+		Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_.contains(in_tuple->data)){
+				index match_index = this->next_index_left_;
+				this->next_index_left_++;
+				this->tuple_to_index_[in_tuple->data] = match_index;
+				this->index_to_deltas_.emplace_back({in_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_[&in_tuple->data];
+				this->index_to_deltas_[match_index].insert(in_tuple->delta);
+			}
+		}
+		
+
+		if (this->update_ts_) {
+			this->Compact();
+			this->update_ts_ = false;
+		}
+	
 	}
 
 	Queue *Output() {
-		return this->out_queue_;
+		return this->produce_queue_;
 	}
 
 	// source has no inputs
 	std::vector<Node*> Inputs() {return {};}
 
 	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
+		if (ts  - this->frontier_ts_ <= this->ts_) {
 			return;
 		}
 		this->update_ts_ = true;
@@ -88,7 +129,6 @@ public:
 			this->in_node_->UpdateTimestamp(ts);
 		}
 	}
-
 	
 	timestamp GetFrontierTs() const{
 		return this->frontier_ts_;
@@ -103,9 +143,9 @@ private:
     // what is oldest timestamp that needs to be keept by this table
     timestamp ts_;
 
-	std::function<void(Type **out_data)>produce_;
+	Producer<Type> produce_;
 	
-	Queue *out_queue_;
+	// data from producer is put into this queue from it it's written into both table and passed to output nodes
     Queue *produce_queue_;
 
     // we can treat whole tuple as a key, this will return it's index  
@@ -124,8 +164,7 @@ public:
 	SinkNode(Node *in_node): in_node_(in_node_), in_queue_{in_node->Output()} {}
 
 	void Compute() {
-		
-		// write in queue into out_queue
+		// write in queue into out_table
 		const char *in_data;
 		while (this->in_queue_->GetNext(&in_data)) {
 		Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
@@ -143,10 +182,7 @@ public:
 		}
 		
 		// get current timestamp that can be considered 
-		auto now = std::chrono::system_clock::now();
-		auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-		timestamp unix_timestamp = duration.count();
-		this->UpdateTimestamp(unix_timestamp);
+		this->UpdateTimestamp(get_current_timestamp());
 		
 		if (this->compact_){
 			this->Compact();

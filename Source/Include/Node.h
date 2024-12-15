@@ -13,7 +13,7 @@
 #include <mutex>
 #include <cstring>
 #include <algorithm>
-
+#include <chrono>
 
 template <typename Type>
 std::array<char, sizeof(Type)> Key(const Type& type) {
@@ -33,6 +33,34 @@ struct KeyHash {
 
 namespace AliceDB{
 
+// generic compact deltas work's for almost any kind of node (doesn't work for aggregations)
+void compact_deltas(std::vector< std::multiset<Delta,DeltaComparator>>  &index_to_deltas, timestamp current_ts){
+		for(int index = 0; index < index_to_deltas.size(); index++){
+			auto &deltas = index_to_deltas[index];
+			int previous_count = 0;
+			timestamp ts = 0;
+
+			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				
+				// Check the condition: ts < ts_ - frontier_ts_
+				
+				// if current delta has bigger tiemstamp than one we are setting, or we iterated all deltas
+				// insert accumulated delta and break loop
+				if(it->ts > current_ts  || it == deltas.rend() ){
+					deltas.insert(Delta{ts, previous_count});
+					break;
+				}
+				else{
+					continue;
+				}
+			}
+		}
+}
 
 class Node {
 
@@ -57,7 +85,6 @@ public:
     virtual Queue *Pull();
      */
 
-
     /**
      * @brief returns Queue corresponding to output from this Tuple
      */
@@ -75,16 +102,20 @@ public:
  */
 template <typename Type>
 class SourceNode : public Node {
-public:
-	SourceNode(Producer<Type> *prod, timestamp frontier_ts) : produce_{prod}, frontier_ts_{frontier_ts} 
+public:	
+	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us=500) : produce_{prod}, frontier_ts_{frontier_ts}, duration_us_{duration_us} 
 	{
 		this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
 	}
 
 	void Compute() {
-	// produce some data with time limit set
+		auto start = std::chrono::steady_clock::now();
+		std::chrono::microseconds duration(this->duration_us_);
+		auto end = start + duration;
+
 		char *prod_data;
-		while (true){
+		// produce some data with time limit set, into produce_queue
+		while (std::chrono::steady_clock::now() < end){
 			produce_queue_->ReserveNext(&prod_data);
 			Tuple<Type> *prod_tuple = (Tuple<Type> *)(prod_data);
 			prod_tuple->delta.ts = get_current_timestamp(); 
@@ -95,9 +126,7 @@ public:
 			}
 		}
 
-		/** @todo produce using this->produce_ */
-		// but how long will we compute	
-		// write in queue into out_table
+		// insert data from produce_queue into the table
 		const char *in_data;
 		while (this->produce_queue_->GetNext(&in_data)) {
 		Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
@@ -130,10 +159,11 @@ public:
 	std::vector<Node*> Inputs() {return {};}
 
 	void UpdateTimestamp(timestamp ts) {
-		if (ts  - this->frontier_ts_ <= this->ts_) {
-			return;
+		if (this->ts_  + this->frontier_ts_  < ts) {
+			this->ts_ = ts;
+			this->update_ts_ = true;
 		}
-		this->update_ts_ = true;
+		return;
 
 	}
 	
@@ -142,33 +172,12 @@ public:
 	}
 
 private:
-	void Compact(){
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_.size(); index++){
-			auto &deltas = index_to_deltas_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
 
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
+	void Compact(){
+		compact_deltas(this->index_to_deltas_, this->ts_);
 	}
+
+	int duration_us_;
 
 	size_t next_index_=0;
 
@@ -198,7 +207,8 @@ private:
 template<typename Type>
 class SinkNode: public Node{
 public:
-	SinkNode(Node *in_node): in_node_(in_node_), in_queue_{in_node->Output()} {}
+	SinkNode(Node *in_node): in_node_(in_node_), in_queue_{in_node->Output()},
+	frontier_ts_{in_node->GetFrontierTs()} {}
 
 	void Compute() {
 		// write in queue into out_table
@@ -223,6 +233,7 @@ public:
 		
 		if (this->compact_){
 			this->Compact();
+			this->update_ts_ = false;
 		}
 	}
 
@@ -256,16 +267,13 @@ public:
 	std::vector<Node*> Inputs() {return {this->in_node_};}
 
 	void UpdateTimestamp(timestamp ts) {
-		if (ts - this->frontier_ts_ <= this->ts_) {
-			return;
-		}
-		this->update_ts_ = true;
-
-		if (this->in_node_ != nullptr) {
+		if (this->ts_ + this->frontier_ts_ < ts) {
+			this->update_ts_ = true;
+			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp(ts);
 		}
-	}
 
+	}
 	
 	timestamp GetFrontierTs() const{
 		return this->frontier_ts_;
@@ -273,34 +281,9 @@ public:
 
 private:
 	void Compact(){
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_.size(); index++){
-			auto &deltas = index_to_deltas_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-		this->update_ts_ = false;
+		compact_deltas(this->index_to_deltas_, this->ts_);
 	}
+
 
 	size_t next_index_=0;
 	bool compact_;
@@ -362,13 +345,10 @@ public:
 		return this->frontier_ts_;
 	}
 
-
 	// timestamp is not used here but will be used for global state for propagation
 	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
-		if (this->in_node_ != nullptr) {
+		if (this->ts_ + this->frontier_ts_ <  ts ) {
+			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp(ts);
 		}
 	}
@@ -397,7 +377,7 @@ private:
 template <typename InType, typename OutType>
 class ProjectionNode : public Node {
 public:
-	ProjectionNode(Node *in_node,  std::function<OutType(const InType&)>projection)
+	ProjectionNode(Node *in_node,  std::function<void(InType*, OutType*)>projection)
 	    : projection_ {projection}, in_node_ {in_node}, in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} 
 	{
 		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
@@ -413,7 +393,7 @@ public:
 
 			out_tuple->delta.ts = in_tuple->delta.ts;
 			out_tuple->delta.count = in_tuple->delta.count;
-			out_tuple->data = this->projection_(in_tuple->data);
+			this->projection_(&in_tuple->data, &out_tuple->data);
 		}
 
 		this->in_queue_->Clean();
@@ -432,17 +412,13 @@ public:
 	
 	// timestamp is not used here but might be helpful to store for propagatio
 	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
-
-		if (this->in_node_ != nullptr) {
+		if (this->ts_ + this->frontier_ts_ <  ts) {
 			this->in_node_->UpdateTimestamp(ts);
 		}
 	}
 
 private:
-	std::function<OutType(InType)>projection_;
+	std::function<void(InType*, OutType*)>projection_;
 	
 	// track this for global timestamp state update
 	Node *in_node_;
@@ -484,77 +460,18 @@ public:
 	virtual void Compute() = 0;
 
 	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
-		// way to keep track on when we can get rid of old tuple deltas
-		this->ts_ = ts;
-		if(this->ts_ - this->previous_ts > this->frontier_ts_){
+		if(this->ts_ + this->frontier_ts_  < ts){
 			this->compact_ = true;
-			this->previous_ts = ts;
-		}
-		if (this->in_node_left_ != nullptr) {
+			this->ts_ = ts;
 			this->in_node_left_->UpdateTimestamp(ts);
-		}
-		if (this->in_node_right_ != nullptr) {
 			this->in_node_right_->UpdateTimestamp(ts);
 		}
 	}
 
 protected:
 	void Compact(){
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_left_.size(); index++){
-			auto &deltas = index_to_deltas_left_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
-		// Iterate over each multiset in the vector
-		for(int index = 0; index < index_to_deltas_right_.size(); index++){
-			auto &deltas = index_to_deltas_right_[index];
-			int previous_count = 0;
-			timestamp ts = 0;
-
-			for (auto it = deltas.rbegin(); it != deltas.rend(); ) {
-				previous_count += it->count;
-				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-				if(it == deltas.rend()) {
-					break;
-				}
-				// Check the condition: ts < ts_ - frontier_ts_
-				if(it->ts < (ts_ - frontier_ts_)){
-					continue;
-				}
-				else{
-					deltas.insert(Delta{ts, previous_count});
-					break;
-				}
-			}
-		}
-
+		compact_deltas(this->index_to_deltas_left_, this->ts_);
+		compact_deltas(this->index_to_deltas_right_, this->ts_);
 	}
 
 	// timestamp will be used to track valid tuples
@@ -1058,16 +975,11 @@ class AggregateNode: public Node{
 	}
 
 	void UpdateTimestamp(timestamp ts) {
-		if (ts <= this->ts_) {
-			return;
-		}
 		// way to keep track on when we can get rid of old tuple deltas
-		this->ts = ts_;
-		if(this->ts_ - this->previous_ts > this->frontier_ts){
+		if(this->ts_  + this->frontier_ts_ < ts){
 			this->compact_ = true;
-			this->previous_ts = ts;
-		}
-		if (this->in_node_ != nullptr) {
+			this->ts_ = ts;
+			this->previous_ts = ts_;
 			this->in_node_->UpdateTimestamp(ts);
 		}
 	}

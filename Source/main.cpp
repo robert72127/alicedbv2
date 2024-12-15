@@ -21,10 +21,8 @@ bool filter_adult(const Person &p){
     return p.age > 18;
 }
 
-Name proj_names(const Person &p){
-    Name N;
-    std::memcpy(N.name, p.name, 50);
-    return N;
+void proj_names(Person *p, Name *out){
+    std::memcpy(&out->name, &p->name, 50);
 }
 
 

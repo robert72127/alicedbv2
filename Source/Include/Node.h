@@ -1,3 +1,5 @@
+/** @todo 1) implement aggregations correctly, 2) allow for attaching new nodes to input/outut 3) switch to persistent storage */
+
 #ifndef ALICEDBNODE
 #define ALICEDBNODE
 
@@ -75,15 +77,6 @@ public:
 	virtual void UpdateTimestamp(timestamp ts) = 0;
 
 	virtual timestamp GetFrontierTs() const = 0;
-
-    /**
-	 * @todo for now don't use it and instead store state for all aggregations
-	 * later on we migh switch to this approach
-	 * 
-     *  @brief if it's stateful node pulls queue of tuples from Table
-     * otherwise it pulls them from latest stateful node and recomputes
-    virtual Queue *Pull();
-     */
 
     /**
      * @brief returns Queue corresponding to output from this Tuple
@@ -203,7 +196,6 @@ private:
 
 };
 
-/** @todo implement */
 template<typename Type>
 class SinkNode: public Node{
 public:
@@ -235,6 +227,7 @@ public:
 			this->Compact();
 			this->update_ts_ = false;
 		}
+		this->in_queue_->Clean();
 	}
 
 	// print state of table at this moment
@@ -366,13 +359,6 @@ private:
 	Queue *in_queue_;
 	Queue *out_queue_;
 };
-
-/** @todo  
- * current approach with delta might not work if for example right table was negative and then becomes positive for except
- * then out delta should be like delete all? wait but not really cause we actually compare with all versions, so older version will show
- * they updates too, definetely something to think about cause for example maybe in out_queue we want to hold single tuple and deltas for each tuple
- * but with our current multiset approach we don't need to do that
-*/
 // projection can be represented by single node
 template <typename InType, typename OutType>
 class ProjectionNode : public Node {
@@ -478,7 +464,6 @@ protected:
 	// after update propagate it to input nodes
 	bool compact_ = false;
 	timestamp ts_;
-	timestamp previous_ts;
 	
 	timestamp frontier_ts_;
 	
@@ -534,7 +519,7 @@ public:
 					this->out_queue_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data = in_left_tuple->data;
+					std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
 					out_tuple->delta = out_delta;
 				}
 			}
@@ -546,13 +531,11 @@ public:
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
 			// get all matching on data from right
 			index match_index = this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
-				
-			
 			for(auto it = this->index_to_deltas_right_[match_index].begin(); it != this->index_to_deltas_right_[match_index].end(); it++){
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
 				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-				out_tuple->data = in_left_tuple->data;
+				std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
 				out_tuple->delta = out_delta;
 			}
 		}
@@ -566,7 +549,7 @@ public:
 				this->out_queue_->ReserveNext(&out_data);
 				Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
 				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-				out_tuple->data = in_right_tuple->data;
+				std::memcpy(&out_tuple->data, &in_right_tuple->data, sizeof(Type));
 				out_tuple->delta = out_delta;
 			}
 		}
@@ -646,7 +629,7 @@ public:
 template <typename InTypeLeft, typename InTypeRight, typename OutType>
 class CrossJoinNode: public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
-	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<OutType(InTypeLeft,InTypeRight)>join_layout):
+	CrossJoinNode(Node *in_node_left, Node *in_node_right, std::function<void(InTypeLeft*,InTypeRight*, OutType*)>join_layout):
 	 	StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
 	 	join_layout_{join_layout} {}
 
@@ -665,7 +648,7 @@ public:
 				this->out_queue_->ReserveNext(&out_data);
 				Tuple<OutType> *out_tuple = (Tuple<OutType>*)(out_data);
 				out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),in_left_tuple->delta.count * in_right_tuple->delta.count};
-				&out_tuple->data = this->join_layout_(in_left_tuple, in_right_tuple);
+				this->join_layout_(&in_left_tuple->data, &in_right_tuple->data, &out_tuple->data);
 			}
 		}
 
@@ -680,7 +663,7 @@ public:
 					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),in_left_tuple->delta.count * it->count};
-					out_tuple->data =  this->join_layout_(in_left_tuple->data, table_data);
+					this->join_layout_(&in_left_tuple->data, &table_data, &out_tuple->data);
 				}
 			}
 		}
@@ -696,7 +679,7 @@ public:
 					this->out_queue_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),in_right_tuple->delta.count * it->count};
-					out_tuple->data =  this->join_layout_(table_data, in_right_tuple->data);
+					this->join_layout_( &table_data,&in_right_tuple->data,  &out_tuple->data);
 				}
 			}
 		}
@@ -745,7 +728,7 @@ public:
 private:
 
 	// only state beyound StatefulNode state is join_layout_function
-	std::function<OutType(InTypeLeft,InTypeRight)>join_layout_;  
+	std::function<void(InTypeLeft*,InTypeRight*, OutType*)>join_layout_;
 };
 
 
@@ -899,19 +882,19 @@ private:
  */
 
 
-/** @todo do we really need to keep and send to out_queue this initial value? maybe delta would be enough */
-// aggregations, is only Unary stateful node and there are two kinds of aggregates, normal and aggregate by
-// lets start with simple aggregate
-template <typename InType, typename OutType>
-class AggregateNode: public Node{
+// and finally aggregate_by, so we are aggregating but also with grouping by fields
+// what if we would store in type and out type, and then for all tuples would emit new version from their oldest version
+
+template <typename InType, typename MatchType, typename OutType>
+class AggregateByNode: public Node{
 	// now output of aggr might be also dependent of count of in tuple, for example i sum inserting 5 Alice's should influence it different than one Alice
 	// but with min it should not, so it will be dependent on aggregate function
-	AggregateNode(Node *in_node, std::function<OutType(OutType, InType, int count)> aggr_func, OutType initial_value):
+	AggregateByNode(Node *in_node, std::function<void>(OutType*, *InType, int>)> aggr_fun, std::function<void(InType *, MatchType*)>get_match):
 	in_node_{in_node},
 	in_queue_{in_node->Output()},
 	frontier_ts_{in_node->GetFrontierTs()},
-	initial_value_{initial_value},
-	aggr_func_{aggr_func}
+	aggr_fun_{aggr_fun},
+	get_match_{get_match}
 	{
 		this->ts_ = 0;
 		// there will be single tuple emited at once probably, if not it will get resized so chill
@@ -930,79 +913,94 @@ class AggregateNode: public Node{
 	// what if we would do : insert previous value with count -1 and insert current with count 1 at the same time
 	// then old should get discarded
 	void Compute() {
-
-    	std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  new_deltas;
-		const char *in_data;
-		while (this->in_queue_left_->GetNext(&in_data)) {
-				Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
-				// compute against all version of current value
-				for(auto &[ts, count] : this->deltas_){
-					new_deltas.insert({std::max(ts, in_tuple->delta.ts), aggr_function(count, in_tuple->data, in_tuple->delta.count)});
-				}	
-		}
-
-		// merge deltas
-		this->deltas_.insert(new_deltas.begin(), new_deltas.end());
-
-		auto oldest = deltas_.end()--;
-		// emit only single one  with right timestamp
-		for (auto it = deltas_.rbegin(); it != deltas_.rend(); ) {
-			// if this is first to new to be emited try emiting previous one
-			if (it->ts > this->ts_ - this->frontier_ts_){
-				auto prev = it--;
-				if(it != deltas_.rbegin()){
-
-					char *out_data;
-					this->out_queue_->ReserveNext(&out_data);
-					char *del_data;
-					this->out_queue_->ReserveNext(&del_data);
-
-					// emit new
-					Tuple<OutType> out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple.data = prev->count;
-					out_tuple.delta = {prev->ts, 1};
-
-					// delete oldest
-					Tuple<OutType> del_tuple = (Tuple<OutType> *)(del_data) = {oldest->ts, -1, oldest->count};
-
-					// compact
-					this->Compact();
-				}
-				
-				break;
+		// insert new deltas from in_queues
+		char *in_data;
+		while (this->in_queue_->GetNext(&in_data)) {
+			Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index.contains(Key<InType>(in_tuple->data))){
+				index match_index = this->next_index_;
+				this->next_index_++;
+				this->tuple_to_index[Key<InTypeLeft>(in_tuple->data)] = match_index;
+				this->index_to_deltas_.emplace_back(std::multiset<Delta,DeltaComparator>{in_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_tuple->data)];
+				this->index_to_deltas_left_[match_index].insert(in_tuple->delta);
 			}
 		}
-	}
+
+
+		if (this->compact_){
+		// emit delete for oldest keept version, emit insert for previous_ts
+
+			// iterate by match type
+			for(auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++){
+				MatchType match = it->first;
+				OutType accum;
+
+				for(auto data_it = it->second.begin(); data_it != it>second,end(); data_it++){
+					int index = this->index_to_deltas_[*data_it];
+					aggr_func_(&accum, reinterpret_cast<InType*>(*data_it) ,this->index_to_deltas_[index].rbegin()->count);
+				}
+
+				// emit delete tuple
+				char *out_data;
+				this->out_queue_->ReserveNext(&out_data);
+				Tuple<OutType> del_tuple = (Tuple<OutType> *)(out_data);
+				del_tuple->delta =  = {this->previous_ts, -1}
+				std::memcpy(&del_tuple->data, accum, sizeof(OutType));
+			}
+
+			this->Compact();		
+
+			this->compact_ = false;	
+
+			// iterate by match type this time we will insert, after compaction prev index should be lst value and we want to insert it
+			for(auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++){
+				MatchType match = it->first;
+				OutType accum;
+
+				for(auto data_it = it->second.begin(); data_it != it>second,end(); data_it++){
+					int index = this->index_to_deltas_[*data_it];
+					aggr_func_(&accum, reinterpret_cast<InType*>(*data_it) ,this->index_to_deltas_[index].rbegin()->count);
+				}
+
+				// emit delete tuple
+				char *out_data;
+				this->out_queue_->ReserveNext(&out_data);
+				Tuple<OutType> ins_tuple = (Tuple<OutType> *)(out_data);
+				ins_tuple->delta =  = {this->previous_ts, 1}
+				std::memcpy(&inst->data, accum, sizeof(OutType));
+			}
+
+
+		}
+
+    }
 
 	void UpdateTimestamp(timestamp ts) {
-		// way to keep track on when we can get rid of old tuple deltas
-		if(this->ts_  + this->frontier_ts_ < ts){
-			this->compact_ = true;
+		if(this->ts_ + this->frontier_ts_ < ts){
+			this-previous_ts = this->ts_;
 			this->ts_ = ts;
-			this->previous_ts = ts_;
-			this->in_node_->UpdateTimestamp(ts);
+			this->compact_ = true;
+			this->in_node_->UpdateTimestamp();
 		}
+	
 	}
 
 private:
 	// let's store full version data and not deltas in this node, so we can just discard old versions
 	void Compact(){
-		// Iterate over each multiset in the vector
-		for (auto it = deltas_.rbegin(); it != deltas_.rend(); it++ ) {
-			if (it->ts <= this->previous_ts){
-				auto base_it = std::next(it).base();
-				base_it = deltas_.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
-			}
-			else {
-				break;
-			}
-		}
-		this->compact = false;
+		// compact all the way to previous version, we need it to to emit delete
+		compact_deltas(this->index_to_deltas_, this->previous_ts);
 	}
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
+
+	size_t next_index_=0;
+
 	bool compact_ = false;
 	timestamp ts_;
 	timestamp previous_ts;
@@ -1015,42 +1013,20 @@ private:
 
 	Queue *out_queue_;
 
-	// there will be only single out tuple with multiple version, so we don't need indexing
-    std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  deltas_;
- 
+    std::unordered_map<std::array<char ,sizeof(LeftType)>, index, KeyHash<LeftType>> tuple_to_index;
+	std::vector< std::multiset<Delta,DeltaComparator>>  index_to_deltas_;
+    std::unordered_map<std::array<char, sizeof(MatchType)>, std::list< std::array<char,  sizeof(InType) > > ,KeyHash<MatchType> > match_to_tuple_;
+
+ 	std::function<void(InType *, MatchType*)>get_match_;
  	std::function<OutType(OutType, InType, int)> aggr_func_;
 	OutType initial_value_;
 	
 	std::mutex node_mutex;
 
+
+
 };
-
-
-// simple two concrete aggregate types
-
-template <typename InType, Arithmetic OutType>
-class SumNode: public AggregateNode<InType, OutType>{
-	SumNode(Node *in_node):
-	AggregateNode<InType, OutType>(in_node, sum, 0) {}
-	
-	static OutType sum(const OutType &prev_val, const InType &new_val, int count){
-		return prev_val + new_val * count;
-	}
-};
-
-template <typename InType, Arithmetic OutType>
-class MaxNode: public AggregateNode<InType, OutType>{
-	MaxNode(Node *in_node):
-	AggregateNode<InType, OutType>(in_node, max, 0) {}
-	
-	static OutType max(const OutType &prev_val, const InType &new_val, int count){
-		return std::max(prev_val, new_val);
-	}
-};
-
-
-// and finally aggregate_by, so we are aggregating but also with grouping by fields
-
 
 }
 #endif
+

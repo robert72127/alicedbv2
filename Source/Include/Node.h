@@ -1,4 +1,29 @@
-/** @todo 1) implement aggregations correctly, 2) allow for attaching new nodes to input/outut 3) switch to persistent storage */
+/** @todo 1) allow for attaching new nodes to input/outut 2) switch to persistent storage */
+/**
+ *	actually don't allow attaching new nodes during runtime, nodes have to be predefined at the start
+ * 	so single source might support multiple sinks, but don't allow for modiication during runtime 
+ *
+ *
+ * 
+ *  
+ * ok let's think about how to implement this 1 problem) 
+ * first we actaully need to store vector of out_nodes and not single out_node, it's just that for all other nodes than sink source,
+ * this vector will always have 1 element
+ * 
+ * When all out_queues are synchronized problem becomes very easy in fact, operation look like now but instead of inserting to one out_queue
+ * we insert into all out_queues,
+ * 
+ * but before that we have one queue that is online and other that first need to process all stale data
+ * ok let's add extra method to all 
+ * 
+ * 
+ *2) 
+ * for nodes that needs match fields store in rocks db <Key: match_fields| data ><Value Index> 
+ * for normal ones <Key: data ><Value: Index>
+ * 
+ * we also store <index, ts> <count> in separate storage to calculate deltas 
+ */
+
 
 #ifndef ALICEDBNODE
 #define ALICEDBNODE

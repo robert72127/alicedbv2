@@ -143,23 +143,6 @@ class Graph{
             this->make_edge(in_node_right, join);
             return join;
         }
-	
-    template <typename InType, Arithmetic OutType>
-    Node *Sum(Node *in_node){
-        Node *sum = new SumNode<InType, OutType>(in_node);
-        this->all_nodes_.insert(sum);
-        this->make_edge(in_node, sum);
-        return sum;
-    }   
-
-    template <typename InType, Arithmetic OutType>
-    Node *Max(Node *in_node){
-        Node *max = new MaxNode<InType, OutType>(in_node);
-        this->all_nodes_.insert(max);
-        this->make_edge(in_node, max);
-        return max;
-    }   
-
 
 private:
     void topo_sort(std::set<Node*> graph){

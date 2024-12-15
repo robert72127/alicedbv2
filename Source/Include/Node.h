@@ -821,6 +821,14 @@ public:
 				this->next_index_left_++;
 				this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
 				this->index_to_deltas_left_.emplace_back(std::multiset<Delta,DeltaComparator>{in_left_tuple->delta});
+				// also insert matching for this tuple
+				MatchType left_match; 
+				this->get_match_left_(&in_left_tuple->data, &left_match);
+				if(!this->match_to_tuple_left_.contains(Key<MatchType>(left_match))){
+					this->match_to_tuple_left_[Key<MatchType>(left_match)] = std::list< std::array<char, sizeof(InTypeLeft)> >{};
+				}
+				this->match_to_tuple_left_[Key<MatchType>(left_match)].push_back(Key<InTypeLeft>(in_left_tuple->data));
+
 			}
 			else{
 				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
@@ -836,7 +844,16 @@ public:
 				this->next_index_right_++;
 				this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
 				this->index_to_deltas_right_.emplace_back(std::multiset<Delta,DeltaComparator>{in_right_tuple->delta});
+			
+				// also insert matching for this tuple
+				MatchType right_match; 
+				this->get_match_right_(&in_right_tuple->data, &right_match);
+				if(!this->match_to_tuple_right_.contains(Key<MatchType>(right_match))){
+					this->match_to_tuple_right_[Key<MatchType>(right_match)] = std::list< std::array<char, sizeof(InTypeRight)> >{};
+				}
+				this->match_to_tuple_right_[Key<MatchType>(right_match)].push_back(Key<InTypeRight>(in_right_tuple->data));
 			}
+
 			else{
 				index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
 				this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
@@ -889,7 +906,7 @@ template <typename InType, typename MatchType, typename OutType>
 class AggregateByNode: public Node{
 	// now output of aggr might be also dependent of count of in tuple, for example i sum inserting 5 Alice's should influence it different than one Alice
 	// but with min it should not, so it will be dependent on aggregate function
-	AggregateByNode(Node *in_node, std::function<void>(OutType*, *InType, int>)> aggr_fun, std::function<void(InType *, MatchType*)>get_match):
+	AggregateByNode(Node *in_node, std::function<void(OutType*, InType*, int)> aggr_fun, std::function<void(InType *, MatchType*)>get_match):
 	in_node_{in_node},
 	in_queue_{in_node->Output()},
 	frontier_ts_{in_node->GetFrontierTs()},
@@ -914,18 +931,26 @@ class AggregateByNode: public Node{
 	// then old should get discarded
 	void Compute() {
 		// insert new deltas from in_queues
-		char *in_data;
+		const char *in_data;
 		while (this->in_queue_->GetNext(&in_data)) {
 			Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
 			// if this data wasn't present insert with new index
 			if(!this->tuple_to_index.contains(Key<InType>(in_tuple->data))){
 				index match_index = this->next_index_;
 				this->next_index_++;
-				this->tuple_to_index[Key<InTypeLeft>(in_tuple->data)] = match_index;
+				this->tuple_to_index[Key<InType>(in_tuple->data)] = match_index;
 				this->index_to_deltas_.emplace_back(std::multiset<Delta,DeltaComparator>{in_tuple->delta});
+
+				MatchType match; 
+				this->get_match_(&in_tuple->data, &match);
+				if(!this->match_to_tuple_.contains(Key<MatchType>(match))){
+					this->match_to_tuple_[Key<MatchType>(match)] = std::list< std::array<char, sizeof(InType)> >{};
+				}
+				this->match_to_tuple_[Key<MatchType>(match)].push_back(Key<InType>(in_tuple->data));
+
 			}
 			else{
-				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_tuple->data)];
+				index match_index = this->tuple_to_index_left[Key<InType>(in_tuple->data)];
 				this->index_to_deltas_left_[match_index].insert(in_tuple->delta);
 			}
 		}
@@ -937,9 +962,9 @@ class AggregateByNode: public Node{
 			// iterate by match type
 			for(auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++){
 				MatchType match = it->first;
-				OutType accum;
+				OutType accum = this->initial_value_;
 
-				for(auto data_it = it->second.begin(); data_it != it>second,end(); data_it++){
+				for(auto data_it = it->second.begin(); data_it != it->second.end(); data_it++){
 					int index = this->index_to_deltas_[*data_it];
 					aggr_func_(&accum, reinterpret_cast<InType*>(*data_it) ,this->index_to_deltas_[index].rbegin()->count);
 				}
@@ -948,7 +973,7 @@ class AggregateByNode: public Node{
 				char *out_data;
 				this->out_queue_->ReserveNext(&out_data);
 				Tuple<OutType> del_tuple = (Tuple<OutType> *)(out_data);
-				del_tuple->delta =  = {this->previous_ts, -1}
+				del_tuple->delta = {this->previous_ts, -1};
 				std::memcpy(&del_tuple->data, accum, sizeof(OutType));
 			}
 
@@ -959,9 +984,9 @@ class AggregateByNode: public Node{
 			// iterate by match type this time we will insert, after compaction prev index should be lst value and we want to insert it
 			for(auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++){
 				MatchType match = it->first;
-				OutType accum;
+				OutType accum = this->initial_value_;
 
-				for(auto data_it = it->second.begin(); data_it != it>second,end(); data_it++){
+				for(auto data_it = it->second.begin(); data_it != it->second.end(); data_it++){
 					int index = this->index_to_deltas_[*data_it];
 					aggr_func_(&accum, reinterpret_cast<InType*>(*data_it) ,this->index_to_deltas_[index].rbegin()->count);
 				}
@@ -970,8 +995,8 @@ class AggregateByNode: public Node{
 				char *out_data;
 				this->out_queue_->ReserveNext(&out_data);
 				Tuple<OutType> ins_tuple = (Tuple<OutType> *)(out_data);
-				ins_tuple->delta =  = {this->previous_ts, 1}
-				std::memcpy(&inst->data, accum, sizeof(OutType));
+				ins_tuple->delta  = {this->previous_ts, 1};
+				std::memcpy(&ins_tuple->data, accum, sizeof(OutType));
 			}
 
 
@@ -984,7 +1009,7 @@ class AggregateByNode: public Node{
 			this-previous_ts = this->ts_;
 			this->ts_ = ts;
 			this->compact_ = true;
-			this->in_node_->UpdateTimestamp();
+			this->in_node_->UpdateTimestamp(ts);
 		}
 	
 	}
@@ -1013,17 +1038,15 @@ private:
 
 	Queue *out_queue_;
 
-    std::unordered_map<std::array<char ,sizeof(LeftType)>, index, KeyHash<LeftType>> tuple_to_index;
+    std::unordered_map<std::array<char ,sizeof(InType)>, index, KeyHash<InType>> tuple_to_index;
 	std::vector< std::multiset<Delta,DeltaComparator>>  index_to_deltas_;
     std::unordered_map<std::array<char, sizeof(MatchType)>, std::list< std::array<char,  sizeof(InType) > > ,KeyHash<MatchType> > match_to_tuple_;
 
- 	std::function<void(InType *, MatchType*)>get_match_;
- 	std::function<OutType(OutType, InType, int)> aggr_func_;
+ 	std::function<void(InType*, MatchType*)>get_match_;
+ 	std::function<void(OutType*, InType*, int)> aggr_fun_;
 	OutType initial_value_;
 	
 	std::mutex node_mutex;
-
-
 
 };
 

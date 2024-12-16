@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 
+#include "Tuple.h"
+
 namespace AliceDB {
 
 /** @brief abstract source producer, producer will provide buffered new input

@@ -97,12 +97,37 @@ class Graph {
   }
 
   template <typename Type>
+  Node *Distinct(Node *in_node){
+    Node *distinct = new DistinctNode<Type>(in_node);
+    this->all_nodes_.insert(distinct);
+    this->make_edge(in_node, distinct);
+    return distinct;
+  }
+
+  template <typename Type>
   Node *Union(Node *in_node_left, Node *in_node_right) {
-    Node *_union = new UnionNode<Type>(in_node_left, in_node_right);
-    this->all_nodes_.insert(_union);
-    this->make_edge(in_node_left, _union);
-    this->make_edge(in_node_right, _union);
-    return _union;
+    Node *plus = new PlusNode<Type>(in_node_left, in_node_right, false );
+    Node *distinct = new DistinctNode<Type>(plus);
+    this->all_nodes_.insert(plus);
+    this->all_nodes_.insert(distinct);
+
+    this->make_edge(in_node_left, plus);
+    this->make_edge(in_node_right, plus);
+    this->make_edge(plus, distinct);
+    return distinct;
+  }
+
+  template <typename Type>
+  Node *Except(Node *in_node_left, Node *in_node_right) {
+    Node *plus = new PlusNode<Type>(in_node_left, in_node_right, true);
+    Node *distinct = new DistinctNode<Type>(plus);
+    this->all_nodes_.insert(plus);
+    this->all_nodes_.insert(distinct);
+
+    this->make_edge(in_node_left, plus);
+    this->make_edge(in_node_right, plus);
+    this->make_edge(plus, distinct);
+    return distinct;
   }
 
   template <typename Type>
@@ -112,15 +137,6 @@ class Graph {
     this->make_edge(in_node_left, intersect);
     this->make_edge(in_node_right, intersect);
     return intersect;
-  }
-
-  template <typename Type>
-  Node *Except(Node *in_node_left, Node *in_node_right) {
-    Node *except = new ExceptNode<Type>(in_node_left, in_node_right);
-    this->all_nodes_.insert(except);
-    this->make_edge(in_node_left, except);
-    this->make_edge(in_node_right, except);
-    return except;
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename OutType>
@@ -148,6 +164,16 @@ class Graph {
     this->make_edge(in_node_right, join);
     return join;
   }
+
+template <typename InType, typename MatchType, typename OutType>
+  Node *AggregateBy(Node *in_node, std::function<void(OutType *, InType *, int)> aggr_fun, std::function<void(InType *, MatchType *)> get_match){
+             
+    Node *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match); 
+    this->all_nodes_.insert(aggr);
+    this->make_edge(in_node, aggr);
+    return aggr;
+  }
+
 
 private:
   void topo_sort(std::set<Node *> graph) {

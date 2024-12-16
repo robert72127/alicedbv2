@@ -126,19 +126,19 @@ TEST(SIMPLESTATE_TEST, single_version_test){
 
     AliceDB::Node *source_1 = new AliceDB::SourceNode<Person>(prod_1, 5);
     AliceDB::Node *source_2 = new AliceDB::SourceNode<Person>(prod_2, 5);
-    AliceDB::Node *unn = new AliceDB::ExceptNode<Person>(source_1,source_2);    
+    AliceDB::Node *inter = new AliceDB::IntersectNode<Person>(source_1,source_2);    
     
     AliceDB::Queue *source_1_queue = source_1->Output();
     AliceDB::Queue *source_2_queue = source_2->Output();
-    AliceDB::Queue *unn_queue = unn->Output();
+    AliceDB::Queue *inter_queue = inter->Output();
     
-    AliceDB::Node *sink = new AliceDB::SinkNode<Person>(unn);
+    AliceDB::Node *sink = new AliceDB::SinkNode<Person>(inter);
 
 
     for(int i = 0; i < 1000; i++){
         source_1->Compute();
         source_2->Compute();
-        unn->Compute();
+        inter->Compute();
         sink->Compute();
     }
 
@@ -151,7 +151,7 @@ TEST(SIMPLESTATE_TEST, single_version_test){
     const char *data;
     while(source_1_queue->GetNext(&data)){count++;}
     while(source_2_queue->GetNext(&data)){count++;}
-    while(unn_queue->GetNext(&data)){count++;}
+    while(inter_queue->GetNext(&data)){count++;}
     ASSERT_EQ(count, 0);
 
 

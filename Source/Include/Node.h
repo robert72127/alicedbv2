@@ -468,7 +468,7 @@ public:
 	frontier_ts_{in_node->GetFrontierTs()}
 	{
 		this->ts_ = 0;
-		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
 	}
 
 	Queue *Output() {return this->out_queue_;}
@@ -518,7 +518,7 @@ public:
 				// now we can get current oldest delta ie after compaction:
 				Delta cur_delta =  this->index_to_deltas_[it->second].rbegin();
 				bool previous_positive = oldest_deltas_[it->second].count > 0;
-				bool current_positive = cur_delta.count > 0
+				bool current_positive = cur_delta.count > 0;
 				/*
 					Now we can deduce what to emit based on this index value from oldest_delta, 
 					negative delta -> previouse state was 0
@@ -560,7 +560,6 @@ public:
 					}
 				}
 			}
-
 		}
 	};
 
@@ -598,7 +597,7 @@ private:
 
     // we can treat whole tuple as a key, this will return it's index  
 	// we will later use some persistent storage for that mapping, maybe rocksdb or something
-    std::unordered_map<std::array<char ,sizeof(LeftType)>, index, KeyHash<LeftType>> tuple_to_index_;
+    std::unordered_map<std::array<char ,sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
     // from index we can get multiset of changes to the input, later
 	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
     std::vector< std::multiset<Delta,DeltaComparator>>  index_to_deltas_;
@@ -608,6 +607,87 @@ private:
 /**
  * @brief this will implement all but Compute functions for Stateful binary nodes
  */
+
+// stateless binary operator, combines data from both in queues and writes them to out_queue
+/*
+	Union is PlusNode -> DistinctNode
+	Except is plus with NegateLeft -> DistinctNode
+*/
+template <typename Type>
+class PlusNode: public Node
+{
+public:
+	// we can make it subtractor by setting neg left to true, then left deltas are reversed
+	PlusNode(Node *in_node_left, Node *in_node_right, bool negate_left): negate_left_(negate_left),
+		in_node_left_{in_node_left}, in_node_right_{in_node_right}, 
+		in_queue_left_{in_node_left->Output()}, in_queue_right_{in_node_right->Output()},
+		frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}
+	{
+		this->ts_ = 0;
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+	}
+
+	Queue *Output() {return this->out_queue_;}
+
+	std::vector<Node*> Inputs() {return {this->in_node_left_, this->in_node_right_};}
+	
+	timestamp GetFrontierTs() const{return this->frontier_ts_;}
+
+	void Compute(){
+
+		// process left input
+		const char *in_data;
+		char *out_data;
+		while (in_queue_left_->GetNext(&in_data)) {
+			this->out_queue_->ReserveNext(&out_data);
+			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
+			Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+
+			out_tuple->delta.ts = in_tuple->delta.ts;
+			out_tuple->delta.count = in_tuple->delta.count;
+			std::memcpy(&out_tuple->data, &in_tuple->data, sizeof(Type));
+		}
+		in_data = nullptr;
+		out_data = nullptr;
+		this->in_queue_left_->Clean();
+
+
+		// process right input
+		while (in_queue_right_->GetNext(&in_data)) {
+			this->out_queue_->ReserveNext(&out_data);
+			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
+			Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+			out_tuple->delta.ts = in_tuple->delta.ts;
+			out_tuple->delta.count = (this->negate_left_)? -in_tuple->delta.count : in_tuple->delta.count;
+			std::memcpy(&out_tuple->data, &in_tuple->data, sizeof(Type));
+		}
+
+		this->in_queue_right_->Clean();
+	}
+
+	void UpdateTimestamp(timestamp ts) {
+		if(this->ts_ + this->frontier_ts_  < ts){
+			this->ts_ = ts;
+			this->in_node_left_->UpdateTimestamp(ts);
+			this->in_node_right_->UpdateTimestamp(ts);
+		}
+	}
+
+private:
+	timestamp ts_;
+	
+	timestamp frontier_ts_;
+	
+	Node *in_node_left_;
+	Node *in_node_right_;
+
+	Queue *in_queue_left_;
+	Queue *in_queue_right_;
+
+	Queue *out_queue_;
+
+	bool negate_left_;
+};
 
 template<typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public Node {
@@ -679,17 +759,12 @@ protected:
 	std::mutex node_mutex;
 };
 
-
-// this is node behind Union, Except and Intersect, there InType is equal to OutType
+// this is node behind Intersect
 /** @todo it needs better name :) */
 template <typename Type>
-class SimpleBinaryNode: public StatefulBinaryNode<Type, Type, Type> {
+class IntersectNode: public StatefulBinaryNode<Type, Type, Type> {
 public:
-	SimpleBinaryNode(Node *in_node_left, Node *in_node_right,
-		// it's just using different ways to compute delta for each different kind of node
-		std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function
-	): StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right),
-		delta_function_{delta_function}
+	IntersectNode(Node *in_node_left, Node *in_node_right): StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right)
 	{}
 
 	void Compute() {
@@ -713,7 +788,6 @@ public:
 			}
 		}
 
-
 		// compute left queue against right table
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
@@ -730,7 +804,6 @@ public:
 				}
 			}
 		}
-		
 
 		// compute right queue against left table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
@@ -747,7 +820,6 @@ public:
 				}
 			}
 		}
-
 		
 		// insert new deltas from in_queues
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
@@ -783,43 +855,19 @@ public:
 		this->in_queue_left_->Clean();
 		this->in_queue_right_->Clean();
 		
-		
 		if (this->compact_){
 			this->Compact();
 		}
 
 	}
-	// extra state beyond StatefulNode is only deltafunction
-	std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function_;
-};
 
-template <typename T>
-class UnionNode: public SimpleBinaryNode<T>{
-public:
-	UnionNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
-	{}
-	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
-		return {std::max(left_delta.ts, right_delta.ts), left_delta.count + right_delta.count};
-	}
-};
-template <typename T>
-class IntersectNode: public SimpleBinaryNode<T>{
-public:
-	IntersectNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
-	{}
-	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
+private:
+	// extra state beyond StatefulNode is only deltafunction
+	static Delta delta_function_(const Delta &left_delta, const Delta &right_delta){
 		return {std::max(left_delta.ts, right_delta.ts), left_delta.count * right_delta.count};
 	}
 };
-template <typename T>
-class ExceptNode: public SimpleBinaryNode<T>{
-public:
-	ExceptNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
-	{}
-	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
-		return {std::max(left_delta.ts, right_delta.ts), left_delta.count - right_delta.count};
-	}
-};
+
 
 template <typename InTypeLeft, typename InTypeRight, typename OutType>
 class CrossJoinNode: public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {

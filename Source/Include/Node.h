@@ -257,7 +257,7 @@ public:
 	}
 
 	// print state of table at this moment
-	void Print(timestamp ts){
+	void Print(timestamp ts, std::function<void(const char *)>print ){
 		for( auto& pair : this->tuple_to_index_){
 			auto &current_data = pair.first;
 				// iterate deltas from oldest till current
@@ -275,7 +275,8 @@ public:
 				}
 				// now print positive's
 				std::cout << "COUNT : " <<total<< " |\t ";
-				std::cout <<current_data.data()<<"  "<< current_data.size() << std::endl;
+				print(current_data.data());
+				//std::cout <<current_data.data()<<"  "<< current_data.size() << std::endl;
 		}
 	}
 
@@ -541,7 +542,7 @@ public:
 			while(this->in_queue_right_->GetNext(&in_data_right)){
 				Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 				// if left and right queues match on data put it into out_queue with new delta
-				if(std::memcmp(&in_left_tuple->data, &in_right_tuple->data, sizeof(Type))){
+				if(!std::memcmp(&in_left_tuple->data, &in_right_tuple->data, sizeof(Type))){
 					this->out_queue_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
@@ -556,27 +557,33 @@ public:
 		while (this->in_queue_left_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
-			for(auto it = this->index_to_deltas_right_[match_index].begin(); it != this->index_to_deltas_right_[match_index].end(); it++){
-				this->out_queue_->ReserveNext(&out_data);
-				Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
-				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-				std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
-				out_tuple->delta = out_delta;
+			if(this->tuple_to_index_right.contains(Key<Type>(in_left_tuple->data))){
+				index match_index = this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
+				
+				for(auto it = this->index_to_deltas_right_[match_index].begin(); it != this->index_to_deltas_right_[match_index].end(); it++){
+					this->out_queue_->ReserveNext(&out_data);
+					Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
+					out_tuple->delta = out_delta;
+				}
 			}
 		}
+		
 
 		// compute right queue against left table
 		while (this->in_queue_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 			// get all matching on data from right
-			index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
-			for(auto it = this->index_to_deltas_left_[match_index].begin(); it != this->index_to_deltas_left_[match_index].end(); it++){
-				this->out_queue_->ReserveNext(&out_data);
-				Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
-				Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-				std::memcpy(&out_tuple->data, &in_right_tuple->data, sizeof(Type));
-				out_tuple->delta = out_delta;
+			if(this->tuple_to_index_left.contains(Key<Type>(in_right_tuple->data))){
+				index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
+				for(auto it = this->index_to_deltas_left_[match_index].begin(); it != this->index_to_deltas_left_[match_index].end(); it++){
+					this->out_queue_->ReserveNext(&out_data);
+					Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					std::memcpy(&out_tuple->data, &in_right_tuple->data, sizeof(Type));
+					out_tuple->delta = out_delta;
+				}
 			}
 		}
 
@@ -603,7 +610,7 @@ public:
 				index match_index = this->next_index_right_;
 				this->next_index_right_++;
 				this->tuple_to_index_right[Key<Type>(in_right_tuple->data)] = match_index;
-				this->index_to_deltas_left_.emplace_back(std::multiset<Delta,DeltaComparator>{in_right_tuple->delta});
+				this->index_to_deltas_right_.emplace_back(std::multiset<Delta,DeltaComparator>{in_right_tuple->delta});
 			}
 			else{
 				index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
@@ -619,6 +626,7 @@ public:
 		if (this->compact_){
 			this->Compact();
 		}
+
 	}
 	// extra state beyond StatefulNode is only deltafunction
 	std::function<Delta(const Delta &left_delta, const Delta &right_delta)>delta_function_;
@@ -639,7 +647,7 @@ public:
 	IntersectNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
-		return {std::max(left_delta.ts, right_delta.ts), left_delta.count - right_delta.count};
+		return {std::max(left_delta.ts, right_delta.ts), left_delta.count * right_delta.count};
 	}
 };
 template <typename T>
@@ -648,7 +656,7 @@ public:
 	ExceptNode(Node *in_node_left, Node *in_node_right): SimpleBinaryNode<T>{in_node_left, in_node_right, delta_function}
 	{}
 	static Delta delta_function(const Delta &left_delta, const Delta &right_delta){
-		return {std::max(left_delta.ts, right_delta.ts), left_delta.count * right_delta.count};
+		return {std::max(left_delta.ts, right_delta.ts), left_delta.count - right_delta.count};
 	}
 };
 
@@ -903,7 +911,7 @@ private:
 			this->get_match_left_(left_data, &left_match);
 			MatchType right_match;
 			this->get_match_right_(right_data, &right_match);
-			return std::memcmp(&left_match, &right_match, sizeof(MatchType));
+			return !std::memcmp(&left_match, &right_match, sizeof(MatchType));
 	}
 
 	// we need those functions to calculate matchfields from tuples on left and righ
@@ -1078,4 +1086,3 @@ private:
 
 }
 #endif
-

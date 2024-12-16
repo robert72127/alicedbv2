@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 
 #include "gtest/gtest.h"
 
@@ -55,17 +56,14 @@ bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
             return true;
 }
  
-void print_people(char *data){
-    AliceDB::Tuple<Person> *p = reinterpret_cast<AliceDB::Tuple<Person>*>(data);
+void print_people(const char *data){
+    const Person *p = reinterpret_cast<const Person*>(data);
 
-    std::cout<<p->delta.ts << " " << p->delta.count << " " <<p->data.name << " " << p->data.surname << " " << p->data.age << std::endl; 
+    std::cout<<p->name << " " << p->surname << " " << p->age << std::endl; 
 } 
 
-       
-
-TEST(STATELESS_TEST, single_version_test){
-    // generate bunch of people and write this data to some file, thanks chat gpt
-    std::array<std::string, 100> surnames = {
+// generate bunch of people and write this data to some file, thanks chat gpt
+std::array<std::string, 100> surnames = {
         "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
         "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
         "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson",
@@ -76,9 +74,9 @@ TEST(STATELESS_TEST, single_version_test){
         "Peterson", "Bailey", "Reed", "Kelly", "Howard", "Ramos", "Kim", "Cox", "Ward", "Richardson",
         "Watson", "Brooks", "Chavez", "Wood", "James", "Bennett", "Gray", "Mendoza", "Ruiz", "Hughes",
         "Price", "Alvarez", "Castillo", "Sanders", "Patel", "Myers", "Long", "Ross", "Foster", "Jimenez"
-    };
+};
 
-    std::array<std::string, 100> names = {
+std::array<std::string, 100> names = {
         "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda", "William", "Elizabeth",
         "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica", "Thomas", "Sarah", "Charles", "Karen",
         "Christopher", "Nancy", "Daniel", "Lisa", "Matthew", "Betty", "Anthony", "Margaret", "Mark", "Sandra",
@@ -89,76 +87,74 @@ TEST(STATELESS_TEST, single_version_test){
         "Stephen", "Anna", "Larry", "Brenda", "Justin", "Pamela", "Scott", "Emma", "Brandon", "Nicole",
         "Frank", "Samantha", "Benjamin", "Katherine", "Gregory", "Christine", "Samuel", "Debra", "Raymond", "Rachel",
         "Patrick", "Catherine", "Alexander", "Carolyn", "Jack", "Janet", "Dennis", "Ruth", "Jerry", "Maria"
-    };
+};
 
 
-     std::array<int, 100> randomNumbers;
+
+TEST(SIMPLESTATE_TEST, single_version_test){
 
     // Seed the random number generator
     std::srand(std::time(nullptr));
 
-    // Fill the array with random numbers from 0 to 100
-   // for (auto& number : randomNumbers) {
-   //     number = std::rand() % 101; // Random number between 0 and 100
-   // }
-
-
     // cool we can create  100 00 00 unique people
     // create file from it
-    std::string file_name = "./people.txt";
+    std::string file_name_1 = "./people1.txt";
+    std::string file_name_2 = "./people2.txt";
 
-    std::ofstream file_writer{file_name};
-
+    std::ofstream file_writer_1{file_name_1};
+    std::ofstream file_writer_2{file_name_2};
 
     for (auto &name : names){
-            for(auto &surname: surnames ){
+        for(auto &surname: surnames ){
                 int age = std::rand() % 101; // Random number between 0 and 100
                 std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp()) + " "  + name + " " + surname + " " +  std::to_string(age);
                 //std::cout << test_str <<std::endl;
-                file_writer << person_str << std::endl;
-            }
+                file_writer_1 << person_str << std::endl;
+                file_writer_2 << person_str << std::endl;
+        }
     }
 
-    file_writer.close();
+    file_writer_1.close();
+    file_writer_2.close();
 
-    AliceDB::Producer<Person> *prod = new AliceDB::FileProducer<Person>(file_name,parseLine);
+
+    AliceDB::Producer<Person> *prod_1 = new AliceDB::FileProducer<Person>(file_name_1,parseLine);
+    AliceDB::Producer<Person> *prod_2 = new AliceDB::FileProducer<Person>(file_name_2,parseLine);
 
 
     //AliceDB::Tuple<Person> *tpl = new AliceDB::Tuple<Person>;
 
-    AliceDB::Node *source = new AliceDB::SourceNode<Person>(prod, 5);
+    AliceDB::Node *source_1 = new AliceDB::SourceNode<Person>(prod_1, 5);
+    AliceDB::Node *source_2 = new AliceDB::SourceNode<Person>(prod_2, 5);
+    AliceDB::Node *unn = new AliceDB::ExceptNode<Person>(source_1,source_2);    
     
-    AliceDB::Queue *out_queue = source->Output();
+    AliceDB::Queue *source_1_queue = source_1->Output();
+    AliceDB::Queue *source_2_queue = source_2->Output();
+    AliceDB::Queue *unn_queue = unn->Output();
     
-    AliceDB::Node *adults = new AliceDB::FilterNode<Person>(source, filter_adult);
-    
-    AliceDB::Queue *adults_queue = adults->Output();
+    AliceDB::Node *sink = new AliceDB::SinkNode<Person>(unn);
 
-    AliceDB::Node *name_getter = new AliceDB::ProjectionNode<Person, Name>(adults, proj_names);
-    
-    AliceDB::Queue *name_queue = name_getter->Output();
 
-    AliceDB::Node *sink = new AliceDB::SinkNode<Name>(name_getter);
-
-    for(int i = 0; i < 10; i++){
-        source->Compute();
-        adults->Compute();
-        name_getter->Compute();
+    for(int i = 0; i < 1000; i++){
+        source_1->Compute();
+        source_2->Compute();
+        unn->Compute();
         sink->Compute();
     }
 
-    AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(sink);
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(sink);
 
-    real_sink->Print(AliceDB::get_current_timestamp());
+    real_sink->Print(AliceDB::get_current_timestamp(), print_people);
 
     // check queue contents, make sure they are empty
-    /*
     int count = 0;
     const char *data;
-    while(name_queue->GetNext(&data)){
-        count++;
-        print_names(const_cast<char*>(data));
-    }
+    while(source_1_queue->GetNext(&data)){count++;}
+    while(source_2_queue->GetNext(&data)){count++;}
+    while(unn_queue->GetNext(&data)){count++;}
     ASSERT_EQ(count, 0);
-*/
+
+
+    // delete file
+   // std::filesystem::remove("./people.txt");
 }

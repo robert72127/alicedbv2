@@ -13,13 +13,13 @@ project(AliceDB
 
 
 add_subdirectory(Source)
-
 #add_subdirectory(third_party)
 
-#option(ENABLE_TESTING "Enable testing" ON)
 
-#if (ENABLE_TESTING)   
-#    enable_testing()
-#    find_package(GTest REQUIRED)
-#    add_subdirectory(tests)
-#endif()
+option(ENABLE_TESTING "Enable testing" ON)
+
+if (ENABLE_TESTING)   
+    enable_testing()
+    find_package(GTest REQUIRED)
+    add_subdirectory(Tests)
+endif()

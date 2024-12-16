@@ -9,7 +9,7 @@ namespace AliceDB {
 
 using index = long long;
 
-using timestamp = long long;
+using timestamp = unsigned long long;
 
 struct Delta{
 	timestamp ts;

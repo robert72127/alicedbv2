@@ -44,13 +44,26 @@ bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
             
             // Copy name to the char array field. Ensure no overflow:
             std::strncpy(p->data.name, name, sizeof(p->data.name));
+
             std::strncpy(p->data.surname, surname, sizeof(p->data.surname));
             p->data.age = age;
             p->delta.count = (insert_delete == "insert")? 1 : -1;
             p->delta.ts = ts;
             return true;
 }
-        
+
+void print_people(char *data){
+    AliceDB::Tuple<Person> *p = reinterpret_cast<AliceDB::Tuple<Person>*>(data);
+
+    std::cout<<p->delta.ts << " " << p->delta.count << " " <<p->data.name << " " << p->data.surname << " " << p->data.age << std::endl; 
+} 
+
+void print_names(char *data){
+    AliceDB::Tuple<Name> *p = reinterpret_cast<AliceDB::Tuple<Name>*>(data);
+
+    std::cout<<p->delta.ts << " " << p->delta.count << " " <<p->data.name << std::endl; 
+} 
+
 
 int main(){
     /*
@@ -119,14 +132,37 @@ int main(){
 
     AliceDB::Producer<Person> *prod = new AliceDB::FileProducer<Person>(file_name,parseLine);
 
-    AliceDB::Tuple<Person> *tpl = new AliceDB::Tuple<Person>;
+
+    //AliceDB::Tuple<Person> *tpl = new AliceDB::Tuple<Person>;
 
     AliceDB::Node *source = new AliceDB::SourceNode<Person>(prod, 5);
     
+    AliceDB::Queue *out_queue = source->Output();
+    
     AliceDB::Node *adults = new AliceDB::FilterNode<Person>(source, filter_adult);
     
-    AliceDB::Node *name_getter = new AliceDB::ProjectionNode<Person, Name>(source, proj_names);
- 
+    AliceDB::Queue *adults_queue = adults->Output();
+
+    AliceDB::Node *name_getter = new AliceDB::ProjectionNode<Person, Name>(adults, proj_names);
+    
+    AliceDB::Queue *name_queue = name_getter->Output();
+    
+    for(int i = 0; i < 5; i++){
+        source->Compute();
+        adults->Compute();
+        name_getter->Compute();
+    }
+
+    // print queue content
+    const char *data;
+    while(name_queue->GetNext(&data)){
+        print_names(const_cast<char*>(data));
+    }
+
+
+
+    
+ /*
     AliceDB::Node *sink = new AliceDB::SinkNode<Person>(name_getter);
 
     AliceDB::Node *unn = new AliceDB::UnionNode<Person>(source, source);
@@ -135,6 +171,6 @@ int main(){
     auto join_layout = [](Person *left_p, Person *right_p , Person *out ){  std::memcpy(out, left_p, sizeof(Person)); };
 
     AliceDB::Node *join = new AliceDB::JoinNode<Person, Person, Person, Person>(unn,unn,  fun_fields, fun_fields, join_layout);
-
+*/
 
 }

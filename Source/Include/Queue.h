@@ -73,7 +73,7 @@ struct Queue {
 	 * false otherwise, then also reset current_offset to allow for new iteration
 	 */
 	bool GetNext(const char **tuple) {
-		if (this->current_offset_ + this->tuple_size_ > this->queue_size_) {
+		if (this->current_offset_ + this->tuple_size_ > this->current_size_) {
 			this->current_offset_ = 0;
 			return false;
 		}

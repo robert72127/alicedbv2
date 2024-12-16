@@ -78,7 +78,7 @@ void compact_deltas(std::vector< std::multiset<Delta,DeltaComparator>>  &index_t
 				
 				// if current delta has bigger tiemstamp than one we are setting, or we iterated all deltas
 				// insert accumulated delta and break loop
-				if(it->ts > current_ts  || it == deltas.rend() ){
+				if(it == deltas.rend() || it->ts > current_ts ) {
 					deltas.insert(Delta{ts, previous_count});
 					break;
 				}
@@ -224,7 +224,7 @@ private:
 template<typename Type>
 class SinkNode: public Node{
 public:
-	SinkNode(Node *in_node): in_node_(in_node_), in_queue_{in_node->Output()},
+	SinkNode(Node *in_node): in_node_(in_node), in_queue_{in_node->Output()},
 	frontier_ts_{in_node->GetFrontierTs()} {}
 
 	void Compute() {
@@ -247,7 +247,8 @@ public:
 		
 		// get current timestamp that can be considered 
 		this->UpdateTimestamp(get_current_timestamp());
-		
+
+
 		if (this->compact_){
 			this->Compact();
 			this->update_ts_ = false;
@@ -257,15 +258,15 @@ public:
 
 	// print state of table at this moment
 	void Print(timestamp ts){
-		for( const auto& pair : this->tuple_to_index_){
-			char (&current_data)[sizeof(Type)] = pair.first;
+		for( auto& pair : this->tuple_to_index_){
+			auto &current_data = pair.first;
 				// iterate deltas from oldest till current
 				int total = 0;
 				index current_index = pair.second;
 
-    			std::multiset<Delta,bool(*)(const Delta&, const Delta&)>  &deltas = this->index_to_deltas_[current_index];
+    			std::multiset<Delta,DeltaComparator>  &deltas = this->index_to_deltas_[current_index];
 				for(auto dit = deltas.begin(); dit != deltas.end(); dit++){
-					Delta &delta = *dit;
+					const Delta &delta = *dit;
 					if(delta.ts > ts){
 						break;
 					}else{
@@ -273,9 +274,8 @@ public:
 					}
 				}
 				// now print positive's
-				for(int i =0; i < total; i++){
-					std::cout<< (Type)(current_data) << std::endl;
-				}
+				std::cout << "COUNT : " <<total<< " |\t ";
+				std::cout <<current_data.data()<<"  "<< current_data.size() << std::endl;
 		}
 	}
 
@@ -424,6 +424,7 @@ public:
 	// timestamp is not used here but might be helpful to store for propagatio
 	void UpdateTimestamp(timestamp ts) {
 		if (this->ts_ + this->frontier_ts_ <  ts) {
+			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp(ts);
 		}
 	}

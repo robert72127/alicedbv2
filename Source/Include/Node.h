@@ -444,6 +444,167 @@ private:
 	Queue *out_queue_;
 };
 
+
+// we need distinct node that will:
+// for tuples that have positive count -> produce tuple with count 1 if positive
+// for tuples that have negative count -> produce tuple with count 0 otherwise
+
+// but the catch is: what this node will emit depends fully on previouse state:
+/*
+	if previous state was 0
+		if now positive emit 1
+		if now negative don't emit
+	if previouse state was 1
+		if now positive don't emit
+		if now negative emit -1
+
+*/
+template <typename Type>
+class DistinctNode: public Node{
+public:
+	DistinctNode(Node *in_node):
+	in_queue_{in_node->Output()},
+	in_node_{in_node},
+	frontier_ts_{in_node->GetFrontierTs()}
+	{
+		this->ts_ = 0;
+		this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
+	}
+
+	Queue *Output() {return this->out_queue_;}
+
+	std::vector<Node*> Inputs() {return {this->in_node_};}
+	
+	timestamp GetFrontierTs() const{
+		return this->frontier_ts_;
+	}
+	
+	void Compute(){
+
+		// first insert all new data from queue to table
+		char *in_data_;
+		while (this->in_queue__->GetNext(&in_data_)) {
+			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
+			// if this data wasn't present insert with new index
+			if(!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))){
+				index match_index = this->next_index_;
+				this->next_index_++;
+				this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
+				this->index_to_deltas_.emplace_back(std::multiset<Delta,DeltaComparator>{in_tuple->delta});
+			}
+			else{
+				index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
+				this->index_to_deltas_[match_index].insert(in_tuple->delta);
+			}
+		}
+		
+		// then if compact_	
+		if (this->compact_){
+			 // delta_count for oldest keept verson fro this we can deduce what tuples to emit;
+    		std::vector<Delta> oldest_deltas_{this->tuple_to_index_.size()}; 
+		
+			// emit delete for oldest keept version, emit insert for previous_ts
+
+
+			// iterate by tuple to index
+			for(auto it = this->tuple_to_index_.begin(); it != this->tuple_to_index_.end(); it++){
+				oldest_deltas_[it->second] = this->index_to_deltas_[it->second].rbegin();
+			}
+
+			this->Compact();		
+			this->compact_ = false;	
+
+			for(auto it = this->tuple_to_index_.begin(); it != this->tuple_to_index_.end(); it++){
+				// now we can get current oldest delta ie after compaction:
+				Delta cur_delta =  this->index_to_deltas_[it->second].rbegin();
+				bool previous_positive = oldest_deltas_[it->second].count > 0;
+				bool current_positive = cur_delta.count > 0
+				/*
+					Now we can deduce what to emit based on this index value from oldest_delta, 
+					negative delta -> previouse state was 0
+					positive delta -> previouse state was 1
+
+					if previous state was 0
+						if now positive emit 1
+						if now negative don't emit
+					if previouse state was 1
+						if now positive don't emit
+						if now negative emit -1
+
+				*/
+				char *out_data;
+				if(previous_positive){
+					if(current_positive){
+							continue;
+					}
+					else{
+						this->out_queue_->ReserveNext(&out_data);
+						Tuple<Type> update_tpl = (Tuple<Type> *)(out_data);
+						update_tpl->delta.ts = cur_delta.ts;
+						update_tpl->delta.cnt = -1;
+						// finally copy data
+						std::memcpy(&update_tpl->data, &it->firt, sizeof(Type));
+					}
+				}
+				else{
+					if(current_positive){
+						this->out_queue_->ReserveNext(&out_data);
+						Tuple<Type> update_tpl = (Tuple<Type> *)(out_data);
+						update_tpl->delta.ts = cur_delta.ts;
+						update_tpl->delta.cnt = 1;
+						// finally copy data
+						std::memcpy(&update_tpl->data, &it->firt, sizeof(Type));
+					}
+					else{
+						continue;
+					}
+				}
+			}
+
+		}
+	};
+
+
+	void UpdateTimestamp(timestamp ts) {
+		if(this->ts_ + this->frontier_ts_  < ts){
+			this->compact_ = true;
+			this->previous_ts = this->ts_;
+			this->ts_ = ts;
+			this->in_node_->UpdateTimestamp(ts);
+		}
+	}
+
+
+private:
+	void Compact(){
+		// leave previous_ts version as oldest one
+		compact_deltas(this->index_to_deltas_, this->previous_ts);
+	}
+
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+	
+	timestamp frontier_ts_;
+	
+	Node *in_node_;
+
+	Queue *in_queue_;
+
+	Queue *out_queue_;
+
+	size_t next_index_=0;
+
+    // we can treat whole tuple as a key, this will return it's index  
+	// we will later use some persistent storage for that mapping, maybe rocksdb or something
+    std::unordered_map<std::array<char ,sizeof(LeftType)>, index, KeyHash<LeftType>> tuple_to_index_;
+    // from index we can get multiset of changes to the input, later
+	// we will use some better data structure for that, but for now multiset is nice cause it auto sorts for us
+    std::vector< std::multiset<Delta,DeltaComparator>>  index_to_deltas_;
+
+};
+
 /**
  * @brief this will implement all but Compute functions for Stateful binary nodes
  */

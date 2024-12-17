@@ -270,8 +270,6 @@ public:
       // now print positive's
       std::cout << "COUNT : " << total << " |\t ";
       print(current_data.data());
-      // std::cout <<current_data.data()<<"  "<< current_data.size() <<
-      // std::endl;
     }
   }
 

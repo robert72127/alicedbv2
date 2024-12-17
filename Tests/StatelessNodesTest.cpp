@@ -9,7 +9,6 @@
 #include "Producer.h"
 #include "Common.h"
 #include "Tuple.h"
-/*
 
 struct Person {
     char name[50];
@@ -62,6 +61,13 @@ void print_people(char *data){
     std::cout<<p->delta.ts << " " << p->delta.count << " " <<p->data.name << " " << p->data.surname << " " << p->data.age << std::endl; 
 } 
 
+void print_name(const char *data){
+    const Name *n = reinterpret_cast<const Name *>(data);
+
+    std::cout<< n->name <<  std::endl; 
+} 
+
+
 // generate bunch of people and write this data to some file, thanks chat gpt
 std::array<std::string, 100> surnames = {
         "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
@@ -89,7 +95,7 @@ std::array<std::string, 100> names = {
         "Patrick", "Catherine", "Alexander", "Carolyn", "Jack", "Janet", "Dennis", "Ruth", "Jerry", "Maria"
 };
 
-
+/*
 
 TEST(STATELESS_TEST, single_version_test){
 
@@ -142,7 +148,7 @@ TEST(STATELESS_TEST, single_version_test){
 
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(sink);
 
-    real_sink->Print(AliceDB::get_current_timestamp());
+    real_sink->Print(AliceDB::get_current_timestamp(), print_name );
 
     // check queue contents, make sure they are empty
     int count = 0;
@@ -209,7 +215,7 @@ TEST(STATELESS_TEST, test_late_data){
 
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(sink);
 
-    real_sink->Print(AliceDB::get_current_timestamp());
+    real_sink->Print(AliceDB::get_current_timestamp(), print_name);
 
     // check queue contents, make sure they are empty
     int count = 0;
@@ -269,7 +275,7 @@ TEST(STATELESS_TEST, test_insert_delete_data){
 
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(sink);
 
-    real_sink->Print(AliceDB::get_current_timestamp());
+    real_sink->Print(AliceDB::get_current_timestamp(), print_name);
 
     // check queue contents, make sure they are empty
     int count = 0;
@@ -283,3 +289,54 @@ TEST(STATELESS_TEST, test_insert_delete_data){
     std::filesystem::remove("./people.txt");
 }
 */
+TEST(STATELESS_TEST, single_version_test_on_graph){
+
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+    std::string file_name = "./people.txt";
+
+    std::ofstream file_writer{file_name};
+
+
+    for (auto &name : names){
+            for(auto &surname: surnames ){
+                int age = std::rand() % 101; // Random number between 0 and 100
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp()) + " "  + name + " " + surname + " " +  std::to_string(age);
+                //std::cout << test_str <<std::endl;
+                file_writer << person_str << std::endl;
+            }
+    }
+
+    file_writer.close();
+
+
+    AliceDB::Producer<Person> *prod = new AliceDB::FileProducer<Person>(file_name,parseLine);
+    
+    AliceDB::Graph *g = new AliceDB::Graph;
+    
+    auto *view = 
+        g->View<Name>(
+            g->Projection<Person, Name>(
+                [](Person *p, Name *out){std::memcpy(&out->name, &p->name, sizeof(p->name));},
+                g->Filter<Person>(
+                    [](const Person &p) {return p.age > 18;}, 
+                    g->Source<Person>(prod,5)
+                )
+            )
+        );
+
+    // make few iteration, to process whole data
+    g->Process(20);
+
+    // debugging
+    AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_name );
+
+
+    // delete file
+    std::filesystem::remove("./people.txt");
+}
+

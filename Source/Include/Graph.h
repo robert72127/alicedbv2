@@ -20,13 +20,15 @@ namespace AliceDB {
 // add sql layer
 
 class Graph {
+public:
   // creates graph instance, later it will also store and load from file info
   // about nodes for now we don't store persistent state
-  Graph() {}
+  // Graph() {}
 
   template <typename Type>
-  Node *Source(std::function<void(Type **out_data)> produce) {
-    Node *source_node = new SourceNode<Type>(produce);
+  Node *Source(Producer<Type> *prod, timestamp frontier_ts,
+               int duration_us = 500) {
+    Node *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
     this->all_nodes_.insert(source_node);
     this->sources_.insert(source_node);
     return source_node;
@@ -35,8 +37,8 @@ class Graph {
   /**
    * @brief creates sink node  & topological order of nodes
    */
-  template <typename InType> Node *Sink(Node *in_node) {
-    Node *sink = new SinkNode<InType>();
+  template <typename InType> Node *View(Node *in_node) {
+    Node *sink = new SinkNode<InType>(in_node);
     this->make_edge(in_node, sink);
     this->all_nodes_.insert(sink);
     this->sinks_.insert(sink);
@@ -49,7 +51,7 @@ class Graph {
       Node *current = next_to_process.top();
       next_to_process.pop();
       current_graph.emplace(current);
-      for (Node *in : current->Inputs) {
+      for (Node *in : current->Inputs()) {
         // well one node might be input to two different node, and we don't want
         // to process it two times also this will prevent infinite loop in case
         // of cycle but won't detect it
@@ -79,7 +81,7 @@ class Graph {
   }
 
   template <typename Type>
-  Node *Filter(Node *in_node, std::function<bool(const Type &)> condition) {
+  Node *Filter(std::function<bool(const Type &)> condition, Node *in_node) {
     Node *filter = new FilterNode<Type>(in_node, condition);
     this->all_nodes_.insert(filter);
     this->make_edge(in_node, filter);
@@ -87,8 +89,8 @@ class Graph {
   }
 
   template <typename InType, typename OutType>
-  Node *Projection(Node *in_node,
-                   std::function<OutType(const InType &)> projection_function) {
+  Node *
+  Projection(std::function<void(InType *, OutType *)> projection_function, Node *in_node) {
     Node *projection =
         new ProjectionNode<InType, OutType>(in_node, projection_function);
     this->all_nodes_.insert(projection);
@@ -96,8 +98,7 @@ class Graph {
     return projection;
   }
 
-  template <typename Type>
-  Node *Distinct(Node *in_node){
+  template <typename Type> Node *Distinct(Node *in_node) {
     Node *distinct = new DistinctNode<Type>(in_node);
     this->all_nodes_.insert(distinct);
     this->make_edge(in_node, distinct);
@@ -106,7 +107,7 @@ class Graph {
 
   template <typename Type>
   Node *Union(Node *in_node_left, Node *in_node_right) {
-    Node *plus = new PlusNode<Type>(in_node_left, in_node_right, false );
+    Node *plus = new PlusNode<Type>(in_node_left, in_node_right, false);
     Node *distinct = new DistinctNode<Type>(plus);
     this->all_nodes_.insert(plus);
     this->all_nodes_.insert(distinct);
@@ -140,8 +141,9 @@ class Graph {
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename OutType>
-  Node *CrossJoin(Node *in_node_left, Node *in_node_right,
-                  std::function<OutType(InTypeLeft, InTypeRight)> join_layout) {
+  Node *CrossJoin(std::function<OutType(InTypeLeft, InTypeRight)> join_layout,
+                  Node *in_node_left, Node *in_node_right
+                  ) {
     Node *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
         in_node_left, in_node_right, join_layout);
     this->all_nodes_.insert(cross_join);
@@ -152,10 +154,11 @@ class Graph {
 
   template <typename InTypeLeft, typename InTypeRight, typename MatchType,
             typename OutType>
-  Node *Join(Node *in_node_left, Node *in_node_right,
-             std::function<MatchType(InTypeLeft *)> get_match_left,
+  Node *Join(std::function<MatchType(InTypeLeft *)> get_match_left,
              std::function<MatchType(InTypeRight *)> get_match_right,
-             std::function<OutType(InTypeLeft *, InTypeRight *)> join_layout) {
+             std::function<OutType(InTypeLeft *, InTypeRight *)> join_layout,
+             Node *in_node_left, Node *in_node_right
+             ) {
     Node *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
         in_node_left, in_node_right, get_match_left, get_match_right,
         join_layout);
@@ -165,15 +168,29 @@ class Graph {
     return join;
   }
 
-template <typename InType, typename MatchType, typename OutType>
-  Node *AggregateBy(Node *in_node, std::function<void(OutType *, InType *, int)> aggr_fun, std::function<void(InType *, MatchType *)> get_match){
-             
-    Node *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match); 
+  template <typename InType, typename MatchType, typename OutType>
+  Node *AggregateBy(std::function<void(OutType *, InType *, int)> aggr_fun,
+                    std::function<void(InType *, MatchType *)> get_match, Node *in_node) {
+
+    Node *aggr = new AggregateByNode<InType, MatchType, OutType>(
+        in_node, aggr_fun, get_match);
     this->all_nodes_.insert(aggr);
     this->make_edge(in_node, aggr);
     return aggr;
   }
 
+  /*
+  loop that processes all nodes in topological order for <iters> times
+  */
+  void Process(int iters = 1) {
+    for (int i = 0; i < iters; i++) {
+      for (auto &graph : topo_graphs_) {
+        for (Node *n : graph) {
+          n->Compute();
+        }
+      }
+    }
+  }
 
 private:
   void topo_sort(std::set<Node *> graph) {
@@ -188,7 +205,7 @@ private:
         continue;
       }
 
-      std::set<Node *> current_run = {current};
+      std::set<Node *> current_run = {};
 
       // if visit return's 1 there was a cycle
       if (visit(current, visited, stack, current_run)) {
@@ -198,7 +215,7 @@ private:
 
     // save this topo_graph as list
     std::list<Node *> topo_order;
-    while (!topo_graphs_.empty()) {
+    while (!stack.empty()) {
       topo_order.push_back(stack.top());
       stack.pop();
     }
@@ -209,6 +226,8 @@ private:
     //}
 
     topo_graphs_.emplace(topo_order);
+
+
   }
   bool visit(Node *current, std::set<Node *> &visited,
              std::stack<Node *> &stack, std::set<Node *> &current_run) {
@@ -244,7 +263,7 @@ private:
   // all nodes, being marked means it allready belongs to some subgraph
   // std::unordered_map<Node*, bool> all_nodes_;
   // std::unordered_map<Node*, bool> all_nodes_;
-  std::unordered_set<Node *, bool> all_nodes_;
+  std::unordered_set<Node *> all_nodes_;
 
   // two kinds of nodes that are allowed to be part of more than one graph
   std::set<Node *> sinks_;

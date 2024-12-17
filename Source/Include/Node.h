@@ -1,4 +1,9 @@
 /** @todo 1) allow for attaching new nodes to input/outut 2) switch to
+ * 
+ * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot change after start command;
+ * 
+ * 
+ * 
  * persistent storage */
 /**
  *	actually don't allow attaching new nodes during runtime, nodes have to
@@ -930,18 +935,17 @@ public:
     // compute left queue against right table
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-      char *left_data = (char *)&in_left_tuple->data;
       // get all matching on data from right
       index match_index =
-          this->tuple_to_index_right[Key<InTypeLeft>(left_data)];
+		this->tuple_to_index_right[Key<InTypeLeft>(in_left_tuple->data)];
       for (auto &[table_data, table_idx] : this->tuple_to_index_right) {
-        for (auto it = this->index_to_deltas_right[table_idx].begin();
-             it != this->index_to_deltas_right[table_idx].end(); it++) {
+        for (auto it = this->index_to_deltas_right_[table_idx].begin();
+             it != this->index_to_deltas_right_[table_idx].end(); it++) {
           this->out_queue_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
-          this->join_layout_(&in_left_tuple->data, &table_data,
+          this->join_layout_(&in_left_tuple->data, (InTypeRight*)table_data.data(),
                              &out_tuple->data);
         }
       }
@@ -951,18 +955,17 @@ public:
     while (this->in_queue_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple =
           (Tuple<InTypeRight> *)(in_data_right);
-      char *right_data = (char *)&in_right_tuple->data;
       // get all matching on data from right
       index match_index =
-          this->tuple_to_index_left[Key<InTypeRight>(right_data)];
+          this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
       for (auto &[table_data, table_idx] : this->tuple_to_index_right) {
-        for (auto it = this->index_to_deltas_left[table_idx].begin();
-             it != this->index_to_deltas_left[table_idx].end(); it++) {
+        for (auto it = this->index_to_deltas_left_[table_idx].begin();
+             it != this->index_to_deltas_left_[table_idx].end(); it++) {
           this->out_queue_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
-          this->join_layout_(&table_data, &in_right_tuple->data,
+          this->join_layout_((InTypeLeft*)table_data.data(), &in_right_tuple->data,
                              &out_tuple->data);
         }
       }
@@ -978,11 +981,12 @@ public:
         this->next_index_left_++;
         this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] =
             match_index;
-        this->index_to_deltas_left.emplace_back({in_left_tuple->delta});
-      } else {
+        this->index_to_deltas_right_.emplace_back(
+            std::multiset<Delta, DeltaComparator>{in_left_tuple->delta});
+	  } else {
         index match_index =
             this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
-        this->index_to_deltas_left[match_index].insert(in_left_tuple->delta);
+        this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
       }
     }
 
@@ -996,11 +1000,12 @@ public:
         this->next_index_right_++;
         this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] =
             match_index;
-        this->index_to_deltas_right.emplace_back({in_right_tuple->delta});
+        this->index_to_deltas_right_.emplace_back(
+            std::multiset<Delta, DeltaComparator>{in_right_tuple->delta});
       } else {
         index match_index =
             this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
-        this->index_to_deltas_left[match_index].insert(in_right_tuple->delta);
+        this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
       }
     }
 

@@ -17,6 +17,17 @@ struct Person {
     int age;
 };
 
+struct CrossPerson {
+    char lname[50];
+    char lsurname[50];
+    int lage;
+    char rname[50];
+    char rsurname[50];
+    int rage;
+};
+
+
+
 struct Name{
     char name[50]; 
 };
@@ -159,7 +170,7 @@ TEST(SIMPLESTATE_TEST, single_version_test){
    std::filesystem::remove("./people1.txt");
 }
 */
-
+/*
 TEST(SIMPLESTATE_TEST, single_version_graph){
 
     // Seed the random number generator
@@ -175,9 +186,8 @@ TEST(SIMPLESTATE_TEST, single_version_graph){
 
     for (auto &name : names){
         for(auto &surname: surnames ){
-                //int age = std::rand() % 101; // Random number between 0 and 100
-                //std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + surname + " " +  std::to_string(age);
-                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + "Pipi" + " " +  std::to_string(24);
+                int age = std::rand() % 101; // Random number between 0 and 100
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + surname + " " +  std::to_string(age);
                 //std::cout << test_str <<std::endl;
                 file_writer_1 << person_str << std::endl;
                 file_writer_2 << person_str << std::endl;
@@ -192,14 +202,84 @@ TEST(SIMPLESTATE_TEST, single_version_graph){
     AliceDB::Producer<Person> *prod_2 = new AliceDB::FileProducer<Person>(file_name_2,parseLine);
 
     AliceDB::Graph *g = new AliceDB::Graph;
-
+    
     auto *view =
-        g->View<Person>(
+        g->View<Person>( // or except or intersect
             g->Union<Person>(
                 g->Source<Person>(prod_1, 0),
                 g->Source<Person>(prod_2,0)
             )
         );
+
+
+
+    g->Process(100);
+
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    real_sink->Print(AliceDB::get_current_timestamp(), print_people);
+
+   std::filesystem::remove("./people2.txt");
+   std::filesystem::remove("./people1.txt");
+}
+*/
+
+
+TEST(SIMPLESTATE_TEST, single_version_graph){
+
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+    std::string file_name_1 = "./people1.txt";
+    std::string file_name_2 = "./people2.txt";
+
+    std::ofstream file_writer_1{file_name_1};
+    std::ofstream file_writer_2{file_name_2};
+
+    int cnt = 0;
+    for (auto &name : names){
+        for(auto &surname: surnames ){
+                int age = std::rand() % 101; // Random number between 0 and 100
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + surname + " " +  std::to_string(age);
+                //std::cout << test_str <<std::endl;
+                file_writer_1 << person_str << std::endl;
+                file_writer_2 << person_str << std::endl;
+                cnt++;
+                if(cnt > 100){ break;}
+        }
+        if(cnt > 100){break;}
+    }
+
+    file_writer_1.close();
+    file_writer_2.close();
+
+
+    AliceDB::Producer<Person> *prod_1 = new AliceDB::FileProducer<Person>(file_name_1,parseLine);
+    AliceDB::Producer<Person> *prod_2 = new AliceDB::FileProducer<Person>(file_name_2,parseLine);
+
+    AliceDB::Graph *g = new AliceDB::Graph;
+
+    auto *view =
+        g->View<Person>(
+            g->CrossJoin<Person, Person, CrossPerson>(
+                [](Person *left, Person *right, CrossPerson *out){
+                    std::memcpy(&out->lname, &left->name, sizeof(left->name));
+                    std::memcpy(&out->rname, &right->name, sizeof(right->name));
+
+                    std::memcpy(&out->lsurname, &left->surname, sizeof(left->surname));
+                    std::memcpy(&out->rsurname, &right->surname, sizeof(left->surname));
+                    out->lage = left->age;
+                    out->rage = right->age; 
+                },
+                g->Source<Person>(prod_1, 0),
+                g->Source<Person>(prod_2,0)
+            )
+        );
+
+
 
     g->Process(100);
 

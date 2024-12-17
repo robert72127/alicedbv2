@@ -133,7 +133,7 @@ public:
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename OutType>
-  Node *CrossJoin(std::function<OutType(InTypeLeft, InTypeRight)> join_layout,
+  Node *CrossJoin(std::function<void(InTypeLeft*, InTypeRight*, OutType*)> join_layout,
                   Node *in_node_left, Node *in_node_right
                   ) {
     Node *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(

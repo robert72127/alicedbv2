@@ -932,12 +932,11 @@ public:
       }
     }
 
+
     // compute left queue against right table
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // get all matching on data from right
-      index match_index =
-		this->tuple_to_index_right[Key<InTypeLeft>(in_left_tuple->data)];
       for (auto &[table_data, table_idx] : this->tuple_to_index_right) {
         for (auto it = this->index_to_deltas_right_[table_idx].begin();
              it != this->index_to_deltas_right_[table_idx].end(); it++) {
@@ -953,12 +952,9 @@ public:
 
     // compute right queue against left table
     while (this->in_queue_right_->GetNext(&in_data_right)) {
-      Tuple<InTypeRight> *in_right_tuple =
-          (Tuple<InTypeRight> *)(in_data_right);
+      Tuple<InTypeRight> *in_right_tuple =(Tuple<InTypeRight> *)(in_data_right);
       // get all matching on data from right
-      index match_index =
-          this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
-      for (auto &[table_data, table_idx] : this->tuple_to_index_right) {
+      for (auto &[table_data, table_idx] : this->tuple_to_index_left) {
         for (auto it = this->index_to_deltas_left_[table_idx].begin();
              it != this->index_to_deltas_left_[table_idx].end(); it++) {
           this->out_queue_->ReserveNext(&out_data);
@@ -971,6 +967,7 @@ public:
       }
     }
 
+ 
     // insert new deltas from in_queues
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
@@ -981,7 +978,7 @@ public:
         this->next_index_left_++;
         this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] =
             match_index;
-        this->index_to_deltas_right_.emplace_back(
+        this->index_to_deltas_left_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_left_tuple->delta});
 	  } else {
         index match_index =
@@ -991,8 +988,7 @@ public:
     }
 
     while (this->in_queue_right_->GetNext(&in_data_right)) {
-      Tuple<InTypeRight> *in_right_tuple =
-          (Tuple<InTypeRight> *)(in_data_right);
+      Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_right.contains(
               Key<InTypeRight>(in_right_tuple->data))) {

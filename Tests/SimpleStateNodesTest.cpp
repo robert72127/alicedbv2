@@ -71,7 +71,16 @@ void print_people(const char *data){
     const Person *p = reinterpret_cast<const Person*>(data);
 
     std::cout<<p->name << " " << p->surname << " " << p->age << std::endl; 
+}
+
+void print_crosspeople(const char *data){
+    const CrossPerson *p = reinterpret_cast<const CrossPerson*>(data);
+
+    std::cout<<p->lname << " " << p->lsurname << " " << p->lage << "\t\t"; 
+    std::cout<<p->rname << " " << p->rsurname << " " << p->rage << std::endl; 
 } 
+
+ 
 
 // generate bunch of people and write this data to some file, thanks chat gpt
 std::array<std::string, 100> surnames = {
@@ -263,7 +272,7 @@ TEST(SIMPLESTATE_TEST, single_version_graph){
     AliceDB::Graph *g = new AliceDB::Graph;
 
     auto *view =
-        g->View<Person>(
+        g->View<CrossPerson>(
             g->CrossJoin<Person, Person, CrossPerson>(
                 [](Person *left, Person *right, CrossPerson *out){
                     std::memcpy(&out->lname, &left->name, sizeof(left->name));
@@ -284,9 +293,9 @@ TEST(SIMPLESTATE_TEST, single_version_graph){
     g->Process(100);
 
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+    AliceDB::SinkNode<CrossPerson> *real_sink = reinterpret_cast<AliceDB::SinkNode<CrossPerson>*>(view);
 
-    real_sink->Print(AliceDB::get_current_timestamp(), print_people);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_crosspeople);
 
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");

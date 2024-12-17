@@ -1230,6 +1230,7 @@ class AggregateByNode : public Node {
   // example i sum inserting 5 Alice's should influence it different than one
   // Alice but with min it should not, so it will be dependent on aggregate
   // function
+public:
   AggregateByNode(Node *in_node,
                   std::function<void(OutType *, InType *, int)> aggr_fun,
                   std::function<void(InType *, MatchType *)> get_match)
@@ -1244,6 +1245,8 @@ class AggregateByNode : public Node {
 
   Queue *Output() { return this->out_queue_; }
 
+  timestamp GetFrontierTs() const {return this->frontier_ts_;}
+  
   std::vector<Node *> Inputs() { return {this->in_node_}; }
 
   // output should be single tuple with updated values for different times
@@ -1265,6 +1268,8 @@ class AggregateByNode : public Node {
         this->index_to_deltas_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_tuple->delta});
 
+  
+  
         MatchType match;
         this->get_match_(&in_tuple->data, &match);
         if (!this->match_to_tuple_.contains(Key<MatchType>(match))) {
@@ -1273,37 +1278,36 @@ class AggregateByNode : public Node {
         }
         this->match_to_tuple_[Key<MatchType>(match)].push_back(
             Key<InType>(in_tuple->data));
-
       } else {
-        index match_index =
-            this->tuple_to_index_left[Key<InType>(in_tuple->data)];
-        this->index_to_deltas_left_[match_index].insert(in_tuple->delta);
+        index match_index = this->tuple_to_index[Key<InType>(in_tuple->data)];
+        this->index_to_deltas_[match_index].insert(in_tuple->delta);
       }
     }
 
     if (this->compact_) {
-      // emit delete for oldest keept version, emit insert for previous_ts
+	  // emit delete for oldest keept version, emit insert for previous_ts
 
       // iterate by match type
-      for (auto it = this->match_to_tuple_.begin();
-           it != this->match_to_tuple_.end(); it++) {
-        MatchType match = it->first;
+      for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
         OutType accum = this->initial_value_;
+		if(this->emited_.contains(it->first)){
+			for (auto data_it = it->second.begin(); data_it != it->second.end();
+				data_it++) {
+			int index = this->tuple_to_index[*data_it];
+			aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
+						this->index_to_deltas_[index].rbegin()->count);
+			}
 
-        for (auto data_it = it->second.begin(); data_it != it->second.end();
-             data_it++) {
-          int index = this->index_to_deltas_[*data_it];
-          aggr_func_(&accum, reinterpret_cast<InType *>(*data_it),
-                     this->index_to_deltas_[index].rbegin()->count);
-        }
-
-        // emit delete tuple
-        char *out_data;
-        this->out_queue_->ReserveNext(&out_data);
-        Tuple<OutType> del_tuple = (Tuple<OutType> *)(out_data);
-        del_tuple->delta = {this->previous_ts, -1};
-        std::memcpy(&del_tuple->data, accum, sizeof(OutType));
-      }
+			// emit delete tuple
+			char *out_data;
+			this->out_queue_->ReserveNext(&out_data);
+			Tuple<OutType> *del_tuple = (Tuple<OutType> *)(out_data);
+			del_tuple->delta = {this->previous_ts_, -1};
+			std::memcpy(&del_tuple->data, &accum, sizeof(OutType));
+		}else{
+			this->emited_.insert(it->first);
+		}
+	  }
 
       this->Compact();
 
@@ -1313,29 +1317,28 @@ class AggregateByNode : public Node {
       // index should be lst value and we want to insert it
       for (auto it = this->match_to_tuple_.begin();
            it != this->match_to_tuple_.end(); it++) {
-        MatchType match = it->first;
         OutType accum = this->initial_value_;
 
         for (auto data_it = it->second.begin(); data_it != it->second.end();
              data_it++) {
-          int index = this->index_to_deltas_[*data_it];
-          aggr_func_(&accum, reinterpret_cast<InType *>(*data_it),
+          int index = this->tuple_to_index[*data_it];
+          aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
                      this->index_to_deltas_[index].rbegin()->count);
         }
 
         // emit delete tuple
         char *out_data;
         this->out_queue_->ReserveNext(&out_data);
-        Tuple<OutType> ins_tuple = (Tuple<OutType> *)(out_data);
-        ins_tuple->delta = {this->previous_ts, 1};
-        std::memcpy(&ins_tuple->data, accum, sizeof(OutType));
-      }
+        Tuple<OutType> *ins_tuple = (Tuple<OutType> *)(out_data);
+        ins_tuple->delta = {this->previous_ts_, 1};      
+		std::memcpy(&ins_tuple->data, &accum, sizeof(OutType));
+	  }
     }
   }
 
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
-      this - previous_ts = this->ts_;
+      this->previous_ts_ = this->ts_;
       this->ts_ = ts;
       this->compact_ = true;
       this->in_node_->UpdateTimestamp(ts);
@@ -1347,7 +1350,7 @@ private:
   // discard old versions
   void Compact() {
     // compact all the way to previous version, we need it to to emit delete
-    compact_deltas(this->index_to_deltas_, this->previous_ts);
+    compact_deltas(this->index_to_deltas_, this->previous_ts_);
   }
 
   // timestamp will be used to track valid tuples
@@ -1357,7 +1360,7 @@ private:
 
   bool compact_ = false;
   timestamp ts_;
-  timestamp previous_ts;
+  timestamp previous_ts_;
 
   timestamp frontier_ts_;
 
@@ -1369,6 +1372,8 @@ private:
 
   std::unordered_map<std::array<char, sizeof(InType)>, index, KeyHash<InType>>
       tuple_to_index;
+  
+  
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
   std::unordered_map<std::array<char, sizeof(MatchType)>,
                      std::list<std::array<char, sizeof(InType)>>,
@@ -1379,6 +1384,10 @@ private:
   std::function<void(OutType *, InType *, int)> aggr_fun_;
   OutType initial_value_;
 
+  std::set<std::array<char, sizeof(MatchType)>> emited_;
+
+
+  
   std::mutex node_mutex;
 };
 

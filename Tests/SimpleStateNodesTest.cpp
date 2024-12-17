@@ -26,6 +26,22 @@ struct CrossPerson {
     int rage;
 };
 
+struct DoubleNamedPerson {
+    char lname[50];
+    char lsurname[50];
+    int lage;
+    char rname[50];
+    char rsurname[50];
+};
+
+struct NameCumAge {
+    char name[50];
+    int age;
+};
+
+
+
+
 
 
 struct Name{
@@ -80,6 +96,21 @@ void print_crosspeople(const char *data){
     std::cout<<p->rname << " " << p->rsurname << " " << p->rage << std::endl; 
 } 
 
+void print_doublenamed(const char *data){
+    const CrossPerson *p = reinterpret_cast<const CrossPerson*>(data);
+
+    std::cout<<p->lname << " " << p->lsurname << " " << p->lage << "\t\t"; 
+    std::cout<<p->rname << " " << p->rsurname << " " << std::endl; 
+} 
+
+void print_namecumage(const char *data){
+    const NameCumAge *p = reinterpret_cast<const NameCumAge*>(data);
+
+    std::cout<<p->name << " " << p->age << " " << std::endl; 
+} 
+
+
+
  
 
 // generate bunch of people and write this data to some file, thanks chat gpt
@@ -111,7 +142,7 @@ std::array<std::string, 100> names = {
 
 
 /*
-TEST(SIMPLESTATE_TEST, single_version_test){
+TEST(SIMPLESTATE_TEST, single_insert_manual_test){
 
     // Seed the random number generator
     std::srand(std::time(nullptr));
@@ -178,9 +209,10 @@ TEST(SIMPLESTATE_TEST, single_version_test){
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");
 }
-*/
-/*
-TEST(SIMPLESTATE_TEST, single_version_graph){
+
+
+
+TEST(SIMPLESTATE_TEST, union_graph){
 
     // Seed the random number generator
     std::srand(std::time(nullptr));
@@ -232,10 +264,10 @@ TEST(SIMPLESTATE_TEST, single_version_graph){
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");
 }
-*/
 
 
-TEST(SIMPLESTATE_TEST, single_version_graph){
+
+TEST(SIMPLESTATE_TEST, cross_join_graph){
 
     // Seed the random number generator
     std::srand(std::time(nullptr));
@@ -300,4 +332,121 @@ TEST(SIMPLESTATE_TEST, single_version_graph){
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");
 }
+
+
+TEST(SIMPLESTATE_TEST, join_on_graph){
+
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+    std::string file_name_1 = "./people1.txt";
+    std::string file_name_2 = "./people2.txt";
+
+    std::ofstream file_writer_1{file_name_1};
+    std::ofstream file_writer_2{file_name_2};
+
+    int cnt = 0;
+    for (auto &name : names){
+        for(auto &surname: surnames ){
+                int age = std::rand() % 101; // Random number between 0 and 100
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + surname + " " +  std::to_string(age);
+                //std::cout << test_str <<std::endl;
+                file_writer_1 << person_str << std::endl;
+                file_writer_2 << person_str << std::endl;
+                cnt++;
+                if(cnt > 100){ break;}
+        }
+        if(cnt > 100){break;}
+    }
+
+    file_writer_1.close();
+    file_writer_2.close();
+
+
+    AliceDB::Producer<Person> *prod_1 = new AliceDB::FileProducer<Person>(file_name_1,parseLine);
+    AliceDB::Producer<Person> *prod_2 = new AliceDB::FileProducer<Person>(file_name_2,parseLine);
+
+    AliceDB::Graph *g = new AliceDB::Graph;
+
+
+    auto *view =
+        g->View<DoubleNamedPerson>(
+            g->Join<Person, Person, int,  DoubleNamedPerson>(
+                [](Person *l, int *age)  {*age = l->age;},
+                [](Person *r, int *age)  {*age = r->age;},
+                [](Person *left, Person *right, DoubleNamedPerson *out){
+                    std::memcpy(&out->lname, &left->name, sizeof(left->name));
+                    std::memcpy(&out->rname, &right->name, sizeof(right->name));
+                    std::memcpy(&out->lsurname, &left->surname, sizeof(left->surname));
+                    std::memcpy(&out->rsurname, &right->surname, sizeof(left->surname));
+                    out->lage = left->age;
+                },
+                g->Source<Person>(prod_1, 0),
+                g->Source<Person>(prod_2,0)
+            )
+        );
+
+    g->Process(100);
+
+
+    AliceDB::SinkNode<DoubleNamedPerson> *real_sink = reinterpret_cast<AliceDB::SinkNode<DoubleNamedPerson>*>(view);
+
+    real_sink->Print(AliceDB::get_current_timestamp(), print_doublenamed);
+
+   std::filesystem::remove("./people2.txt");
+   std::filesystem::remove("./people1.txt");
+}
+*/
+
+TEST(SIMPLESTATE_TEST, join_on_graph){
+
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+    std::string file_name = "./people1.txt";
+
+    std::ofstream file_writer{file_name};
+
+    for (auto &name : names){
+        for(auto &surname: surnames ){
+                int age = std::rand() % 101; // Random number between 0 and 100
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + surname + " " +  std::to_string(age);
+                //std::cout << test_str <<std::endl;
+                file_writer << person_str << std::endl;
+        }
+    }
+
+    file_writer.close();
+
+
+    AliceDB::Producer<Person> *prod_1 = new AliceDB::FileProducer<Person>(file_name,parseLine);
+
+    AliceDB::Graph *g = new AliceDB::Graph;
+
+    auto *view = 
+        g->View<NameCumAge>(
+            g->AggregateBy<Person,char,NameCumAge>(
+               //aggregate function like sum etc
+               [](NameCumAge *n, Person *p, int start ){ std::memcpy(n->name, p->name, sizeof(n->name));  n->age += p->age;},
+                // group by function, specifies what to group on
+                [](Person *in, char *on){std::memcpy(on, &in->name, sizeof(in->name)); },
+                g->Source<Person>(prod_1, 0)
+            )
+        );
+    
+
+    g->Process(100);
+
+
+    AliceDB::SinkNode<NameCumAge> *real_sink = reinterpret_cast<AliceDB::SinkNode<NameCumAge>*>(view);
+
+    real_sink->Print(AliceDB::get_current_timestamp(), print_namecumage);
+
+   std::filesystem::remove("./people.txt");
+}
+
 

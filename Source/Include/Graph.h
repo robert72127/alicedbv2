@@ -146,9 +146,9 @@ public:
 
   template <typename InTypeLeft, typename InTypeRight, typename MatchType,
             typename OutType>
-  Node *Join(std::function<MatchType(InTypeLeft *)> get_match_left,
-             std::function<MatchType(InTypeRight *)> get_match_right,
-             std::function<OutType(InTypeLeft *, InTypeRight *)> join_layout,
+  Node *Join(std::function<void(InTypeLeft *, MatchType*)> get_match_left,
+             std::function<void(InTypeRight *, MatchType*)> get_match_right,
+             std::function<void(InTypeLeft *, InTypeRight *, OutType*)> join_layout,
              Node *in_node_left, Node *in_node_right
              ) {
     Node *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
@@ -164,8 +164,7 @@ public:
   Node *AggregateBy(std::function<void(OutType *, InType *, int)> aggr_fun,
                     std::function<void(InType *, MatchType *)> get_match, Node *in_node) {
 
-    Node *aggr = new AggregateByNode<InType, MatchType, OutType>(
-        in_node, aggr_fun, get_match);
+    Node *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match);
     this->all_nodes_.insert(aggr);
     this->make_edge(in_node, aggr);
     return aggr;

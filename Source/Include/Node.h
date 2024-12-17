@@ -126,13 +126,14 @@ public:
   SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500)
       : produce_{prod}, frontier_ts_{frontier_ts}, duration_us_{duration_us} {
     this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    this->ts_ = get_current_timestamp();
   }
 
   void Compute() {
     auto start = std::chrono::steady_clock::now();
     std::chrono::microseconds duration(this->duration_us_);
     auto end = start + duration;
-
+	int cnt = 0;
     char *prod_data;
     // produce some data with time limit set, into produce_queue
     while (std::chrono::steady_clock::now() < end) {
@@ -144,6 +145,7 @@ public:
         produce_queue_->RemoveLast();
         break;
       }
+	  cnt++;
     }
 
     // insert data from produce_queue into the table
@@ -219,7 +221,8 @@ template <typename Type> class SinkNode : public Node {
 public:
   SinkNode(Node *in_node)
       : in_node_(in_node), in_queue_{in_node->Output()},
-        frontier_ts_{in_node->GetFrontierTs()} {}
+        frontier_ts_{in_node->GetFrontierTs()} {
+    this->ts_ = get_current_timestamp();}
 
   void Compute() {
     // write in queue into out_table
@@ -322,6 +325,7 @@ public:
       : condition_{condition}, in_node_{in_node}, in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    this->ts_ = get_current_timestamp();
   }
 
   // filters node
@@ -375,6 +379,7 @@ public:
       : projection_{projection}, in_node_{in_node},
         in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
+    this->ts_ = get_current_timestamp();
   }
 
   void Compute() {
@@ -440,7 +445,8 @@ public:
   DistinctNode(Node *in_node)
       : in_queue_{in_node->Output()}, in_node_{in_node},
         frontier_ts_{in_node->GetFrontierTs()} {
-    this->ts_ = 0;
+    this->ts_ = get_current_timestamp();
+    this->previous_ts_ = 0;
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
   }
 
@@ -453,16 +459,18 @@ public:
   void Compute() {
 
     // first insert all new data from queue to table
-    char *in_data_;
-    while (this->in_queue__->GetNext(&in_data_)) {
-      Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
+    const char *in_data_;
+    while (this->in_queue_->GetNext(&in_data_)) {
+      const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
       // if this data wasn't present insert with new index
-      if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
+      
+	  if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
         index match_index = this->next_index_;
         this->next_index_++;
         this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
         this->index_to_deltas_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_tuple->delta});
+		emited_.push_back(false);
       } else {
         index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
         this->index_to_deltas_[match_index].insert(in_tuple->delta);
@@ -481,7 +489,7 @@ public:
       for (auto it = this->tuple_to_index_.begin();
            it != this->tuple_to_index_.end(); it++) {
         oldest_deltas_[it->second] =
-            this->index_to_deltas_[it->second].rbegin();
+            *(this->index_to_deltas_[it->second].rbegin());
       }
 
       this->Compact();
@@ -490,7 +498,7 @@ public:
       for (auto it = this->tuple_to_index_.begin();
            it != this->tuple_to_index_.end(); it++) {
         // now we can get current oldest delta ie after compaction:
-        Delta cur_delta = this->index_to_deltas_[it->second].rbegin();
+        Delta cur_delta = *(this->index_to_deltas_[it->second].rbegin());
         bool previous_positive = oldest_deltas_[it->second].count > 0;
         bool current_positive = cur_delta.count > 0;
         /*
@@ -507,37 +515,55 @@ public:
 
         */
         char *out_data;
-        if (previous_positive) {
-          if (current_positive) {
-            continue;
-          } else {
-            this->out_queue_->ReserveNext(&out_data);
-            Tuple<Type> update_tpl = (Tuple<Type> *)(out_data);
-            update_tpl->delta.ts = cur_delta.ts;
-            update_tpl->delta.cnt = -1;
-            // finally copy data
-            std::memcpy(&update_tpl->data, &it->firt, sizeof(Type));
-          }
-        } else {
-          if (current_positive) {
-            this->out_queue_->ReserveNext(&out_data);
-            Tuple<Type> update_tpl = (Tuple<Type> *)(out_data);
-            update_tpl->delta.ts = cur_delta.ts;
-            update_tpl->delta.cnt = 1;
-            // finally copy data
-            std::memcpy(&update_tpl->data, &it->firt, sizeof(Type));
-          } else {
-            continue;
-          }
-        }
+
+		// but if it's first iteration of this Node we need to always emit
+		if (!this->emited_[it->second]){
+			if (current_positive){
+					this->out_queue_->ReserveNext(&out_data);
+					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+					update_tpl->delta.ts = cur_delta.ts;
+					update_tpl->delta.count = 1;
+					// finally copy data
+					std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+				
+				this->emited_[it->second] = true;
+			}
+			
+		}
+		else {
+			if (previous_positive) {
+				if (current_positive) {
+					continue;
+				} else {
+					this->out_queue_->ReserveNext(&out_data);
+					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+					update_tpl->delta.ts = cur_delta.ts;
+					update_tpl->delta.count = -1;
+					// finally copy data
+					std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+				}
+			} 
+			else {
+				if (current_positive) {
+					this->out_queue_->ReserveNext(&out_data);
+					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+					update_tpl->delta.ts = cur_delta.ts;
+					update_tpl->delta.count = 1;
+					// finally copy data
+					std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+				} else {
+					continue;
+				}
+			}
+		}  
       }
     }
-  };
+  }
 
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
       this->compact_ = true;
-      this->previous_ts = this->ts_;
+      this->previous_ts_ = this->ts_;
       this->ts_ = ts;
       this->in_node_->UpdateTimestamp(ts);
     }
@@ -546,13 +572,15 @@ public:
 private:
   void Compact() {
     // leave previous_ts version as oldest one
-    compact_deltas(this->index_to_deltas_, this->previous_ts);
+    compact_deltas(this->index_to_deltas_, this->previous_ts_);
   }
 
   // timestamp will be used to track valid tuples
   // after update propagate it to input nodes
   bool compact_ = false;
   timestamp ts_;
+
+  timestamp previous_ts_ = 0;
 
   timestamp frontier_ts_;
 
@@ -573,6 +601,10 @@ private:
   // we will use some better data structure for that, but for now multiset is
   // nice cause it auto sorts for us
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
+
+  //whether tuple for given index was ever emited, this is needed for compute state machine
+  std::vector<bool> emited_;
+
 };
 
 /**
@@ -596,7 +628,7 @@ public:
         in_queue_right_{in_node_right->Output()},
         frontier_ts_{std::max(in_node_left->GetFrontierTs(),
                               in_node_right->GetFrontierTs())} {
-    this->ts_ = 0;
+    this->ts_ = get_current_timestamp();
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
   }
 
@@ -638,6 +670,7 @@ public:
     }
 
     this->in_queue_right_->Clean();
+  
   }
 
   void UpdateTimestamp(timestamp ts) {
@@ -673,7 +706,7 @@ public:
         in_queue_right_{in_node_right->Output()},
         frontier_ts_{std::max(in_node_left->GetFrontierTs(),
                               in_node_right->GetFrontierTs())} {
-    this->ts_ = 0;
+    this->ts_ = get_current_timestamp();
     this->out_queue_ =
         new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
   }
@@ -1202,7 +1235,7 @@ class AggregateByNode : public Node {
       : in_node_{in_node}, in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()}, aggr_fun_{aggr_fun},
         get_match_{get_match} {
-    this->ts_ = 0;
+    this->ts_ = get_current_timestamp();
     // there will be single tuple emited at once probably, if not it will get
     // resized so chill
     this->out_queue_ = new Queue(2, sizeof(Tuple<OutType>));

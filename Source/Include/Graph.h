@@ -108,27 +108,19 @@ public:
   template <typename Type>
   Node *Union(Node *in_node_left, Node *in_node_right) {
     Node *plus = new PlusNode<Type>(in_node_left, in_node_right, false);
-    Node *distinct = new DistinctNode<Type>(plus);
     this->all_nodes_.insert(plus);
-    this->all_nodes_.insert(distinct);
-
     this->make_edge(in_node_left, plus);
     this->make_edge(in_node_right, plus);
-    this->make_edge(plus, distinct);
-    return distinct;
+    return this->Distinct<Type>(plus);
   }
 
   template <typename Type>
   Node *Except(Node *in_node_left, Node *in_node_right) {
     Node *plus = new PlusNode<Type>(in_node_left, in_node_right, true);
-    Node *distinct = new DistinctNode<Type>(plus);
     this->all_nodes_.insert(plus);
-    this->all_nodes_.insert(distinct);
-
     this->make_edge(in_node_left, plus);
     this->make_edge(in_node_right, plus);
-    this->make_edge(plus, distinct);
-    return distinct;
+    return this->Distinct<Type>(plus);
   }
 
   template <typename Type>
@@ -137,7 +129,7 @@ public:
     this->all_nodes_.insert(intersect);
     this->make_edge(in_node_left, intersect);
     this->make_edge(in_node_right, intersect);
-    return intersect;
+    return this->Distinct<Type>(intersect);
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename OutType>

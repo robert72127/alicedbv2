@@ -90,7 +90,7 @@ std::array<std::string, 100> names = {
 };
 
 
-
+/*
 TEST(SIMPLESTATE_TEST, single_version_test){
 
     // Seed the random number generator
@@ -155,6 +155,60 @@ TEST(SIMPLESTATE_TEST, single_version_test){
     ASSERT_EQ(count, 0);
 
 
-    // delete file
-   // std::filesystem::remove("./people.txt");
+   std::filesystem::remove("./people2.txt");
+   std::filesystem::remove("./people1.txt");
 }
+*/
+
+TEST(SIMPLESTATE_TEST, single_version_graph){
+
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+    std::string file_name_1 = "./people1.txt";
+    std::string file_name_2 = "./people2.txt";
+
+    std::ofstream file_writer_1{file_name_1};
+    std::ofstream file_writer_2{file_name_2};
+
+    for (auto &name : names){
+        for(auto &surname: surnames ){
+                //int age = std::rand() % 101; // Random number between 0 and 100
+                //std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + surname + " " +  std::to_string(age);
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) + " "  + name + " " + "Pipi" + " " +  std::to_string(24);
+                //std::cout << test_str <<std::endl;
+                file_writer_1 << person_str << std::endl;
+                file_writer_2 << person_str << std::endl;
+        }
+    }
+
+    file_writer_1.close();
+    file_writer_2.close();
+
+
+    AliceDB::Producer<Person> *prod_1 = new AliceDB::FileProducer<Person>(file_name_1,parseLine);
+    AliceDB::Producer<Person> *prod_2 = new AliceDB::FileProducer<Person>(file_name_2,parseLine);
+
+    AliceDB::Graph *g = new AliceDB::Graph;
+
+    auto *view =
+        g->View<Person>(
+            g->Union<Person>(
+                g->Source<Person>(prod_1, 0),
+                g->Source<Person>(prod_2,0)
+            )
+        );
+
+    g->Process(100);
+
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    real_sink->Print(AliceDB::get_current_timestamp(), print_people);
+
+   std::filesystem::remove("./people2.txt");
+   std::filesystem::remove("./people1.txt");
+}
+

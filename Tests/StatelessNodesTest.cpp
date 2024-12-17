@@ -95,8 +95,6 @@ std::array<std::string, 100> names = {
         "Patrick", "Catherine", "Alexander", "Carolyn", "Jack", "Janet", "Dennis", "Ruth", "Jerry", "Maria"
 };
 
-/*
-
 TEST(STATELESS_TEST, single_version_test){
 
     // Seed the random number generator
@@ -288,7 +286,7 @@ TEST(STATELESS_TEST, test_insert_delete_data){
     // delete file
     std::filesystem::remove("./people.txt");
 }
-*/
+
 TEST(STATELESS_TEST, single_version_test_on_graph){
 
     // Seed the random number generator
@@ -320,7 +318,7 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     auto *view = 
         g->View<Name>(
             g->Projection<Person, Name>(
-                [](Person *p, Name *out){std::memcpy(&out->name, &p->name, sizeof(p->name));},
+                [](Person *person, Name *name){std::memcpy(&name->name, &person->name, sizeof(person->name));},
                 g->Filter<Person>(
                     [](const Person &p) {return p.age > 18;}, 
                     g->Source<Person>(prod,5)
@@ -329,7 +327,7 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
         );
 
     // make few iteration, to process whole data
-    g->Process(20);
+    g->Process(10);
 
     // debugging
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
@@ -339,4 +337,3 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     // delete file
     std::filesystem::remove("./people.txt");
 }
-

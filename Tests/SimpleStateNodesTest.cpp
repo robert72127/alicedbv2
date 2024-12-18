@@ -9,7 +9,6 @@
 #include "Producer.h"
 #include "Common.h"
 #include "Tuple.h"
-#include "NodeWrappers.h"
 
 struct Person {
     std::array<char, 50> name;
@@ -240,7 +239,7 @@ TEST(SIMPLESTATE_TEST, union_graph){
     
     auto *view =
         g->View( // or except or intersect
-            g->Union(
+            g->Intersect(
                 g->Source(prod_1, 0),
                 g->Source(prod_2,0)
             )
@@ -296,7 +295,7 @@ TEST(SIMPLESTATE_TEST, cross_join_graph){
 
     auto *view =
         g->View(
-            g->CrossJoin<Person, Person, CrossPerson>(
+            g->CrossJoin(
                 [](const Person &left, const Person &right){
                     return CrossPerson{
                         .lname=left.name,
@@ -360,12 +359,11 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
 
     AliceDB::Graph *g = new AliceDB::Graph;
 
-
     auto *view =
-        g->View<DoubleNamedPerson>(
-            g->Join<Person, Person, int,  DoubleNamedPerson>(
+        g->View(
+            g->Join(
                 [](const Person &l)  { return l.age;},
-                [](const Person &r)  {return r.age;},
+                [](const Person &r)  { return r.age;},
                 [](const Person &left, const Person &right){
                     return DoubleNamedPerson{
                         .lname = left.name,
@@ -374,11 +372,31 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
                         .rname = right.name,
                         .rsurname = right.surname,
                         };
+                    },
+                g->Source(prod_1, 0),
+                g->Source(prod_2,0)
+            )
+        );
+    /*
+    auto *view =
+        g->View<DoubleNamedPerson>(
+            g->Join<Person, Person, int,  DoubleNamedPerson>(
+                [](Person *l, int *age)  {*age = l->age;},
+                [](Person *r, int *age)  {*age = r->age;},
+                [](Person *left, Person *right, DoubleNamedPerson *out){
+                    std::memcpy(&out->lname, &left->name, sizeof(left->name));
+                    std::memcpy(&out->rname, &right->name, sizeof(right->name));
+                    std::memcpy(&out->lsurname, &left->surname, sizeof(left->surname));
+                    std::memcpy(&out->rsurname, &right->surname, sizeof(left->surname));
+                    out->lage = left->age;
                 },
                 g->Source<Person>(prod_1, 0),
                 g->Source<Person>(prod_2,0)
             )
         );
+    */
+
+
     /*
     auto *view =
         g->View(

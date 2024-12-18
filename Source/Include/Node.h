@@ -121,7 +121,10 @@ public:
 };
 
 template<typename OutType>
-class TypedNode: public Node{};
+class TypedNode: public Node{
+	public:
+	using value_type = OutType;  
+};
 
 
 /* Source node is responsible for producing data through Compute function and

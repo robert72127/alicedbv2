@@ -8,129 +8,132 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
+#include <functional>
+#include <list>
+#include <set>
+#include <type_traits> 
 
 namespace AliceDB {
-// ok now it should work with static non overlaping graphs
-
-// after it will we can add mechanism to merge graphs dynamically (allow single
-// source for multiple nodes, and also sinks to act as sources)
-
-// change storage layer
-
-// add sql layer
 
 class Graph {
 public:
-  // creates graph instance, later it will also store and load from file info
-  // about nodes for now we don't store persistent state
-  // Graph() {}
 
-  template <typename Type>
-  TypedNode<Type> *Source(Producer<Type> *prod, timestamp frontier_ts,
-               int duration_us = 500) {
-    TypedNode<Type> *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
-    this->all_nodes_.insert(static_cast<Node*>(source_node));
-    this->sources_.insert(static_cast<Node*>(source_node));
+  template <typename P>
+  auto Source(P* prod, timestamp frontier_ts, int duration_us = 500) -> TypedNode<typename P::value_type>* {
+    using Type = typename P::value_type;
+    auto* source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
+    all_nodes_.insert(static_cast<Node*>(source_node));
+    sources_.insert(static_cast<Node*>(source_node));
     return source_node;
   }
 
-  /**
-   * @brief creates sink node  & topological order of nodes
-   */
-  template <typename InType>
-  TypedNode<InType> *View(TypedNode<InType> *in_node) {
-    TypedNode<InType> *sink = new SinkNode<InType>(in_node);
-    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(sink));
-    this->all_nodes_.insert(static_cast<Node*>(sink));
-    this->sinks_.insert(static_cast<Node*>(sink));
-
-    // return sink which will already be producing resoults
+  template <typename N>
+  auto View(N* in_node) -> TypedNode<typename N::value_type>* {
+    using InType = typename N::value_type;
+    TypedNode<InType>* sink = new SinkNode<InType>(in_node);
+    make_edge(static_cast<Node*>(in_node), static_cast<Node*>(sink));
+    all_nodes_.insert(static_cast<Node*>(sink));
+    sinks_.insert(static_cast<Node*>(sink));
     return sink;
   }
 
-  template <typename Type>
-  TypedNode<Type> *Filter(std::function<bool(const Type &)> condition, TypedNode<Type> *in_node) {
-    TypedNode<Type> *filter = new FilterNode<Type>(in_node, condition);
-    this->all_nodes_.insert(static_cast<Node*>(filter));
-    this->make_edge( static_cast<Node*>(in_node), static_cast<Node*>(filter));
+  template <typename F, typename N>
+  auto Filter(F condition, N* in_node) -> TypedNode<typename N::value_type>* {
+    using Type = typename N::value_type;
+    auto* filter = new FilterNode<Type>(in_node, condition);
+    all_nodes_.insert(static_cast<Node*>(filter));
+    make_edge(static_cast<Node*>(in_node), static_cast<Node*>(filter));
     return filter;
   }
 
-  template <typename InType, typename OutType>
-  TypedNode<OutType> *
-  Projection(std::function<OutType(const InType &)> projection_function, TypedNode<InType> *in_node) {
-    TypedNode<OutType> *projection =
-        new ProjectionNode<InType, OutType>(in_node, projection_function);
-    this->all_nodes_.insert(static_cast<Node*>(projection));
-    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(projection));
+  template <typename F, typename N>
+  auto Projection(F projection_function, N* in_node) -> TypedNode<std::invoke_result_t<F, const typename N::value_type&>>* {
+    using InType = typename N::value_type;
+    using OutType = std::invoke_result_t<F, const InType&>;
+    TypedNode<OutType> *projection = new ProjectionNode<InType, OutType>(in_node, projection_function);
+    all_nodes_.insert(static_cast<Node*>(projection));
+    make_edge(static_cast<Node*>(in_node), static_cast<Node*>(projection));
     return projection;
   }
 
-  template <typename Type> 
-  TypedNode<Type> *Distinct(TypedNode<Type> *in_node) {
-    TypedNode<Type> *distinct = new DistinctNode<Type>(in_node);
-    this->all_nodes_.insert(static_cast<Node*>(distinct));
-    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(distinct));
+  template <typename N>
+  auto Distinct(N* in_node) -> TypedNode<typename N::value_type>* {
+    using Type = typename N::value_type;
+    auto* distinct = new DistinctNode<Type>(in_node);
+    all_nodes_.insert(static_cast<Node*>(distinct));
+    make_edge(static_cast<Node*>(in_node), static_cast<Node*>(distinct));
     return distinct;
   }
 
-  template <typename Type>
-  TypedNode<Type> *Union(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right) {
-    TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, false);
-    this->all_nodes_.insert(static_cast<Node*>(plus));
-    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
-    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
-    return this->Distinct<Type>(plus);
+  template <typename N, typename N2>
+  auto Union(N* in_node_left, N* in_node_right) -> TypedNode<typename N::value_type>* { 
+    using Type = typename N::value_type;
+    auto* plus = new PlusNode<Type>(in_node_left, in_node_right, false);
+    all_nodes_.insert(static_cast<Node*>(plus));
+    make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
+    make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
+    return Distinct(plus);
   }
 
-  template <typename Type>
-  TypedNode<Type> *Except(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right) {
-    TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, true);
-    this->all_nodes_.insert(static_cast<Node*>(plus));
-    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
-    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
-    return this->Distinct<Type>(plus);
+  template <typename N>
+  auto Except(N* in_node_left, N* in_node_right) -> TypedNode<typename N::value_type>* {
+    using Type = typename N::value_type;
+    TypedNode<Type>* plus = new PlusNode<Type>(in_node_left, in_node_right, true);
+    all_nodes_.insert(static_cast<Node*>(plus));
+    make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
+    make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
+    return Distinct(plus);
   }
 
-  template <typename Type>
-  TypedNode<Type> *Intersect(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right) {
-    TypedNode<Type> *intersect = new IntersectNode<Type>(in_node_left, in_node_right);
-    this->all_nodes_.insert(static_cast<Node*>(intersect));
-    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(intersect));
-    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(intersect));
-    return this->Distinct<Type>(intersect);
+  template <typename N>
+  auto Intersect(N* in_node_left, N* in_node_right) -> TypedNode<typename N::value_type>* {
+    using Type = typename N::value_type;
+    TypedNode<Type>* intersect = new IntersectNode<Type>(in_node_left, in_node_right);
+    all_nodes_.insert(static_cast<Node*>(intersect));
+    make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(intersect));
+    make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(intersect));
+    return Distinct(intersect);
   }
 
-  template <typename InTypeLeft, typename InTypeRight, typename OutType>
-  TypedNode<OutType> *CrossJoin(std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout,
-                  TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right
-                  ) {
-    TypedNode<OutType> *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
+// crossjoin deduces outtype from join_layout and input node types
+  template <typename F, typename NL, typename NR>
+  auto CrossJoin(F join_layout, NL* in_node_left, NR* in_node_right)-> TypedNode<std::invoke_result_t<F, const typename NL::value_type&, const typename NR::value_type&>>*
+  {
+    using InTypeLeft = typename NL::value_type;
+    using InTypeRight = typename NR::value_type;
+    using OutType = std::invoke_result_t<F, const InTypeLeft&, const InTypeRight&>;
+    TypedNode<OutType>* cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
         in_node_left, in_node_right, join_layout);
-    
-    this->all_nodes_.insert(static_cast<Node*>(cross_join));
-    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(cross_join));
-    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(cross_join));
+    all_nodes_.insert(static_cast<Node*>(cross_join));
+    make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(cross_join));
+    make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(cross_join));
     return cross_join;
   }
 
-  template <typename InTypeLeft, typename InTypeRight, typename MatchType,
-            typename OutType>
-  TypedNode<OutType> *Join(std::function<MatchType(const InTypeLeft &)> get_match_left,
-             std::function<MatchType(const InTypeRight &)> get_match_right,
-             std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,
-             TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right
-             ) {
-    TypedNode<OutType> *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
-        in_node_left, in_node_right, get_match_left, get_match_right,
-        join_layout);
-    
-    this->all_nodes_.insert(static_cast<Node*>(join));
-    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(join));
-    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(join));
+
+  // join deduces matchType get_match_left, get_match_right, and mutType from join_layout
+  template <typename F_left, typename F_right, typename F_join, typename NL, typename NR>
+  auto Join(F_left get_match_left, F_right get_match_right, F_join join_layout,
+            NL* in_node_left, NR* in_node_right)
+   -> TypedNode<std::invoke_result_t<F_join, const typename NL::value_type&, const typename NR::value_type&>>* 
+  {
+    using InTypeLeft = typename NL::value_type;
+    using InTypeRight = typename NR::value_type;
+    using MatchTypeLeft = std::invoke_result_t<F_left, const InTypeLeft&>;
+    using MatchTypeRight = std::invoke_result_t<F_right, const InTypeRight&>;
+    static_assert(std::is_same_v<MatchTypeLeft, MatchTypeRight>, "Left/Right match keys differ");
+    using MatchType = MatchTypeLeft;
+    using OutType = std::invoke_result_t<F_join, const InTypeLeft&, const InTypeRight&>;
+    TypedNode<OutType>* join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
+        in_node_left, in_node_right, get_match_left, get_match_right, join_layout);
+    all_nodes_.insert(static_cast<Node*>(join));
+    make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(join));
+    make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(join));
     return join;
   }
 
+
+/** @todo this guy needs some work done, maybe even different api  */
   template <typename InType, typename MatchType, typename OutType>
   TypedNode<OutType> *AggregateBy(std::function<void(OutType *, InType *, int)> aggr_fun,
                     std::function<void(InType *, MatchType *)> get_match, TypedNode<InType> *in_node) {
@@ -215,16 +218,12 @@ private:
 
   std::unordered_map<Node *, std::list<Node *>> out_edges_;
 
-  // all nodes, being marked means it allready belongs to some subgraph
-  // std::unordered_map<Node*, bool> all_nodes_;
-  // std::unordered_map<Node*, bool> all_nodes_;
   std::unordered_set<Node *> all_nodes_;
 
-  // two kinds of nodes that are allowed to be part of more than one graph
   std::set<Node *> sinks_;
   std::set<Node *> sources_;
 
-  // set of lists of nodes representing topological orders
+  // List of nodes representing topological orders
   std::list<Node *> topo_graph_;
 };
 

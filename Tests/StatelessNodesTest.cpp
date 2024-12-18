@@ -9,7 +9,6 @@
 #include "Producer.h"
 #include "Common.h"
 #include "Tuple.h"
-#include "NodeWrappers.h"
 
 struct Person {
     std::array<char,50> name;
@@ -318,10 +317,10 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     
     auto *view = 
         g->View(
-            g->Projection<Person, Name>(
+            g->Projection(
                 [](const Person &p) { return Name {.name=p.name}; },
                 g->Filter(
-                    [](const Person &p) {return p.age > 18 && p.name[0] == 'S' ;}, 
+                    [](const Person &p) -> bool {return p.age > 18 && p.name[0] == 'S' ;},
                     g->Source(prod,5)
                 )
             )

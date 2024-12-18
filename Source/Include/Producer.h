@@ -15,6 +15,8 @@ namespace AliceDB {
 
 template <typename Type> class Producer {
 public:
+  using value_type = Type;  
+  
   Producer() = default;
   virtual ~Producer() = default;
 

@@ -147,8 +147,6 @@ def run_clang_format_diff_wrapper(args, file):
     except Exception as e:
         raise UnexpectedError('{}: {}: {}'.format(file, e.__class__.__name__,
                                                   e), e)
-
-
 def run_clang_format_diff(args, file):
     try:
         with io.open(file, 'r', encoding='utf-8') as f:
@@ -156,36 +154,23 @@ def run_clang_format_diff(args, file):
     except IOError as exc:
         raise DiffError(str(exc))
     
+    # Base clang-format invocation
     if args.in_place:
         invocation = [args.clang_format_executable, '-i', file]
     else:
         invocation = [args.clang_format_executable, file]
 
-    if args.style:
+    # If a custom config file is provided, use --style=file and --assume-filename
+    if args.config_file:
+        invocation.extend(['--style', 'file', '--assume-filename', args.config_file])
+    elif args.style:
+        # If a style is provided (like LLVM, Google, etc.)
         invocation.extend(['--style', args.style])
 
     if args.dry_run:
         print(" ".join(invocation))
         return [], []
 
-    # Use of utf-8 to decode the process output.
-    #
-    # Hopefully, this is the correct thing to do.
-    #
-    # It's done due to the following assumptions (which may be incorrect):
-    # - clang-format will returns the bytes read from the files as-is,
-    #   without conversion, and it is already assumed that the files use utf-8.
-    # - if the diagnostics were internationalized, they would use utf-8:
-    #   > Adding Translations to Clang
-    #   >
-    #   > Not possible yet!
-    #   > Diagnostic strings should be written in UTF-8,
-    #   > the client can translate to the relevant code page if needed.
-    #   > Each translation completely replaces the format string
-    #   > for the diagnostic.
-    #   > -- http://clang.llvm.org/docs/InternalsManual.html#internals-diag-translation
-    #
-    # It's not pretty, due to Python 2 & 3 compatibility.
     encoding_py3 = {}
     if sys.version_info[0] >= 3:
         encoding_py3['encoding'] = 'utf-8'
@@ -206,12 +191,10 @@ def run_clang_format_diff(args, file):
     proc_stdout = proc.stdout
     proc_stderr = proc.stderr
     if sys.version_info[0] < 3:
-        # make the pipes compatible with Python 3,
-        # reading lines should output unicode
         encoding = 'utf-8'
         proc_stdout = codecs.getreader(encoding)(proc_stdout)
         proc_stderr = codecs.getreader(encoding)(proc_stderr)
-    # hopefully the stderr pipe won't get full and block the process
+
     outs = list(proc_stdout.readlines())
     errs = list(proc_stderr.readlines())
     proc.wait()
@@ -222,8 +205,10 @@ def run_clang_format_diff(args, file):
             ),
             errs,
         )
+
     if args.in_place:
         return [], errs
+
     return make_diff(file, original, outs), errs
 
 
@@ -286,49 +271,44 @@ def main():
             DEFAULT_EXTENSIONS),
         default=DEFAULT_EXTENSIONS)
     parser.add_argument(
-        '-r',
-        '--recursive',
+        '-r', '--recursive',
         action='store_true',
         help='run recursively over directories')
     parser.add_argument(
-        '-d',
-        '--dry-run',
+        '-d', '--dry-run',
         action='store_true',
         help='just print the list of files')
     parser.add_argument(
-        '-i',
-        '--in-place',
+        '-i', '--in-place',
         action='store_true',
         help='format file instead of printing differences')
     parser.add_argument('files', metavar='file', nargs='+')
     parser.add_argument(
-        '-q',
-        '--quiet',
+        '-q', '--quiet',
         action='store_true',
         help="disable output, useful for the exit code")
     parser.add_argument(
-        '-j',
-        metavar='N',
-        type=int,
-        default=0,
-        help='run N clang-format jobs in parallel'
-        ' (default number of cpus + 1)')
+        '-j', metavar='N', type=int, default=0,
+        help='run N clang-format jobs in parallel (default number of cpus + 1)')
     parser.add_argument(
         '--color',
         default='auto',
         choices=['auto', 'always', 'never'],
         help='show colored diff (default: auto)')
     parser.add_argument(
-        '-e',
-        '--exclude',
+        '-e', '--exclude',
         metavar='PATTERN',
         action='append',
         default=[],
-        help='exclude paths matching the given glob-like pattern(s)'
-        ' from recursive search')
+        help='exclude paths matching the given glob-like pattern(s) '
+             'from recursive search')
     parser.add_argument(
         '--style',
-        help='formatting style to apply (LLVM, Google, Chromium, Mozilla, WebKit)')
+        help='formatting style to apply (e.g. LLVM, Google, Chromium, Mozilla, WebKit)')
+    parser.add_argument(
+        '--config-file',
+        help='Path to a custom .clang-format file or YAML config. '
+             'Implies --style=file and uses --assume-filename for this file.')
 
     args = parser.parse_args()
 

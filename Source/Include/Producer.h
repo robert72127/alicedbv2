@@ -13,10 +13,11 @@ namespace AliceDB {
  * file
  */
 
-template <typename Type> class Producer {
-public:
-  using value_type = Type;  
-  
+template <typename Type>
+class Producer {
+ public:
+  using value_type = Type;
+
   Producer() = default;
   virtual ~Producer() = default;
 
@@ -29,8 +30,9 @@ public:
 
 // assume format:
 // insert|delete ts struct fields
-template <typename Type> class FileProducer : public Producer<Type> {
-public:
+template <typename Type>
+class FileProducer : public Producer<Type> {
+ public:
   // produce's data from strings in file
   FileProducer(const std::string &filename,
                std::function<bool(std::string, Tuple<Type> *)> produce)
@@ -54,7 +56,7 @@ public:
 
     std::string line;
     if (!std::getline(file_stream_, line)) {
-      return false; // no more data
+      return false;  // no more data
     }
 
     ++current_line_;
@@ -67,7 +69,7 @@ public:
     return true;
   }
 
-private:
+ private:
   /**
    * @brief Parse a line into the given Type.
    * Since Type is trivial, you can use either:
@@ -81,6 +83,6 @@ private:
   unsigned long current_line_;
 };
 
-} // namespace AliceDB
+}  // namespace AliceDB
 
 #endif

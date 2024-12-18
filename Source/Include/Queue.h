@@ -1,17 +1,16 @@
 #ifndef ALICEDBQUEUE
 #define ALICEDBQUEUE
 
-#include "Common.h"
-#include "Tuple.h"
-
 #include <cstdlib>
 #include <cstring>
 #include <new>
 
+#include "Common.h"
+#include "Tuple.h"
+
 namespace AliceDB {
 
 struct Queue {
-
   /**
    * @brief create queue with given size of queue_size * tuple_size where
    * iterator jumps by tuple_size
@@ -19,8 +18,11 @@ struct Queue {
    * purpouse, for easier chaining using abstract base class
    */
   Queue(size_t queue_size, size_t tuple_size)
-      : tuple_size_{tuple_size}, queue_size_{queue_size}, current_size_{0},
-        current_offset_{0}, storage_{new char[queue_size * tuple_size]} {}
+      : tuple_size_{tuple_size},
+        queue_size_{queue_size},
+        current_size_{0},
+        current_offset_{0},
+        storage_{new char[queue_size * tuple_size]} {}
 
   /**
    * @brief deallocate queue memory
@@ -80,9 +82,7 @@ struct Queue {
   }
 
   // get index'th tuple
-  char *Get(index index) {
-    return (this->storage_ + index * this->tuple_size_);
-  }
+  char *Get(index index) { return (this->storage_ + index * this->tuple_size_); }
 
   void RemoveLast() { current_size_ -= tuple_size_; }
 
@@ -94,7 +94,7 @@ struct Queue {
   // used for GetNext
   size_t current_offset_;
 
-private:
+ private:
   bool Resize(size_t new_size) {
     if (new_size <= this->queue_size_) {
       // No point in resizing to something smaller or equal
@@ -119,6 +119,6 @@ private:
   }
 };
 
-} // namespace AliceDB
+}  // namespace AliceDB
 
 #endif

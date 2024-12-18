@@ -1,18 +1,19 @@
 #ifndef ALICEDBTUPLE
 #define ALICEDBTUPLE
 
-#include "Common.h"
-
 #include <cstddef>
+
+#include "Common.h"
 
 namespace AliceDB {
 
 // this will be used by queue to transfer data
-template <typename Type> struct Tuple {
+template <typename Type>
+struct Tuple {
   Delta delta;
   Type data;
 };
 
-} // namespace AliceDB
+}  // namespace AliceDB
 
 #endif

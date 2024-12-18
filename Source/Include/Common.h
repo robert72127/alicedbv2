@@ -19,7 +19,7 @@ struct Delta {
 // for automatically sorting by delta
 struct DeltaComparator {
   bool operator()(const Delta &a, const Delta &b) const {
-    return a.ts < b.ts; // Sort based on the timestamp
+    return a.ts < b.ts;  // Sort based on the timestamp
   }
 };
 
@@ -36,11 +36,10 @@ concept Arithmetic = std::is_arithmetic_v<T>;
 
 timestamp get_current_timestamp() {
   auto now = std::chrono::system_clock::now();
-  auto duration =
-      std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+  auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
   return duration.count();
 }
 
-} // namespace AliceDB
+}  // namespace AliceDB
 
 #endif

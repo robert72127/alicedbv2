@@ -1,9 +1,10 @@
 /** @todo 1) allow for attaching new nodes to input/outut 2) switch to
- * 
- * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot change after start command;
- * 
- * 
- * 
+ *
+ * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
+ * change after start command;
+ *
+ *
+ *
  * persistent storage */
 /**
  *	actually don't allow attaching new nodes during runtime, nodes have to
@@ -36,10 +37,6 @@
 #ifndef ALICEDBNODE
 #define ALICEDBNODE
 
-#include "Common.h"
-#include "Producer.h"
-#include "Queue.h"
-
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -50,17 +47,22 @@
 #include <set>
 #include <type_traits>
 
-template <typename Type> std::array<char, sizeof(Type)> Key(const Type &type) {
+#include "Common.h"
+#include "Producer.h"
+#include "Queue.h"
+
+template <typename Type>
+std::array<char, sizeof(Type)> Key(const Type &type) {
   std::array<char, sizeof(Type)> key;
   std::memcpy(key.data(), &type, sizeof(Type));
   return key;
 }
-template <typename Type> struct KeyHash {
+template <typename Type>
+struct KeyHash {
   std::size_t operator()(const std::array<char, sizeof(Type)> &key) const {
     // You can use any suitable hash algorithm. Here, we'll use std::hash with
     // std::string_view
-    return std::hash<std::string_view>()(
-        std::string_view(key.data(), key.size()));
+    return std::hash<std::string_view>()(std::string_view(key.data(), key.size()));
   }
 };
 
@@ -70,9 +72,8 @@ namespace AliceDB {
 
 // generic compact deltas work's for almost any kind of node (doesn't work for
 // aggregations)
-void compact_deltas(
-    std::vector<std::multiset<Delta, DeltaComparator>> &index_to_deltas,
-    timestamp current_ts) {
+void compact_deltas(std::vector<std::multiset<Delta, DeltaComparator>> &index_to_deltas,
+                    timestamp current_ts) {
   for (int index = 0; index < index_to_deltas.size(); index++) {
     auto &deltas = index_to_deltas[index];
     int previous_count = 0;
@@ -100,8 +101,7 @@ void compact_deltas(
 }
 
 class Node {
-
-public:
+ public:
   virtual ~Node(){};
 
   virtual void Compute() = 0;
@@ -117,22 +117,21 @@ public:
    * @brief returns Queue corresponding to output from this Tuple
    */
   virtual Queue *Output() = 0;
-
 };
 
-template<typename OutType>
-class TypedNode: public Node{
-	public:
-	using value_type = OutType;  
+template <typename OutType>
+class TypedNode : public Node {
+ public:
+  using value_type = OutType;
 };
-
 
 /* Source node is responsible for producing data through Compute function and
  * then writing output to both out_queue, and persistent table creator of this
  * node needs to specify how long delayed data might arrive
  */
-template <typename Type> class SourceNode : public TypedNode<Type> {
-public:
+template <typename Type>
+class SourceNode : public TypedNode<Type> {
+ public:
   SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500)
       : produce_{prod}, frontier_ts_{frontier_ts}, duration_us_{duration_us} {
     this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
@@ -143,7 +142,7 @@ public:
     auto start = std::chrono::steady_clock::now();
     std::chrono::microseconds duration(this->duration_us_);
     auto end = start + duration;
-	int cnt = 0;
+    int cnt = 0;
     char *prod_data;
     // produce some data with time limit set, into produce_queue
     while (std::chrono::steady_clock::now() < end) {
@@ -155,7 +154,7 @@ public:
         produce_queue_->RemoveLast();
         break;
       }
-	  cnt++;
+      cnt++;
     }
 
     // insert data from produce_queue into the table
@@ -183,7 +182,6 @@ public:
 
   Queue *Output() { return this->produce_queue_; }
 
-
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
       this->ts_ = ts;
@@ -194,7 +192,7 @@ public:
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
-private:
+ private:
   void Compact() { compact_deltas(this->index_to_deltas_, this->ts_); }
 
   int duration_us_;
@@ -218,19 +216,21 @@ private:
   // we can treat whole tuple as a key, this will return it's index
   // we will later use some persistent storage for that mapping, maybe rocksdb
   // or something
-  std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>>
-      tuple_to_index_;
+  std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
   // from index we can get list of changes to the input, later
   // we will use some better data structure for that
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
 };
 
-template <typename Type> class SinkNode : public TypedNode<Type> {
-public:
+template <typename Type>
+class SinkNode : public TypedNode<Type> {
+ public:
   SinkNode(TypedNode<Type> *in_node)
-      : in_node_(in_node), in_queue_{in_node->Output()},
+      : in_node_(in_node),
+        in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
-    this->ts_ = get_current_timestamp();}
+    this->ts_ = get_current_timestamp();
+  }
 
   void Compute() {
     // write in queue into out_table
@@ -268,8 +268,7 @@ public:
       int total = 0;
       index current_index = pair.second;
 
-      std::multiset<Delta, DeltaComparator> &deltas =
-          this->index_to_deltas_[current_index];
+      std::multiset<Delta, DeltaComparator> &deltas = this->index_to_deltas_[current_index];
       for (auto dit = deltas.begin(); dit != deltas.end(); dit++) {
         const Delta &delta = *dit;
         if (delta.ts > ts) {
@@ -286,7 +285,6 @@ public:
 
   Queue *Output() { return nullptr; }
 
-
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
       this->update_ts_ = true;
@@ -297,7 +295,7 @@ public:
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
-private:
+ private:
   void Compact() { compact_deltas(this->index_to_deltas_, this->ts_); }
 
   size_t next_index_ = 0;
@@ -318,17 +316,19 @@ private:
   // we will later use some persistent storage for that mapping, maybe rocksdb
   // or something
 
-  std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>>
-      tuple_to_index_;
+  std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
   // from index we can get list of changes to the input, later
   // we will use some better data structure for that
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
 };
 
-template <typename Type> class FilterNode : public TypedNode<Type> {
-public:
+template <typename Type>
+class FilterNode : public TypedNode<Type> {
+ public:
   FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition)
-      : condition_{condition}, in_node_{in_node}, in_queue_{in_node->Output()},
+      : condition_{condition},
+        in_node_{in_node},
+        in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
     this->ts_ = get_current_timestamp();
@@ -350,7 +350,6 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
   // timestamp is not used here but will be used for global state for
@@ -362,7 +361,7 @@ public:
     }
   }
 
-private:
+ private:
   std::function<bool(const Type &)> condition_;
 
   // acquired from in node, this will be passed to output node
@@ -378,11 +377,12 @@ private:
 // projection can be represented by single node
 template <typename InType, typename OutType>
 class ProjectionNode : public TypedNode<OutType> {
-public:
-  ProjectionNode(TypedNode<InType> *in_node,
-                 std::function<OutType(const InType &)> projection)
-      : projection_{projection}, in_node_{in_node},
-        in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} {
+ public:
+  ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection)
+      : projection_{projection},
+        in_node_{in_node},
+        in_queue_{in_node->Output()},
+        frontier_ts_{in_node->GetFrontierTs()} {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
     this->ts_ = get_current_timestamp();
   }
@@ -397,14 +397,13 @@ public:
 
       out_tuple->delta.ts = in_tuple->delta.ts;
       out_tuple->delta.count = in_tuple->delta.count;
-      out_tuple->data =  this->projection_(in_tuple->data);
+      out_tuple->data = this->projection_(in_tuple->data);
     }
 
     this->in_queue_->Clean();
   }
 
   Queue *Output() { return this->out_queue_; }
-
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -416,7 +415,7 @@ public:
     }
   }
 
-private:
+ private:
   std::function<OutType(const InType &)> projection_;
 
   // track this for global timestamp state update
@@ -444,10 +443,12 @@ private:
                 if now negative emit -1
 
 */
-template <typename Type> class DistinctNode : public TypedNode<Type> {
-public:
+template <typename Type>
+class DistinctNode : public TypedNode<Type> {
+ public:
   DistinctNode(TypedNode<Type> *in_node)
-      : in_queue_{in_node->Output()}, in_node_{in_node},
+      : in_queue_{in_node->Output()},
+        in_node_{in_node},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->ts_ = get_current_timestamp();
     this->previous_ts_ = 0;
@@ -456,24 +457,22 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
   void Compute() {
-
     // first insert all new data from queue to table
     const char *in_data_;
     while (this->in_queue_->GetNext(&in_data_)) {
       const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
       // if this data wasn't present insert with new index
-      
-	  if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
+
+      if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
         index match_index = this->next_index_;
         this->next_index_++;
         this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
         this->index_to_deltas_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_tuple->delta});
-		emited_.push_back(false);
+        emited_.push_back(false);
       } else {
         index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
         this->index_to_deltas_[match_index].insert(in_tuple->delta);
@@ -489,17 +488,14 @@ public:
       // emit delete for oldest keept version, emit insert for previous_ts
 
       // iterate by tuple to index
-      for (auto it = this->tuple_to_index_.begin();
-           it != this->tuple_to_index_.end(); it++) {
-        oldest_deltas_[it->second] =
-            *(this->index_to_deltas_[it->second].rbegin());
+      for (auto it = this->tuple_to_index_.begin(); it != this->tuple_to_index_.end(); it++) {
+        oldest_deltas_[it->second] = *(this->index_to_deltas_[it->second].rbegin());
       }
 
       this->Compact();
       this->compact_ = false;
 
-      for (auto it = this->tuple_to_index_.begin();
-           it != this->tuple_to_index_.end(); it++) {
+      for (auto it = this->tuple_to_index_.begin(); it != this->tuple_to_index_.end(); it++) {
         // now we can get current oldest delta ie after compaction:
         Delta cur_delta = *(this->index_to_deltas_[it->second].rbegin());
         bool previous_positive = oldest_deltas_[it->second].count > 0;
@@ -519,46 +515,44 @@ public:
         */
         char *out_data;
 
-		// but if it's first iteration of this Node we need to always emit
-		if (!this->emited_[it->second]){
-			if (current_positive){
-					this->out_queue_->ReserveNext(&out_data);
-					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-					update_tpl->delta.ts = cur_delta.ts;
-					update_tpl->delta.count = 1;
-					// finally copy data
-					std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
-				
-				this->emited_[it->second] = true;
-			}
-			
-		}
-		else {
-			if (previous_positive) {
-				if (current_positive) {
-					continue;
-				} else {
-					this->out_queue_->ReserveNext(&out_data);
-					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-					update_tpl->delta.ts = cur_delta.ts;
-					update_tpl->delta.count = -1;
-					// finally copy data
-					std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
-				}
-			} 
-			else {
-				if (current_positive) {
-					this->out_queue_->ReserveNext(&out_data);
-					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-					update_tpl->delta.ts = cur_delta.ts;
-					update_tpl->delta.count = 1;
-					// finally copy data
-					std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
-				} else {
-					continue;
-				}
-			}
-		}  
+        // but if it's first iteration of this Node we need to always emit
+        if (!this->emited_[it->second]) {
+          if (current_positive) {
+            this->out_queue_->ReserveNext(&out_data);
+            Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+            update_tpl->delta.ts = cur_delta.ts;
+            update_tpl->delta.count = 1;
+            // finally copy data
+            std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+
+            this->emited_[it->second] = true;
+          }
+
+        } else {
+          if (previous_positive) {
+            if (current_positive) {
+              continue;
+            } else {
+              this->out_queue_->ReserveNext(&out_data);
+              Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+              update_tpl->delta.ts = cur_delta.ts;
+              update_tpl->delta.count = -1;
+              // finally copy data
+              std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+            }
+          } else {
+            if (current_positive) {
+              this->out_queue_->ReserveNext(&out_data);
+              Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+              update_tpl->delta.ts = cur_delta.ts;
+              update_tpl->delta.count = 1;
+              // finally copy data
+              std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+            } else {
+              continue;
+            }
+          }
+        }
       }
     }
   }
@@ -572,7 +566,7 @@ public:
     }
   }
 
-private:
+ private:
   void Compact() {
     // leave previous_ts version as oldest one
     compact_deltas(this->index_to_deltas_, this->previous_ts_);
@@ -598,16 +592,14 @@ private:
   // we can treat whole tuple as a key, this will return it's index
   // we will later use some persistent storage for that mapping, maybe rocksdb
   // or something
-  std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>>
-      tuple_to_index_;
+  std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
   // from index we can get multiset of changes to the input, later
   // we will use some better data structure for that, but for now multiset is
   // nice cause it auto sorts for us
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
 
-  //whether tuple for given index was ever emited, this is needed for compute state machine
+  // whether tuple for given index was ever emited, this is needed for compute state machine
   std::vector<bool> emited_;
-
 };
 
 /**
@@ -621,27 +613,27 @@ private:
         Union is PlusNode -> DistinctNode
         Except is plus with NegateLeft -> DistinctNode
 */
-template <typename Type> class PlusNode : public TypedNode<Type> {
-public:
+template <typename Type>
+class PlusNode : public TypedNode<Type> {
+ public:
   // we can make it subtractor by setting neg left to true, then left deltas are
   // reversed
   PlusNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, bool negate_left)
-      : negate_left_(negate_left), in_node_left_{in_node_left},
-        in_node_right_{in_node_right}, in_queue_left_{in_node_left->Output()},
+      : negate_left_(negate_left),
+        in_node_left_{in_node_left},
+        in_node_right_{in_node_right},
+        in_queue_left_{in_node_left->Output()},
         in_queue_right_{in_node_right->Output()},
-        frontier_ts_{std::max(in_node_left->GetFrontierTs(),
-                              in_node_right->GetFrontierTs())} {
+        frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
     this->ts_ = get_current_timestamp();
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
   }
 
   Queue *Output() { return this->out_queue_; }
 
-
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
   void Compute() {
-
     // process left input
     const char *in_data;
     char *out_data;
@@ -670,7 +662,6 @@ public:
     }
 
     this->in_queue_right_->Clean();
-  
   }
 
   void UpdateTimestamp(timestamp ts) {
@@ -681,7 +672,7 @@ public:
     }
   }
 
-private:
+ private:
   timestamp ts_;
 
   timestamp frontier_ts_;
@@ -699,20 +690,18 @@ private:
 
 template <typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public TypedNode<OutType> {
-public:
+ public:
   StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right)
-      : in_node_left_{in_node_left}, in_node_right_{in_node_right},
+      : in_node_left_{in_node_left},
+        in_node_right_{in_node_right},
         in_queue_left_{in_node_left->Output()},
         in_queue_right_{in_node_right->Output()},
-        frontier_ts_{std::max(in_node_left->GetFrontierTs(),
-                              in_node_right->GetFrontierTs())} {
+        frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
     this->ts_ = get_current_timestamp();
-    this->out_queue_ =
-        new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+    this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
   }
 
   Queue *Output() { return this->out_queue_; }
-
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
   virtual void Compute() = 0;
@@ -726,7 +715,7 @@ public:
     }
   }
 
-protected:
+ protected:
   void Compact() {
     compact_deltas(this->index_to_deltas_left_, this->ts_);
     compact_deltas(this->index_to_deltas_right_, this->ts_);
@@ -753,11 +742,9 @@ protected:
   // we can treat whole tuple as a key, this will return it's index
   // we will later use some persistent storage for that mapping, maybe rocksdb
   // or something
-  std::unordered_map<std::array<char, sizeof(LeftType)>, index,
-                     KeyHash<LeftType>>
+  std::unordered_map<std::array<char, sizeof(LeftType)>, index, KeyHash<LeftType>>
       tuple_to_index_left;
-  std::unordered_map<std::array<char, sizeof(RightType)>, index,
-                     KeyHash<RightType>>
+  std::unordered_map<std::array<char, sizeof(RightType)>, index, KeyHash<RightType>>
       tuple_to_index_right;
   // from index we can get multiset of changes to the input, later
   // we will use some better data structure for that, but for now multiset is
@@ -772,7 +759,7 @@ protected:
 /** @todo it needs better name :) */
 template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
-public:
+ public:
   IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right)
       : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right) {}
 
@@ -788,11 +775,9 @@ public:
         Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
         // if left and right queues match on data put it into out_queue with new
         // delta
-        if (!std::memcmp(&in_left_tuple->data, &in_right_tuple->data,
-                         sizeof(Type))) {
+        if (!std::memcmp(&in_left_tuple->data, &in_right_tuple->data, sizeof(Type))) {
           this->out_queue_->ReserveNext(&out_data);
-          Delta out_delta = this->delta_function_(in_left_tuple->delta,
-                                                  in_right_tuple->delta);
+          Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
           Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
           std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
           out_tuple->delta = out_delta;
@@ -805,8 +790,7 @@ public:
       Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
       // get all matching on data from right
       if (this->tuple_to_index_right.contains(Key<Type>(in_left_tuple->data))) {
-        index match_index =
-            this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
+        index match_index = this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
 
         for (auto it = this->index_to_deltas_right_[match_index].begin();
              it != this->index_to_deltas_right_[match_index].end(); it++) {
@@ -824,8 +808,7 @@ public:
       Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
       // get all matching on data from right
       if (this->tuple_to_index_left.contains(Key<Type>(in_right_tuple->data))) {
-        index match_index =
-            this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
+        index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
         for (auto it = this->index_to_deltas_left_[match_index].begin();
              it != this->index_to_deltas_left_[match_index].end(); it++) {
           this->out_queue_->ReserveNext(&out_data);
@@ -848,25 +831,21 @@ public:
         this->index_to_deltas_left_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_left_tuple->delta});
       } else {
-        index match_index =
-            this->tuple_to_index_left[Key<Type>(in_left_tuple->data)];
+        index match_index = this->tuple_to_index_left[Key<Type>(in_left_tuple->data)];
         this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
       }
     }
     while (this->in_queue_right_->GetNext(&in_data_right)) {
       Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
       // if this data wasn't present insert with new index
-      if (!this->tuple_to_index_right.contains(
-              Key<Type>(in_right_tuple->data))) {
+      if (!this->tuple_to_index_right.contains(Key<Type>(in_right_tuple->data))) {
         index match_index = this->next_index_right_;
         this->next_index_right_++;
-        this->tuple_to_index_right[Key<Type>(in_right_tuple->data)] =
-            match_index;
+        this->tuple_to_index_right[Key<Type>(in_right_tuple->data)] = match_index;
         this->index_to_deltas_right_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_right_tuple->delta});
       } else {
-        index match_index =
-            this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
+        index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
         this->index_to_deltas_right_[match_index].insert(in_right_tuple->delta);
       }
     }
@@ -880,28 +859,22 @@ public:
     }
   }
 
-private:
+ private:
   // extra state beyond StatefulNode is only deltafunction
-  static Delta delta_function_(const Delta &left_delta,
-                               const Delta &right_delta) {
-    return {std::max(left_delta.ts, right_delta.ts),
-            left_delta.count * right_delta.count};
+  static Delta delta_function_(const Delta &left_delta, const Delta &right_delta) {
+    return {std::max(left_delta.ts, right_delta.ts), left_delta.count * right_delta.count};
   }
 };
 
 template <typename InTypeLeft, typename InTypeRight, typename OutType>
-class CrossJoinNode
-    : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
-public:
-  CrossJoinNode(
-      TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
-  	std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout)  
-	  : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
-                                                             in_node_right),
+class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
+ public:
+  CrossJoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
+                std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
+      : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
         join_layout_{join_layout} {}
 
   void Compute() {
-
     // compute right_queue against left_queue
     // they are small and hold no indexes so we do it just by nested loop
     const char *in_data_left;
@@ -910,19 +883,16 @@ public:
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       while (this->in_queue_right_->GetNext(&in_data_right)) {
-        Tuple<InTypeRight> *in_right_tuple =
-            (Tuple<InTypeRight> *)(in_data_right);
+        Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
         // if left and right queues match on data put it into out_queue with new
         // delta
         this->out_queue_->ReserveNext(&out_data);
         Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-        out_tuple->delta = {
-            std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
-            in_left_tuple->delta.count * in_right_tuple->delta.count};
-        out_tuple->data =  this->join_layout_(in_left_tuple->data, in_right_tuple->data);
+        out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
+                            in_left_tuple->delta.count * in_right_tuple->delta.count};
+        out_tuple->data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
       }
     }
-
 
     // compute left queue against right table
     while (this->in_queue_left_->GetNext(&in_data_left)) {
@@ -935,14 +905,15 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
-          out_tuple->data =  this->join_layout_(in_left_tuple->data, *(InTypeRight*)table_data.data());
+          out_tuple->data =
+              this->join_layout_(in_left_tuple->data, *(InTypeRight *)table_data.data());
         }
       }
     }
 
     // compute right queue against left table
     while (this->in_queue_right_->GetNext(&in_data_right)) {
-      Tuple<InTypeRight> *in_right_tuple =(Tuple<InTypeRight> *)(in_data_right);
+      Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // get all matching on data from right
       for (auto &[table_data, table_idx] : this->tuple_to_index_left) {
         for (auto it = this->index_to_deltas_left_[table_idx].begin();
@@ -951,28 +922,25 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
-          
-		  out_tuple->data =  this->join_layout_(*(InTypeLeft*)table_data.data(), in_right_tuple->data);
+
+          out_tuple->data =
+              this->join_layout_(*(InTypeLeft *)table_data.data(), in_right_tuple->data);
         }
       }
     }
 
- 
     // insert new deltas from in_queues
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // if this data wasn't present insert with new index
-      if (!this->tuple_to_index_left.contains(
-              Key<InTypeLeft>(in_left_tuple->data))) {
+      if (!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))) {
         index match_index = this->next_index_left_;
         this->next_index_left_++;
-        this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] =
-            match_index;
+        this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
         this->index_to_deltas_left_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_left_tuple->delta});
-	  } else {
-        index match_index =
-            this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
+      } else {
+        index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
         this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
       }
     }
@@ -980,17 +948,14 @@ public:
     while (this->in_queue_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
-      if (!this->tuple_to_index_right.contains(
-              Key<InTypeRight>(in_right_tuple->data))) {
+      if (!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))) {
         index match_index = this->next_index_right_;
         this->next_index_right_++;
-        this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] =
-            match_index;
+        this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
         this->index_to_deltas_right_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_right_tuple->delta});
       } else {
-        index match_index =
-            this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
+        index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
         this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
       }
     }
@@ -1004,30 +969,27 @@ public:
     }
   }
 
-private:
+ private:
   // only state beyound StatefulNode state is join_layout_function
-  std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout_;
+  std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 };
 
 // join on
 // match type could be even char[] in this case
-template <typename InTypeLeft, typename InTypeRight, typename MatchType,
-          typename OutType>
+template <typename InTypeLeft, typename InTypeRight, typename MatchType, typename OutType>
 class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
-public:
-  JoinNode(
-      TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
-      std::function<MatchType(const InTypeLeft &)> get_match_left,
-      std::function<MatchType(const InTypeRight &)> get_match_right,
-  	  std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
-      : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
-                                                             in_node_right),
-        get_match_left_(get_match_left), get_match_right_{get_match_right},
+ public:
+  JoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
+           std::function<MatchType(const InTypeLeft &)> get_match_left,
+           std::function<MatchType(const InTypeRight &)> get_match_right,
+           std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
+      : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
+        get_match_left_(get_match_left),
+        get_match_right_{get_match_right},
         join_layout_{join_layout} {}
 
   // this function changes
   void Compute() {
-
     // compute right_queue against left_queue
     // they are small and hold no indexes so we do it just by nested loop
     const char *in_data_left;
@@ -1036,18 +998,16 @@ public:
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       while (this->in_queue_right_->GetNext(&in_data_right)) {
-        Tuple<InTypeRight> *in_right_tuple =
-            (Tuple<InTypeRight> *)(in_data_right);
+        Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
         // if left and right queues match on data put it into out_queue with new
         // delta
         if (this->Compare(&in_left_tuple->data, &in_right_tuple->data)) {
           this->out_queue_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-          out_tuple->delta = {
-              std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
-              in_left_tuple->delta.count * in_right_tuple->delta.count};
-           
-		     out_tuple->data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
+          out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
+                              in_left_tuple->delta.count * in_right_tuple->delta.count};
+
+          out_tuple->data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
         }
       }
     }
@@ -1058,10 +1018,8 @@ public:
       // get all matching on data from right
       MatchType match = this->get_match_left_(in_left_tuple->data);
       // all tuples from right table that match this left tuple
-      for (auto tpl_it =
-               this->match_to_tuple_right_[Key<MatchType>(match)].begin();
-           tpl_it != this->match_to_tuple_right_[Key<MatchType>(match)].end();
-           tpl_it++) {
+      for (auto tpl_it = this->match_to_tuple_right_[Key<MatchType>(match)].begin();
+           tpl_it != this->match_to_tuple_right_[Key<MatchType>(match)].end(); tpl_it++) {
         // now iterate all version of this tuple
         std::array<char, sizeof(InTypeLeft)> left_key = *tpl_it;
         int idx = this->tuple_to_index_right[left_key];
@@ -1072,8 +1030,8 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
-           out_tuple->data =  this->join_layout_(in_left_tuple->data,
-                             *reinterpret_cast<InTypeRight*>(left_key.data()));
+          out_tuple->data = this->join_layout_(
+              in_left_tuple->data, *reinterpret_cast<InTypeRight *>(left_key.data()));
         }
       }
     }
@@ -1083,10 +1041,8 @@ public:
       // get all matching on data from right
       MatchType match = this->get_match_right_(in_right_tuple->data);
       // all tuples from right table that match this left tuple
-      for (auto tpl_it =
-               this->match_to_tuple_left_[Key<MatchType>(match)].begin();
-           tpl_it != this->match_to_tuple_left_[Key<MatchType>(match)].end();
-           tpl_it++) {
+      for (auto tpl_it = this->match_to_tuple_left_[Key<MatchType>(match)].begin();
+           tpl_it != this->match_to_tuple_left_[Key<MatchType>(match)].end(); tpl_it++) {
         // now iterate all version of this tuple
         std::array<char, sizeof(InTypeRight)> right_key = *tpl_it;
         int idx = this->tuple_to_index_left[right_key];
@@ -1097,7 +1053,8 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
-          out_tuple->data =  this->join_layout_(*reinterpret_cast<InTypeLeft*>(right_key.data()),in_right_tuple->data);
+          out_tuple->data = this->join_layout_(
+              *reinterpret_cast<InTypeLeft *>(right_key.data()), in_right_tuple->data);
         }
       }
     }
@@ -1106,12 +1063,10 @@ public:
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // if this data wasn't present insert with new index
-      if (!this->tuple_to_index_left.contains(
-              Key<InTypeLeft>(in_left_tuple->data))) {
+      if (!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))) {
         index match_index = this->next_index_left_;
         this->next_index_left_++;
-        this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] =
-            match_index;
+        this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
         this->index_to_deltas_left_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_left_tuple->delta});
         // also insert matching for this tuple
@@ -1124,29 +1079,24 @@ public:
             Key<InTypeLeft>(in_left_tuple->data));
 
       } else {
-        index match_index =
-            this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
+        index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
         this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
       }
     }
 
     while (this->in_queue_right_->GetNext(&in_data_right)) {
-      Tuple<InTypeRight> *in_right_tuple =
-          (Tuple<InTypeRight> *)(in_data_right);
+      Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
-      if (!this->tuple_to_index_right.contains(
-              Key<InTypeRight>(in_right_tuple->data))) {
+      if (!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))) {
         index match_index = this->next_index_right_;
         this->next_index_right_++;
-        this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] =
-            match_index;
+        this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
         this->index_to_deltas_right_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_right_tuple->delta});
 
         // also insert matching for this tuple
         MatchType right_match = this->get_match_right_(in_right_tuple->data);
-        if (!this->match_to_tuple_right_.contains(
-                Key<MatchType>(right_match))) {
+        if (!this->match_to_tuple_right_.contains(Key<MatchType>(right_match))) {
           this->match_to_tuple_right_[Key<MatchType>(right_match)] =
               std::list<std::array<char, sizeof(InTypeRight)>>{};
         }
@@ -1155,8 +1105,7 @@ public:
       }
 
       else {
-        index match_index =
-            this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
+        index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
         this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
       }
     }
@@ -1170,7 +1119,7 @@ public:
     }
   }
 
-private:
+ private:
   inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) {
     MatchType left_match = this->get_match_left_(*left_data);
     MatchType right_match = this->get_match_right_(*right_data);
@@ -1183,16 +1132,13 @@ private:
   std::function<MatchType(const InTypeRight &)> get_match_right_;
   std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 
-
   // we need to get corresponding tuples using only match chars, this maps will
   // help us with it
   std::unordered_map<std::array<char, sizeof(MatchType)>,
-                     std::list<std::array<char, sizeof(InTypeLeft)>>,
-                     KeyHash<MatchType>>
+                     std::list<std::array<char, sizeof(InTypeLeft)>>, KeyHash<MatchType>>
       match_to_tuple_left_;
   std::unordered_map<std::array<char, sizeof(MatchType)>,
-                     std::list<std::array<char, sizeof(InTypeRight)>>,
-                     KeyHash<MatchType>>
+                     std::list<std::array<char, sizeof(InTypeRight)>>, KeyHash<MatchType>>
       match_to_tuple_right_;
 };
 
@@ -1213,12 +1159,14 @@ class AggregateByNode : public TypedNode<OutType> {
   // example i sum inserting 5 Alice's should influence it different than one
   // Alice but with min it should not, so it will be dependent on aggregate
   // function
-public:
+ public:
   AggregateByNode(TypedNode<InType> *in_node,
                   std::function<void(OutType *, InType *, int)> aggr_fun,
                   std::function<void(InType *, MatchType *)> get_match)
-      : in_node_{in_node}, in_queue_{in_node->Output()},
-        frontier_ts_{in_node->GetFrontierTs()}, aggr_fun_{aggr_fun},
+      : in_node_{in_node},
+        in_queue_{in_node->Output()},
+        frontier_ts_{in_node->GetFrontierTs()},
+        aggr_fun_{aggr_fun},
         get_match_{get_match} {
     this->ts_ = get_current_timestamp();
     // there will be single tuple emited at once probably, if not it will get
@@ -1228,8 +1176,7 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-  timestamp GetFrontierTs() const {return this->frontier_ts_;}
-  
+  timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
   // output should be single tuple with updated values for different times
   // so what we can do there? if we emit new count as part of value, then it
@@ -1250,16 +1197,13 @@ public:
         this->index_to_deltas_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_tuple->delta});
 
-  
-  
         MatchType match;
         this->get_match_(&in_tuple->data, &match);
         if (!this->match_to_tuple_.contains(Key<MatchType>(match))) {
           this->match_to_tuple_[Key<MatchType>(match)] =
               std::list<std::array<char, sizeof(InType)>>{};
         }
-        this->match_to_tuple_[Key<MatchType>(match)].push_back(
-            Key<InType>(in_tuple->data));
+        this->match_to_tuple_[Key<MatchType>(match)].push_back(Key<InType>(in_tuple->data));
       } else {
         index match_index = this->tuple_to_index[Key<InType>(in_tuple->data)];
         this->index_to_deltas_[match_index].insert(in_tuple->delta);
@@ -1267,29 +1211,28 @@ public:
     }
 
     if (this->compact_) {
-	  // emit delete for oldest keept version, emit insert for previous_ts
+      // emit delete for oldest keept version, emit insert for previous_ts
 
       // iterate by match type
       for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
         OutType accum = this->initial_value_;
-		if(this->emited_.contains(it->first)){
-			for (auto data_it = it->second.begin(); data_it != it->second.end();
-				data_it++) {
-			int index = this->tuple_to_index[*data_it];
-			aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
-						this->index_to_deltas_[index].rbegin()->count);
-			}
+        if (this->emited_.contains(it->first)) {
+          for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
+            int index = this->tuple_to_index[*data_it];
+            aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
+                      this->index_to_deltas_[index].rbegin()->count);
+          }
 
-			// emit delete tuple
-			char *out_data;
-			this->out_queue_->ReserveNext(&out_data);
-			Tuple<OutType> *del_tuple = (Tuple<OutType> *)(out_data);
-			del_tuple->delta = {this->previous_ts_, -1};
-			std::memcpy(&del_tuple->data, &accum, sizeof(OutType));
-		}else{
-			this->emited_.insert(it->first);
-		}
-	  }
+          // emit delete tuple
+          char *out_data;
+          this->out_queue_->ReserveNext(&out_data);
+          Tuple<OutType> *del_tuple = (Tuple<OutType> *)(out_data);
+          del_tuple->delta = {this->previous_ts_, -1};
+          std::memcpy(&del_tuple->data, &accum, sizeof(OutType));
+        } else {
+          this->emited_.insert(it->first);
+        }
+      }
 
       this->Compact();
 
@@ -1297,24 +1240,22 @@ public:
 
       // iterate by match type this time we will insert, after compaction prev
       // index should be lst value and we want to insert it
-      for (auto it = this->match_to_tuple_.begin();
-           it != this->match_to_tuple_.end(); it++) {
+      for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
         OutType accum = this->initial_value_;
 
-        for (auto data_it = it->second.begin(); data_it != it->second.end();
-             data_it++) {
+        for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
           int index = this->tuple_to_index[*data_it];
           aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
-                     this->index_to_deltas_[index].rbegin()->count);
+                    this->index_to_deltas_[index].rbegin()->count);
         }
 
         // emit delete tuple
         char *out_data;
         this->out_queue_->ReserveNext(&out_data);
         Tuple<OutType> *ins_tuple = (Tuple<OutType> *)(out_data);
-        ins_tuple->delta = {this->previous_ts_, 1};      
-		std::memcpy(&ins_tuple->data, &accum, sizeof(OutType));
-	  }
+        ins_tuple->delta = {this->previous_ts_, 1};
+        std::memcpy(&ins_tuple->data, &accum, sizeof(OutType));
+      }
     }
   }
 
@@ -1327,7 +1268,7 @@ public:
     }
   }
 
-private:
+ private:
   // let's store full version data and not deltas in this node, so we can just
   // discard old versions
   void Compact() {
@@ -1352,14 +1293,11 @@ private:
 
   Queue *out_queue_;
 
-  std::unordered_map<std::array<char, sizeof(InType)>, index, KeyHash<InType>>
-      tuple_to_index;
-  
-  
+  std::unordered_map<std::array<char, sizeof(InType)>, index, KeyHash<InType>> tuple_to_index;
+
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
   std::unordered_map<std::array<char, sizeof(MatchType)>,
-                     std::list<std::array<char, sizeof(InType)>>,
-                     KeyHash<MatchType>>
+                     std::list<std::array<char, sizeof(InType)>>, KeyHash<MatchType>>
       match_to_tuple_;
 
   std::function<void(InType *, MatchType *)> get_match_;
@@ -1368,10 +1306,8 @@ private:
 
   std::set<std::array<char, sizeof(MatchType)>> emited_;
 
-
-  
   std::mutex node_mutex;
 };
 
-} // namespace AliceDB
+}  // namespace AliceDB
 #endif

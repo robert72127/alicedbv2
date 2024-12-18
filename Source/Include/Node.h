@@ -380,7 +380,7 @@ template <typename InType, typename OutType>
 class ProjectionNode : public Node {
 public:
   ProjectionNode(Node *in_node,
-                 std::function<void(InType *, OutType *)> projection)
+                 std::function<OutType(const InType &)> projection)
       : projection_{projection}, in_node_{in_node},
         in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
@@ -397,7 +397,7 @@ public:
 
       out_tuple->delta.ts = in_tuple->delta.ts;
       out_tuple->delta.count = in_tuple->delta.count;
-      this->projection_(&in_tuple->data, &out_tuple->data);
+      out_tuple->data =  this->projection_(in_tuple->data);
     }
 
     this->in_queue_->Clean();
@@ -418,7 +418,7 @@ public:
   }
 
 private:
-  std::function<void(InType *, OutType *)> projection_;
+  std::function<OutType(const InType &)> projection_;
 
   // track this for global timestamp state update
   Node *in_node_;
@@ -903,8 +903,8 @@ class CrossJoinNode
 public:
   CrossJoinNode(
       Node *in_node_left, Node *in_node_right,
-      std::function<void(InTypeLeft *, InTypeRight *, OutType *)> join_layout)
-      : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
+  	std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout)  
+	  : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
                                                              in_node_right),
         join_layout_{join_layout} {}
 
@@ -927,8 +927,7 @@ public:
         out_tuple->delta = {
             std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
             in_left_tuple->delta.count * in_right_tuple->delta.count};
-        this->join_layout_(&in_left_tuple->data, &in_right_tuple->data,
-                           &out_tuple->data);
+        out_tuple->data =  this->join_layout_(in_left_tuple->data, in_right_tuple->data);
       }
     }
 
@@ -944,8 +943,7 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
-          this->join_layout_(&in_left_tuple->data, (InTypeRight*)table_data.data(),
-                             &out_tuple->data);
+          out_tuple->data =  this->join_layout_(in_left_tuple->data, *(InTypeRight*)table_data.data());
         }
       }
     }
@@ -961,8 +959,8 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
-          this->join_layout_((InTypeLeft*)table_data.data(), &in_right_tuple->data,
-                             &out_tuple->data);
+          
+		  out_tuple->data =  this->join_layout_(*(InTypeLeft*)table_data.data(), in_right_tuple->data);
         }
       }
     }
@@ -1016,7 +1014,7 @@ public:
 
 private:
   // only state beyound StatefulNode state is join_layout_function
-  std::function<void(InTypeLeft *, InTypeRight *, OutType *)> join_layout_;
+  std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout_;
 };
 
 // join on
@@ -1029,7 +1027,7 @@ public:
       Node *in_node_left, Node *in_node_right,
       std::function<void(InTypeLeft *, MatchType *)> get_match_left,
       std::function<void(InTypeRight *, MatchType *)> get_match_right,
-      std::function<void(InTypeLeft *, InTypeRight *, OutType *)> join_layout)
+  	  std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
       : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
                                                              in_node_right),
         get_match_left_(get_match_left), get_match_right_{get_match_right},
@@ -1056,8 +1054,8 @@ public:
           out_tuple->delta = {
               std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
               in_left_tuple->delta.count * in_right_tuple->delta.count};
-          this->join_layout_(&in_left_tuple->data, &in_right_tuple->data,
-                             &out_tuple->data);
+           
+		     out_tuple->data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
         }
       }
     }
@@ -1083,9 +1081,8 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
-          this->join_layout_(&in_left_tuple->data,
-                             reinterpret_cast<InTypeRight *>(&left_key),
-                             &out_tuple->data);
+           out_tuple->data =  this->join_layout_(in_left_tuple->data,
+                             *reinterpret_cast<InTypeRight*>(left_key.data()));
         }
       }
     }
@@ -1110,8 +1107,7 @@ public:
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
-          this->join_layout_(reinterpret_cast<InTypeLeft *>(&right_key),
-                             &in_right_tuple->data, &out_tuple->data);
+          out_tuple->data =  this->join_layout_(*reinterpret_cast<InTypeLeft*>(right_key.data()),in_right_tuple->data);
         }
       }
     }
@@ -1199,7 +1195,8 @@ private:
   // righ
   std::function<void(InTypeLeft *, MatchType *)> get_match_left_;
   std::function<void(InTypeRight *, MatchType *)> get_match_right_;
-  std::function<void(InTypeLeft *, InTypeRight *, OutType *)> join_layout_;
+  
+  std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 
   // we need to get corresponding tuples using only match chars, this maps will
   // help us with it

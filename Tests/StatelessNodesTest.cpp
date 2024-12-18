@@ -9,26 +9,25 @@
 #include "Producer.h"
 #include "Common.h"
 #include "Tuple.h"
+#include "NodeWrappers.h"
 
 struct Person {
-    char name[50];
-    char surname[50];
+    std::array<char,50> name;
+    std::array<char,50> surname;
     int age;
 };
 
 struct Name{
-    char name[50]; 
+    std::array<char,50> name;
 };
 
 bool filter_adult(const Person &p){
     return p.age > 18;
 }
 
-void proj_names(Person *p, Name *out){
-    std::memcpy(&out->name, &p->name, 50);
+Name proj_names(const Person &p){
+    return Name{.name=p.name};
 }
-
-
 
 bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
 
@@ -47,24 +46,25 @@ bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
             // Assuming Type has the fields in the same order:
             
             // Copy name to the char array field. Ensure no overflow:
-            std::strncpy(p->data.name, name, sizeof(p->data.name));
-            std::strncpy(p->data.surname, surname, sizeof(p->data.surname));
+            std::strncpy(p->data.name.data(), name, sizeof(p->data.name));
+            std::strncpy(p->data.surname.data(), surname, sizeof(p->data.surname));
             p->data.age = age;
             p->delta.count = (insert_delete == "insert")? 1 : -1;
             p->delta.ts = ts;
             return true;
 }
  
-void print_people(char *data){
-    AliceDB::Tuple<Person> *p = reinterpret_cast<AliceDB::Tuple<Person>*>(data);
+ void print_people(const char *data){
+    const Person *p = reinterpret_cast<const Person*>(data);
 
-    std::cout<<p->delta.ts << " " << p->delta.count << " " <<p->data.name << " " << p->data.surname << " " << p->data.age << std::endl; 
-} 
+    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->age << std::endl; 
+}
+
 
 void print_name(const char *data){
     const Name *n = reinterpret_cast<const Name *>(data);
 
-    std::cout<< n->name <<  std::endl; 
+    std::cout<< n->name.data() <<  std::endl; 
 } 
 
 
@@ -318,9 +318,9 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     auto *view = 
         g->View<Name>(
             g->Projection<Person, Name>(
-                [](Person *person, Name *name){std::memcpy(&name->name, &person->name, sizeof(person->name));},
+                [](const Person &p) { return Name {.name=p.name}; },
                 g->Filter<Person>(
-                    [](const Person &p) {return p.age > 18;}, 
+                    [](const Person &p) {return p.age > 18 && p.name[0] == 'S' ;}, 
                     g->Source<Person>(prod,5)
                 )
             )

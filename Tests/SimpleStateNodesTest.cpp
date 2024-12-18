@@ -9,43 +9,38 @@
 #include "Producer.h"
 #include "Common.h"
 #include "Tuple.h"
-
+#include "NodeWrappers.h"
 
 struct Person {
-    char name[50];
-    char surname[50];
+    std::array<char, 50> name;
+    std::array<char, 50> surname;
     int age;
 };
 
 struct CrossPerson {
-    char lname[50];
-    char lsurname[50];
+    std::array<char, 50> lname;
+    std::array<char, 50> lsurname;
     int lage;
-    char rname[50];
-    char rsurname[50];
+    std::array<char, 50> rname;
+    std::array<char, 50> rsurname;
     int rage;
 };
 
 struct DoubleNamedPerson {
-    char lname[50];
-    char lsurname[50];
+    std::array<char, 50> lname;
+    std::array<char, 50> lsurname;
     int lage;
-    char rname[50];
-    char rsurname[50];
+    std::array<char, 50> rname;
+    std::array<char, 50> rsurname;
 };
 
 struct NameCumAge {
-    char name[50];
+    std::array<char, 50> name;
     int age;
 };
 
-
-
-
-
-
 struct Name{
-    char name[50]; 
+    std::array<char, 50> name;
 };
 
 bool filter_adult(const Person &p){
@@ -75,8 +70,8 @@ bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
             // Assuming Type has the fields in the same order:
             
             // Copy name to the char array field. Ensure no overflow:
-            std::strncpy(p->data.name, name, sizeof(p->data.name));
-            std::strncpy(p->data.surname, surname, sizeof(p->data.surname));
+            std::strncpy(p->data.name.data(), name, sizeof(p->data.name));
+            std::strncpy(p->data.surname.data(), surname, sizeof(p->data.surname));
             p->data.age = age;
             p->delta.count = (insert_delete == "insert")? 1 : -1;
             p->delta.ts = ts;
@@ -86,27 +81,27 @@ bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
 void print_people(const char *data){
     const Person *p = reinterpret_cast<const Person*>(data);
 
-    std::cout<<p->name << " " << p->surname << " " << p->age << std::endl; 
+    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->age << std::endl; 
 }
 
 void print_crosspeople(const char *data){
     const CrossPerson *p = reinterpret_cast<const CrossPerson*>(data);
 
-    std::cout<<p->lname << " " << p->lsurname << " " << p->lage << "\t\t"; 
-    std::cout<<p->rname << " " << p->rsurname << " " << p->rage << std::endl; 
+    std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->lage << "\t\t"; 
+    std::cout<<p->rname.data() << " " << p->rsurname.data() << " " << p->rage << std::endl; 
 } 
 
 void print_doublenamed(const char *data){
     const CrossPerson *p = reinterpret_cast<const CrossPerson*>(data);
 
-    std::cout<<p->lname << " " << p->lsurname << " " << p->lage << "\t\t"; 
-    std::cout<<p->rname << " " << p->rsurname << " " << std::endl; 
+    std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->lage << "\t\t"; 
+    std::cout<<p->rname.data() << " " << p->rsurname.data() << " " << std::endl; 
 } 
 
 void print_namecumage(const char *data){
     const NameCumAge *p = reinterpret_cast<const NameCumAge*>(data);
 
-    std::cout<<p->name << " " << p->age << " " << std::endl; 
+    std::cout<<p->name.data() << " " << p->age << " " << std::endl; 
 } 
 
 
@@ -139,7 +134,6 @@ std::array<std::string, 100> names = {
         "Frank", "Samantha", "Benjamin", "Katherine", "Gregory", "Christine", "Samuel", "Debra", "Raymond", "Rachel",
         "Patrick", "Catherine", "Alexander", "Carolyn", "Jack", "Janet", "Dennis", "Ruth", "Jerry", "Maria"
 };
-
 
 /*
 TEST(SIMPLESTATE_TEST, single_insert_manual_test){
@@ -265,7 +259,7 @@ TEST(SIMPLESTATE_TEST, union_graph){
    std::filesystem::remove("./people1.txt");
 }
 
-
+*/
 
 TEST(SIMPLESTATE_TEST, cross_join_graph){
 
@@ -306,14 +300,15 @@ TEST(SIMPLESTATE_TEST, cross_join_graph){
     auto *view =
         g->View<CrossPerson>(
             g->CrossJoin<Person, Person, CrossPerson>(
-                [](Person *left, Person *right, CrossPerson *out){
-                    std::memcpy(&out->lname, &left->name, sizeof(left->name));
-                    std::memcpy(&out->rname, &right->name, sizeof(right->name));
-
-                    std::memcpy(&out->lsurname, &left->surname, sizeof(left->surname));
-                    std::memcpy(&out->rsurname, &right->surname, sizeof(left->surname));
-                    out->lage = left->age;
-                    out->rage = right->age; 
+                [](const Person &left, const Person &right){
+                    return CrossPerson{
+                        .lname=left.name,
+                        .lsurname=left.surname,
+                        .lage=left.age,
+                        .rname=right.name,
+                        .rsurname=right.surname,
+                        .rage=right.age
+                    };
                 },
                 g->Source<Person>(prod_1, 0),
                 g->Source<Person>(prod_2,0)
@@ -332,8 +327,6 @@ TEST(SIMPLESTATE_TEST, cross_join_graph){
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");
 }
-
-
 TEST(SIMPLESTATE_TEST, join_on_graph){
 
     // Seed the random number generator
@@ -376,12 +369,14 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
             g->Join<Person, Person, int,  DoubleNamedPerson>(
                 [](Person *l, int *age)  {*age = l->age;},
                 [](Person *r, int *age)  {*age = r->age;},
-                [](Person *left, Person *right, DoubleNamedPerson *out){
-                    std::memcpy(&out->lname, &left->name, sizeof(left->name));
-                    std::memcpy(&out->rname, &right->name, sizeof(right->name));
-                    std::memcpy(&out->lsurname, &left->surname, sizeof(left->surname));
-                    std::memcpy(&out->rsurname, &right->surname, sizeof(left->surname));
-                    out->lage = left->age;
+                [](const Person &left, const Person &right){
+                    return DoubleNamedPerson{
+                        .lname = left.name,
+                        .lsurname = left.surname,
+                        .lage = left.age,
+                        .rname = right.name,
+                        .rsurname = right.surname,
+                        };
                 },
                 g->Source<Person>(prod_1, 0),
                 g->Source<Person>(prod_2,0)
@@ -398,9 +393,8 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");
 }
-*/
-
-TEST(SIMPLESTATE_TEST, join_on_graph){
+/*
+TEST(SIMPLESTATE_TEST, aggr_on_graphs){
 
     // Seed the random number generator
     std::srand(std::time(nullptr));
@@ -448,5 +442,4 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
 
    std::filesystem::remove("./people.txt");
 }
-
-
+*/

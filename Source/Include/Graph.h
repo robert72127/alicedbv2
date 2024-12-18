@@ -90,7 +90,7 @@ public:
 
   template <typename InType, typename OutType>
   Node *
-  Projection(std::function<void(InType *, OutType *)> projection_function, Node *in_node) {
+  Projection(std::function<OutType(const InType &)> projection_function, Node *in_node) {
     Node *projection =
         new ProjectionNode<InType, OutType>(in_node, projection_function);
     this->all_nodes_.insert(projection);
@@ -133,7 +133,7 @@ public:
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename OutType>
-  Node *CrossJoin(std::function<void(InTypeLeft*, InTypeRight*, OutType*)> join_layout,
+  Node *CrossJoin(std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout,
                   Node *in_node_left, Node *in_node_right
                   ) {
     Node *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
@@ -148,7 +148,7 @@ public:
             typename OutType>
   Node *Join(std::function<void(InTypeLeft *, MatchType*)> get_match_left,
              std::function<void(InTypeRight *, MatchType*)> get_match_right,
-             std::function<void(InTypeLeft *, InTypeRight *, OutType*)> join_layout,
+             std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,
              Node *in_node_left, Node *in_node_right
              ) {
     Node *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(

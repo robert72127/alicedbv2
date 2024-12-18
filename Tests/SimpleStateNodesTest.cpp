@@ -396,28 +396,6 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
         );
     */
 
-
-    /*
-    auto *view =
-        g->View(
-            g->Join(
-                [](const Person &l)  { return l.age;},
-                [](const Person &r)  { return  r.age;},
-                [](const Person &left, const Person &right){
-                    return DoubleNamedPerson{
-                        .lname = left.name,
-                        .lsurname = left.surname,
-                        .lage = left.age,
-                        .rname = right.name,
-                        .rsurname = right.surname,
-                        };
-                },
-                g->Source(prod_1, 0),
-                g->Source(prod_2,0)
-            )
-        );
-        */
-
     g->Process(100);
 
 

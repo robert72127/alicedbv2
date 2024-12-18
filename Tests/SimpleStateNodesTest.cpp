@@ -204,7 +204,7 @@ TEST(SIMPLESTATE_TEST, single_insert_manual_test){
    std::filesystem::remove("./people1.txt");
 }
 
-
+*/
 
 TEST(SIMPLESTATE_TEST, union_graph){
 
@@ -239,14 +239,12 @@ TEST(SIMPLESTATE_TEST, union_graph){
     AliceDB::Graph *g = new AliceDB::Graph;
     
     auto *view =
-        g->View<Person>( // or except or intersect
-            g->Union<Person>(
-                g->Source<Person>(prod_1, 0),
-                g->Source<Person>(prod_2,0)
+        g->View( // or except or intersect
+            g->Union(
+                g->Source(prod_1, 0),
+                g->Source(prod_2,0)
             )
         );
-
-
 
     g->Process(100);
 
@@ -259,7 +257,6 @@ TEST(SIMPLESTATE_TEST, union_graph){
    std::filesystem::remove("./people1.txt");
 }
 
-*/
 
 TEST(SIMPLESTATE_TEST, cross_join_graph){
 
@@ -298,7 +295,7 @@ TEST(SIMPLESTATE_TEST, cross_join_graph){
     AliceDB::Graph *g = new AliceDB::Graph;
 
     auto *view =
-        g->View<CrossPerson>(
+        g->View(
             g->CrossJoin<Person, Person, CrossPerson>(
                 [](const Person &left, const Person &right){
                     return CrossPerson{
@@ -310,8 +307,8 @@ TEST(SIMPLESTATE_TEST, cross_join_graph){
                         .rage=right.age
                     };
                 },
-                g->Source<Person>(prod_1, 0),
-                g->Source<Person>(prod_2,0)
+                g->Source(prod_1, 0),
+                g->Source(prod_2,0)
             )
         );
 
@@ -368,7 +365,7 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
         g->View<DoubleNamedPerson>(
             g->Join<Person, Person, int,  DoubleNamedPerson>(
                 [](const Person &l)  { return l.age;},
-                [](const Person &r)  { return  r.age;},
+                [](const Person &r)  {return r.age;},
                 [](const Person &left, const Person &right){
                     return DoubleNamedPerson{
                         .lname = left.name,
@@ -382,6 +379,26 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
                 g->Source<Person>(prod_2,0)
             )
         );
+    /*
+    auto *view =
+        g->View(
+            g->Join(
+                [](const Person &l)  { return l.age;},
+                [](const Person &r)  { return  r.age;},
+                [](const Person &left, const Person &right){
+                    return DoubleNamedPerson{
+                        .lname = left.name,
+                        .lsurname = left.surname,
+                        .lage = left.age,
+                        .rname = right.name,
+                        .rsurname = right.surname,
+                        };
+                },
+                g->Source(prod_1, 0),
+                g->Source(prod_2,0)
+            )
+        );
+        */
 
     g->Process(100);
 

@@ -26,147 +26,118 @@ public:
   // Graph() {}
 
   template <typename Type>
-  Node *Source(Producer<Type> *prod, timestamp frontier_ts,
+  TypedNode<Type> *Source(Producer<Type> *prod, timestamp frontier_ts,
                int duration_us = 500) {
-    Node *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
-    this->all_nodes_.insert(source_node);
-    this->sources_.insert(source_node);
+    TypedNode<Type> *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
+    this->all_nodes_.insert(static_cast<Node*>(source_node));
+    this->sources_.insert(static_cast<Node*>(source_node));
     return source_node;
   }
 
   /**
    * @brief creates sink node  & topological order of nodes
    */
-  template <typename InType> Node *View(Node *in_node) {
-    Node *sink = new SinkNode<InType>(in_node);
-    this->make_edge(in_node, sink);
-    this->all_nodes_.insert(sink);
-    this->sinks_.insert(sink);
-
-    // get list of all nodes creating this subgraph
-    std::set<Node *> current_graph;
-    std::stack<Node *> next_to_process;
-    next_to_process.emplace(sink);
-    while (!next_to_process.empty()) {
-      Node *current = next_to_process.top();
-      next_to_process.pop();
-      current_graph.emplace(current);
-      for (Node *in : current->Inputs()) {
-        // well one node might be input to two different node, and we don't want
-        // to process it two times also this will prevent infinite loop in case
-        // of cycle but won't detect it
-        if (!current_graph.contains(in)) {
-          next_to_process.emplace(in);
-        }
-      }
-    }
-
-    /** @todo we should merge graph that share common node actually */
-    /*
-    // finally verify that there is no such node in this subgraph that is
-    neither sink nor source and belong to other subgraph for(auto it =
-    current_graph.begin(); it!= current_graph.end(); it++){
-        if(this->all_nodes_[*it] == 1 && !this->sinks_.contains(*it) &&
-    !this->sources_.contains(*it)){ throw std::runtime_error("Only sources and
-    sinks cna belong to more than one graph");
-        }
-    }
-    */
-
-    // find all source Nodes that leads to this sink and create toposort
-    this->topo_sort(current_graph);
+  template <typename InType>
+  TypedNode<InType> *View(TypedNode<InType> *in_node) {
+    TypedNode<InType> *sink = new SinkNode<InType>(in_node);
+    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(sink));
+    this->all_nodes_.insert(static_cast<Node*>(sink));
+    this->sinks_.insert(static_cast<Node*>(sink));
 
     // return sink which will already be producing resoults
     return sink;
   }
 
   template <typename Type>
-  Node *Filter(std::function<bool(const Type &)> condition, Node *in_node) {
-    Node *filter = new FilterNode<Type>(in_node, condition);
-    this->all_nodes_.insert(filter);
-    this->make_edge(in_node, filter);
+  TypedNode<Type> *Filter(std::function<bool(const Type &)> condition, TypedNode<Type> *in_node) {
+    TypedNode<Type> *filter = new FilterNode<Type>(in_node, condition);
+    this->all_nodes_.insert(static_cast<Node*>(filter));
+    this->make_edge( static_cast<Node*>(in_node), static_cast<Node*>(filter));
     return filter;
   }
 
   template <typename InType, typename OutType>
-  Node *
-  Projection(std::function<OutType(const InType &)> projection_function, Node *in_node) {
-    Node *projection =
+  TypedNode<OutType> *
+  Projection(std::function<OutType(const InType &)> projection_function, TypedNode<InType> *in_node) {
+    TypedNode<OutType> *projection =
         new ProjectionNode<InType, OutType>(in_node, projection_function);
-    this->all_nodes_.insert(projection);
-    this->make_edge(in_node, projection);
+    this->all_nodes_.insert(static_cast<Node*>(projection));
+    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(projection));
     return projection;
   }
 
-  template <typename Type> Node *Distinct(Node *in_node) {
-    Node *distinct = new DistinctNode<Type>(in_node);
-    this->all_nodes_.insert(distinct);
-    this->make_edge(in_node, distinct);
+  template <typename Type> 
+  TypedNode<Type> *Distinct(TypedNode<Type> *in_node) {
+    TypedNode<Type> *distinct = new DistinctNode<Type>(in_node);
+    this->all_nodes_.insert(static_cast<Node*>(distinct));
+    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(distinct));
     return distinct;
   }
 
   template <typename Type>
-  Node *Union(Node *in_node_left, Node *in_node_right) {
-    Node *plus = new PlusNode<Type>(in_node_left, in_node_right, false);
-    this->all_nodes_.insert(plus);
-    this->make_edge(in_node_left, plus);
-    this->make_edge(in_node_right, plus);
+  TypedNode<Type> *Union(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right) {
+    TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, false);
+    this->all_nodes_.insert(static_cast<Node*>(plus));
+    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
+    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
     return this->Distinct<Type>(plus);
   }
 
   template <typename Type>
-  Node *Except(Node *in_node_left, Node *in_node_right) {
-    Node *plus = new PlusNode<Type>(in_node_left, in_node_right, true);
-    this->all_nodes_.insert(plus);
-    this->make_edge(in_node_left, plus);
-    this->make_edge(in_node_right, plus);
+  TypedNode<Type> *Except(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right) {
+    TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, true);
+    this->all_nodes_.insert(static_cast<Node*>(plus));
+    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
+    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
     return this->Distinct<Type>(plus);
   }
 
   template <typename Type>
-  Node *Intersect(Node *in_node_left, Node *in_node_right) {
-    Node *intersect = new IntersectNode<Type>(in_node_left, in_node_right);
-    this->all_nodes_.insert(intersect);
-    this->make_edge(in_node_left, intersect);
-    this->make_edge(in_node_right, intersect);
+  TypedNode<Type> *Intersect(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right) {
+    TypedNode<Type> *intersect = new IntersectNode<Type>(in_node_left, in_node_right);
+    this->all_nodes_.insert(static_cast<Node*>(intersect));
+    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(intersect));
+    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(intersect));
     return this->Distinct<Type>(intersect);
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename OutType>
-  Node *CrossJoin(std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout,
-                  Node *in_node_left, Node *in_node_right
+  TypedNode<OutType> *CrossJoin(std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout,
+                  TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right
                   ) {
-    Node *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
+    TypedNode<OutType> *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
         in_node_left, in_node_right, join_layout);
-    this->all_nodes_.insert(cross_join);
-    this->make_edge(in_node_left, cross_join);
-    this->make_edge(in_node_right, cross_join);
+    
+    this->all_nodes_.insert(static_cast<Node*>(cross_join));
+    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(cross_join));
+    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(cross_join));
     return cross_join;
   }
 
   template <typename InTypeLeft, typename InTypeRight, typename MatchType,
             typename OutType>
-  Node *Join(std::function<MatchType(const InTypeLeft &)> get_match_left,
+  TypedNode<OutType> *Join(std::function<MatchType(const InTypeLeft &)> get_match_left,
              std::function<MatchType(const InTypeRight &)> get_match_right,
              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,
-             Node *in_node_left, Node *in_node_right
+             TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right
              ) {
-    Node *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
+    TypedNode<OutType> *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
         in_node_left, in_node_right, get_match_left, get_match_right,
         join_layout);
-    this->all_nodes_.insert(join);
-    this->make_edge(in_node_left, join);
-    this->make_edge(in_node_right, join);
+    
+    this->all_nodes_.insert(static_cast<Node*>(join));
+    this->make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(join));
+    this->make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(join));
     return join;
   }
 
   template <typename InType, typename MatchType, typename OutType>
-  Node *AggregateBy(std::function<void(OutType *, InType *, int)> aggr_fun,
-                    std::function<void(InType *, MatchType *)> get_match, Node *in_node) {
+  TypedNode<OutType> *AggregateBy(std::function<void(OutType *, InType *, int)> aggr_fun,
+                    std::function<void(InType *, MatchType *)> get_match, TypedNode<InType> *in_node) {
 
-    Node *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match);
-    this->all_nodes_.insert(aggr);
-    this->make_edge(in_node, aggr);
+    TypedNode<OutType> *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match);
+    this->all_nodes_.insert(static_cast<Node*>(aggr));
+    this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(aggr));
     return aggr;
   }
 
@@ -174,22 +145,23 @@ public:
   loop that processes all nodes in topological order for <iters> times
   */
   void Process(int iters = 1) {
+    if(this->topo_graph_.empty()){
+        this->topo_sort();
+    }
     for (int i = 0; i < iters; i++) {
-      for (auto &graph : topo_graphs_) {
-        for (Node *n : graph) {
+        for (Node *n : topo_graph_) {
           n->Compute();
         }
       }
-    }
   }
 
 private:
-  void topo_sort(std::set<Node *> graph) {
+  void topo_sort() {
     std::set<Node *> visited;
     std::stack<Node *> stack;
 
     // for each node:
-    for (auto it = graph.begin(); it != graph.end(); it++) {
+    for (auto it = all_nodes_.begin(); it != all_nodes_.end(); it++) {
       Node *current = *it;
 
       if (visited.contains(current)) {
@@ -207,17 +179,9 @@ private:
     // save this topo_graph as list
     std::list<Node *> topo_order;
     while (!stack.empty()) {
-      topo_order.push_back(stack.top());
+      topo_graph_.push_back(stack.top());
       stack.pop();
     }
-
-    // mark all nodes as belonging to graph
-    // for(auto it = graph.begin(); it != graph.end(); it++){
-    //    this->all_nodes_[*it] = true;
-    //}
-
-    topo_graphs_.emplace(topo_order);
-
 
   }
   bool visit(Node *current, std::set<Node *> &visited,
@@ -261,7 +225,7 @@ private:
   std::set<Node *> sources_;
 
   // set of lists of nodes representing topological orders
-  std::set<std::list<Node *>> topo_graphs_;
+  std::list<Node *> topo_graph_;
 };
 
 } // namespace AliceDB

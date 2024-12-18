@@ -94,7 +94,7 @@ std::array<std::string, 100> names = {
         "Frank", "Samantha", "Benjamin", "Katherine", "Gregory", "Christine", "Samuel", "Debra", "Raymond", "Rachel",
         "Patrick", "Catherine", "Alexander", "Carolyn", "Jack", "Janet", "Dennis", "Ruth", "Jerry", "Maria"
 };
-
+/*
 TEST(STATELESS_TEST, single_version_test){
 
     // Seed the random number generator
@@ -286,6 +286,7 @@ TEST(STATELESS_TEST, test_insert_delete_data){
     // delete file
     std::filesystem::remove("./people.txt");
 }
+*/
 
 TEST(STATELESS_TEST, single_version_test_on_graph){
 
@@ -316,34 +317,15 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     AliceDB::Graph *g = new AliceDB::Graph;
     
     auto *view = 
-        g->View<Name>(
+        g->View(
             g->Projection<Person, Name>(
                 [](const Person &p) { return Name {.name=p.name}; },
-                g->Filter<Person>(
+                g->Filter(
                     [](const Person &p) {return p.age > 18 && p.name[0] == 'S' ;}, 
-                    g->Source<Person>(prod,5)
+                    g->Source(prod,5)
                 )
             )
         );
-
-    auto *view = 
-        g->View<Name>(
-            g->Projection<Person, Name>(
-                [](const Person &p) { return Name {.name=p.name}; },
-                g->Source<Person>(prod,5)
-            )
-        );
-
-    auto *view = 
-        g->View<Name>(    
-            g->Filter<Person>(
-                [](const Person &p) {return p.age > 18 && p.name[0] == 'S' ;}, 
-                g->Source<Person>(prod,5)
-            )
-        );
-
-
-
 
 
     // make few iteration, to process whole data

@@ -118,15 +118,17 @@ public:
    */
   virtual Queue *Output() = 0;
 
-  /** returns vector of all inputs to this node */
-  virtual std::vector<Node *> Inputs() = 0;
 };
+
+template<typename OutType>
+class TypedNode: public Node{};
+
 
 /* Source node is responsible for producing data through Compute function and
  * then writing output to both out_queue, and persistent table creator of this
  * node needs to specify how long delayed data might arrive
  */
-template <typename Type> class SourceNode : public Node {
+template <typename Type> class SourceNode : public TypedNode<Type> {
 public:
   SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500)
       : produce_{prod}, frontier_ts_{frontier_ts}, duration_us_{duration_us} {
@@ -178,8 +180,6 @@ public:
 
   Queue *Output() { return this->produce_queue_; }
 
-  // source has no inputs
-  std::vector<Node *> Inputs() { return {}; }
 
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
@@ -222,9 +222,9 @@ private:
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
 };
 
-template <typename Type> class SinkNode : public Node {
+template <typename Type> class SinkNode : public TypedNode<Type> {
 public:
-  SinkNode(Node *in_node)
+  SinkNode(TypedNode<Type> *in_node)
       : in_node_(in_node), in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->ts_ = get_current_timestamp();}
@@ -283,8 +283,6 @@ public:
 
   Queue *Output() { return nullptr; }
 
-  // source has no inputs
-  std::vector<Node *> Inputs() { return {this->in_node_}; }
 
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
@@ -310,7 +308,7 @@ private:
   // what is oldest timestamp that needs to be keept by this table
   timestamp ts_;
 
-  Node *in_node_;
+  TypedNode<Type> *in_node_;
   Queue *in_queue_;
 
   // we can treat whole tuple as a key, this will return it's index
@@ -324,9 +322,9 @@ private:
   std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
 };
 
-template <typename Type> class FilterNode : public Node {
+template <typename Type> class FilterNode : public TypedNode<Type> {
 public:
-  FilterNode(Node *in_node, std::function<bool(const Type &)> condition)
+  FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition)
       : condition_{condition}, in_node_{in_node}, in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
@@ -349,7 +347,6 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-  std::vector<Node *> Inputs() { return {this->in_node_}; }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -369,7 +366,7 @@ private:
   timestamp frontier_ts_;
 
   // track this for global timestamp state update
-  Node *in_node_;
+  TypedNode<Type> *in_node_;
   timestamp ts_;
 
   Queue *in_queue_;
@@ -377,9 +374,9 @@ private:
 };
 // projection can be represented by single node
 template <typename InType, typename OutType>
-class ProjectionNode : public Node {
+class ProjectionNode : public TypedNode<OutType> {
 public:
-  ProjectionNode(Node *in_node,
+  ProjectionNode(TypedNode<InType> *in_node,
                  std::function<OutType(const InType &)> projection)
       : projection_{projection}, in_node_{in_node},
         in_queue_{in_node->Output()}, frontier_ts_{in_node->GetFrontierTs()} {
@@ -405,7 +402,6 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-  std::vector<Node *> Inputs() { return {this->in_node_}; }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -421,7 +417,7 @@ private:
   std::function<OutType(const InType &)> projection_;
 
   // track this for global timestamp state update
-  Node *in_node_;
+  TypedNode<InType> *in_node_;
   timestamp ts_;
 
   // acquired from in node, this will be passed to output node
@@ -445,9 +441,9 @@ private:
                 if now negative emit -1
 
 */
-template <typename Type> class DistinctNode : public Node {
+template <typename Type> class DistinctNode : public TypedNode<Type> {
 public:
-  DistinctNode(Node *in_node)
+  DistinctNode(TypedNode<Type> *in_node)
       : in_queue_{in_node->Output()}, in_node_{in_node},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->ts_ = get_current_timestamp();
@@ -457,7 +453,6 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-  std::vector<Node *> Inputs() { return {this->in_node_}; }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -589,7 +584,7 @@ private:
 
   timestamp frontier_ts_;
 
-  Node *in_node_;
+  TypedNode<Type> *in_node_;
 
   Queue *in_queue_;
 
@@ -623,11 +618,11 @@ private:
         Union is PlusNode -> DistinctNode
         Except is plus with NegateLeft -> DistinctNode
 */
-template <typename Type> class PlusNode : public Node {
+template <typename Type> class PlusNode : public TypedNode<Type> {
 public:
   // we can make it subtractor by setting neg left to true, then left deltas are
   // reversed
-  PlusNode(Node *in_node_left, Node *in_node_right, bool negate_left)
+  PlusNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, bool negate_left)
       : negate_left_(negate_left), in_node_left_{in_node_left},
         in_node_right_{in_node_right}, in_queue_left_{in_node_left->Output()},
         in_queue_right_{in_node_right->Output()},
@@ -639,9 +634,6 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-  std::vector<Node *> Inputs() {
-    return {this->in_node_left_, this->in_node_right_};
-  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -691,8 +683,8 @@ private:
 
   timestamp frontier_ts_;
 
-  Node *in_node_left_;
-  Node *in_node_right_;
+  TypedNode<Type> *in_node_left_;
+  TypedNode<Type> *in_node_right_;
 
   Queue *in_queue_left_;
   Queue *in_queue_right_;
@@ -703,9 +695,9 @@ private:
 };
 
 template <typename LeftType, typename RightType, typename OutType>
-class StatefulBinaryNode : public Node {
+class StatefulBinaryNode : public TypedNode<OutType> {
 public:
-  StatefulBinaryNode(Node *in_node_left, Node *in_node_right)
+  StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right)
       : in_node_left_{in_node_left}, in_node_right_{in_node_right},
         in_queue_left_{in_node_left->Output()},
         in_queue_right_{in_node_right->Output()},
@@ -718,9 +710,6 @@ public:
 
   Queue *Output() { return this->out_queue_; }
 
-  std::vector<Node *> Inputs() {
-    return {this->in_node_left_, this->in_node_right_};
-  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
   virtual void Compute() = 0;
@@ -747,8 +736,8 @@ protected:
 
   timestamp frontier_ts_;
 
-  Node *in_node_left_;
-  Node *in_node_right_;
+  TypedNode<LeftType> *in_node_left_;
+  TypedNode<RightType> *in_node_right_;
 
   Queue *in_queue_left_;
   Queue *in_queue_right_;
@@ -781,7 +770,7 @@ protected:
 template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
 public:
-  IntersectNode(Node *in_node_left, Node *in_node_right)
+  IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right)
       : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right) {}
 
   void Compute() {
@@ -902,7 +891,7 @@ class CrossJoinNode
     : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
   CrossJoinNode(
-      Node *in_node_left, Node *in_node_right,
+      TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
   	std::function<OutType(const InTypeLeft&, const InTypeRight&)> join_layout)  
 	  : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
                                                              in_node_right),
@@ -1024,7 +1013,7 @@ template <typename InTypeLeft, typename InTypeRight, typename MatchType,
 class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
   JoinNode(
-      Node *in_node_left, Node *in_node_right,
+      TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
       std::function<MatchType(const InTypeLeft &)> get_match_left,
       std::function<MatchType(const InTypeRight &)> get_match_right,
   	  std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
@@ -1216,13 +1205,13 @@ private:
 // would emit new version from their oldest version
 
 template <typename InType, typename MatchType, typename OutType>
-class AggregateByNode : public Node {
+class AggregateByNode : public TypedNode<OutType> {
   // now output of aggr might be also dependent of count of in tuple, for
   // example i sum inserting 5 Alice's should influence it different than one
   // Alice but with min it should not, so it will be dependent on aggregate
   // function
 public:
-  AggregateByNode(Node *in_node,
+  AggregateByNode(TypedNode<InType> *in_node,
                   std::function<void(OutType *, InType *, int)> aggr_fun,
                   std::function<void(InType *, MatchType *)> get_match)
       : in_node_{in_node}, in_queue_{in_node->Output()},
@@ -1238,7 +1227,6 @@ public:
 
   timestamp GetFrontierTs() const {return this->frontier_ts_;}
   
-  std::vector<Node *> Inputs() { return {this->in_node_}; }
 
   // output should be single tuple with updated values for different times
   // so what we can do there? if we emit new count as part of value, then it
@@ -1355,7 +1343,7 @@ private:
 
   timestamp frontier_ts_;
 
-  Node *in_node_;
+  TypedNode<InType> *in_node_;
 
   Queue *in_queue_;
 

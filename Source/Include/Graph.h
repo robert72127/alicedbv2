@@ -146,8 +146,8 @@ public:
 
   template <typename InTypeLeft, typename InTypeRight, typename MatchType,
             typename OutType>
-  Node *Join(std::function<void(InTypeLeft *, MatchType*)> get_match_left,
-             std::function<void(InTypeRight *, MatchType*)> get_match_right,
+  Node *Join(std::function<MatchType(const InTypeLeft &)> get_match_left,
+             std::function<MatchType(const InTypeRight &)> get_match_right,
              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,
              Node *in_node_left, Node *in_node_right
              ) {

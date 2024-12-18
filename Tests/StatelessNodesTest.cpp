@@ -326,6 +326,26 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
             )
         );
 
+    auto *view = 
+        g->View<Name>(
+            g->Projection<Person, Name>(
+                [](const Person &p) { return Name {.name=p.name}; },
+                g->Source<Person>(prod,5)
+            )
+        );
+
+    auto *view = 
+        g->View<Name>(    
+            g->Filter<Person>(
+                [](const Person &p) {return p.age > 18 && p.name[0] == 'S' ;}, 
+                g->Source<Person>(prod,5)
+            )
+        );
+
+
+
+
+
     // make few iteration, to process whole data
     g->Process(10);
 

@@ -1025,8 +1025,8 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
   JoinNode(
       Node *in_node_left, Node *in_node_right,
-      std::function<void(InTypeLeft *, MatchType *)> get_match_left,
-      std::function<void(InTypeRight *, MatchType *)> get_match_right,
+      std::function<MatchType(const InTypeLeft &)> get_match_left,
+      std::function<MatchType(const InTypeRight &)> get_match_right,
   	  std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
       : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left,
                                                              in_node_right),
@@ -1064,8 +1064,7 @@ public:
     while (this->in_queue_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // get all matching on data from right
-      MatchType match;
-      this->get_match_left_(&in_left_tuple->data, &match);
+      MatchType match = this->get_match_left_(in_left_tuple->data);
       // all tuples from right table that match this left tuple
       for (auto tpl_it =
                this->match_to_tuple_right_[Key<MatchType>(match)].begin();
@@ -1090,8 +1089,7 @@ public:
     while (this->in_queue_right_->GetNext(&in_data_right)) {
       Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // get all matching on data from right
-      MatchType match;
-      this->get_match_right_(&in_right_tuple->data, &match);
+      MatchType match = this->get_match_right_(in_right_tuple->data);
       // all tuples from right table that match this left tuple
       for (auto tpl_it =
                this->match_to_tuple_left_[Key<MatchType>(match)].begin();
@@ -1125,8 +1123,7 @@ public:
         this->index_to_deltas_left_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_left_tuple->delta});
         // also insert matching for this tuple
-        MatchType left_match;
-        this->get_match_left_(&in_left_tuple->data, &left_match);
+        MatchType left_match = this->get_match_left_(in_left_tuple->data);
         if (!this->match_to_tuple_left_.contains(Key<MatchType>(left_match))) {
           this->match_to_tuple_left_[Key<MatchType>(left_match)] =
               std::list<std::array<char, sizeof(InTypeLeft)>>{};
@@ -1155,8 +1152,7 @@ public:
             std::multiset<Delta, DeltaComparator>{in_right_tuple->delta});
 
         // also insert matching for this tuple
-        MatchType right_match;
-        this->get_match_right_(&in_right_tuple->data, &right_match);
+        MatchType right_match = this->get_match_right_(in_right_tuple->data);
         if (!this->match_to_tuple_right_.contains(
                 Key<MatchType>(right_match))) {
           this->match_to_tuple_right_[Key<MatchType>(right_match)] =
@@ -1184,19 +1180,17 @@ public:
 
 private:
   inline bool Compare(InTypeLeft *left_data, InTypeRight *right_data) {
-    MatchType left_match;
-    this->get_match_left_(left_data, &left_match);
-    MatchType right_match;
-    this->get_match_right_(right_data, &right_match);
+    MatchType left_match = this->get_match_left_(*left_data);
+    MatchType right_match = this->get_match_right_(*right_data);
     return !std::memcmp(&left_match, &right_match, sizeof(MatchType));
   }
 
   // we need those functions to calculate matchfields from tuples on left and
   // righ
-  std::function<void(InTypeLeft *, MatchType *)> get_match_left_;
-  std::function<void(InTypeRight *, MatchType *)> get_match_right_;
-  
+  std::function<MatchType(const InTypeLeft &)> get_match_left_;
+  std::function<MatchType(const InTypeRight &)> get_match_right_;
   std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
+
 
   // we need to get corresponding tuples using only match chars, this maps will
   // help us with it

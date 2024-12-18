@@ -367,8 +367,8 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
     auto *view =
         g->View<DoubleNamedPerson>(
             g->Join<Person, Person, int,  DoubleNamedPerson>(
-                [](Person *l, int *age)  {*age = l->age;},
-                [](Person *r, int *age)  {*age = r->age;},
+                [](const Person &l)  { return l.age;},
+                [](const Person &r)  { return  r.age;},
                 [](const Person &left, const Person &right){
                     return DoubleNamedPerson{
                         .lname = left.name,

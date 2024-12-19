@@ -364,19 +364,20 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
             g->Join(
                 [](const Person &l)  { return l.age;},
                 [](const Person &r)  { return r.age;},
-                [](const Person &left, const Person &right){
-                    return DoubleNamedPerson{
+                [](const Person &left, const Person &right) { 
+                    return DoubleNamedPerson {
                         .lname = left.name,
                         .lsurname = left.surname,
                         .lage = left.age,
                         .rname = right.name,
                         .rsurname = right.surname,
-                        };
-                    },
+                    };
+                },
                 g->Source(prod_1, 0),
                 g->Source(prod_2,0)
             )
         );
+
     /*
     auto *view =
         g->View<DoubleNamedPerson>(
@@ -406,7 +407,7 @@ TEST(SIMPLESTATE_TEST, join_on_graph){
    std::filesystem::remove("./people2.txt");
    std::filesystem::remove("./people1.txt");
 }
-/*
+
 TEST(SIMPLESTATE_TEST, aggr_on_graphs){
 
     // Seed the random number generator
@@ -435,13 +436,13 @@ TEST(SIMPLESTATE_TEST, aggr_on_graphs){
     AliceDB::Graph *g = new AliceDB::Graph;
 
     auto *view = 
-        g->View<NameCumAge>(
-            g->AggregateBy<Person,char,NameCumAge>(
+        g->View(
+            g->AggregateBy(
                //aggregate function like sum etc
-               [](NameCumAge *n, Person *p, int start ){ std::memcpy(n->name, p->name, sizeof(n->name));  n->age += p->age;},
+               [](const Person &p, NameCumAge &n){  n.name = p.name, n.age+=p.age;},
                 // group by function, specifies what to group on
-                [](Person *in, char *on){std::memcpy(on, &in->name, sizeof(in->name)); },
-                g->Source<Person>(prod_1, 0)
+                [](const Person &in){ return Name{in.name};},
+                g->Source(prod_1, 0)
             )
         );
     
@@ -455,4 +456,3 @@ TEST(SIMPLESTATE_TEST, aggr_on_graphs){
 
    std::filesystem::remove("./people.txt");
 }
-*/

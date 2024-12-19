@@ -145,11 +145,31 @@ class Graph {
     return join;
   }
 
-  /** @todo this guy needs some work done, maybe even different api  */
-  template <typename InType, typename MatchType, typename OutType>
-  TypedNode<OutType>* AggregateBy(std::function<void(OutType*, InType*, int)> aggr_fun,
-                                  std::function<void(InType*, MatchType*)> get_match,
-                                  TypedNode<InType>* in_node) {
+  template <typename T>
+  struct function_traits : function_traits<decltype(&T::operator())> {};
+
+  template <typename ClassType, typename ReturnType, typename... Args>
+  struct function_traits<ReturnType (ClassType::*)(Args...) const> {
+    using return_type = ReturnType;
+    using arguments_tuple = std::tuple<Args...>;
+  };
+
+  template <typename F_aggr, typename F_getmatch, typename N>
+  auto AggregateBy(F_aggr aggr_fun, F_getmatch get_match, N* in_node)
+      -> TypedNode<std::remove_reference_t<
+          std::tuple_element_t<1, typename function_traits<F_aggr>::arguments_tuple>>>* {
+    using InType = typename N::value_type;
+
+    // extract parameter types from aggr_fun
+    using AggrTraits = function_traits<F_aggr>;
+    using AggrArgs = typename AggrTraits::arguments_tuple;
+
+    using FirstAggrArg = std::tuple_element_t<0, AggrArgs>;
+    using SecondAggrArg = std::tuple_element_t<1, AggrArgs>;
+
+    using OutType = std::remove_reference_t<SecondAggrArg>;
+    using MatchType = std::invoke_result_t<F_getmatch, const InType&>;
+
     TypedNode<OutType>* aggr =
         new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match);
     this->all_nodes_.insert(static_cast<Node*>(aggr));

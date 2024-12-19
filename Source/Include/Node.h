@@ -3,20 +3,20 @@
  * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
  * change after start command;
  *
- * for 1 we now need mechanism to stop allowing for new node creation after graph runtime is started,
- * prevent nodes from creating a circle, by throwing or something, and also to prevent node from being part of 2 graphs
+ * for 1 we now need mechanism to stop allowing for new node creation after graph runtime is
+ *started, prevent nodes from creating a circle, by throwing or something, and also to prevent
+ *node from being part of 2 graphs
  *
  *2)
  * for nodes that needs match fields store in rocks db <Key: match_fields| data
  *><Value Index> for normal ones <Key: data ><Value: Index>
  *
- * 
- * 
- * 3) we can store graph in each node, start with null and then set graph, if current graph is different than set throw runtime error
- * 
- * 
- * 
- * 
+ *
+ *
+ *
+ *
+ *
+ *
  * we also store <index, ts> <count> in separate storage to calculate deltas
  */
 
@@ -108,16 +108,17 @@ class Node {
    */
   virtual Queue *Output() = 0;
 
-  void set_graph(Graph *graph){
-	if(this->graph_ != nullptr && graph != this->graph_){
-		throw std::runtime_error("Node can't belong to two graphs\n");
-	}
-	this->graph_ = graph;
+  void set_graph(Graph *graph) {
+    if (this->graph_ != nullptr && graph != this->graph_) {
+      throw std::runtime_error("Node can't belong to two graphs\n");
+    }
+    this->graph_ = graph;
   }
 
-
-private:
- Graph *graph_ = nullptr;
+ private:
+  //  We can store graph in each node, start with null and then set graph, if current graph is
+  //  different than set throw runtime error
+  Graph *graph_ = nullptr;
 };
 
 template <typename OutType>
@@ -182,19 +183,19 @@ class SourceNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-	if(this->produce_queue_ == nullptr){
-    	this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-	} 
-	this->out_count++;
-	return this->produce_queue_; 
-	}
+    if (this->produce_queue_ == nullptr) {
+      this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    }
+    this->out_count++;
+    return this->produce_queue_;
+  }
 
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->produce_queue_->Clean();
-		this->clean_count = 0;
-	}
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->produce_queue_->Clean();
+      this->clean_count = 0;
+    }
   }
 
   void UpdateTimestamp(timestamp ts) {
@@ -300,13 +301,10 @@ class SinkNode : public TypedNode<Type> {
     }
   }
 
-  // since all sink does is store state we can treat inqueue as out queue when we use sink(view) as source
-  Queue *Output() {
-	return this->in_node_->Output();
-}
-  void CleanQueue(){
-	this->in_node_->CleanQueue();
-  }
+  // since all sink does is store state we can treat inqueue as out queue when we use sink(view)
+  // as source
+  Queue *Output() { return this->in_node_->Output(); }
+  void CleanQueue() { this->in_node_->CleanQueue(); }
 
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
@@ -333,7 +331,7 @@ class SinkNode : public TypedNode<Type> {
   timestamp ts_;
 
   TypedNode<Type> *in_node_;
-  // in queue is out queue :) 
+  // in queue is out queue :)
   Queue *in_queue_;
 
   // we can treat whole tuple as a key, this will return it's index
@@ -373,21 +371,19 @@ class FilterNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-	if(this->out_queue_ == nullptr){
-    	this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-	} 
-	this->out_count++;
-	return this->out_queue_; 
-	}
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->out_queue_->Clean();
-		this->clean_count = 0;
-	}
+    if (this->out_queue_ == nullptr) {
+      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    }
+    this->out_count++;
+    return this->out_queue_;
   }
-
-
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->out_queue_->Clean();
+      this->clean_count = 0;
+    }
+  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -445,20 +441,19 @@ class ProjectionNode : public TypedNode<OutType> {
   }
 
   Queue *Output() {
-	if(this->out_queue_ == nullptr){
-    	this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
-	} 
-	this->out_count++;
-	return this->out_queue_; 
-	}
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->out_queue_->Clean();
-		this->clean_count = 0;
-	}
+    if (this->out_queue_ == nullptr) {
+      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
+    }
+    this->out_count++;
+    return this->out_queue_;
   }
-
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->out_queue_->Clean();
+      this->clean_count = 0;
+    }
+  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -513,20 +508,19 @@ class DistinctNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-	if(this->out_queue_ == nullptr){
-    	this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-	} 
-	this->out_count++;
-	return this->out_queue_; 
-	}
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->out_queue_->Clean();
-		this->clean_count = 0;
-	}
+    if (this->out_queue_ == nullptr) {
+      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    }
+    this->out_count++;
+    return this->out_queue_;
   }
-
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->out_queue_->Clean();
+      this->clean_count = 0;
+    }
+  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -703,20 +697,19 @@ class PlusNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-	if(this->out_queue == nullptr){
-    	this->out_queue = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-	} 
-	this->out_count++;
-	return this->out_queue; 
-	}
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->produce_queue_->Clean();
-		this->clean_count = 0;
-	}
+    if (this->out_queue == nullptr) {
+      this->out_queue = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    }
+    this->out_count++;
+    return this->out_queue;
   }
-
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->produce_queue_->Clean();
+      this->clean_count = 0;
+    }
+  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -790,21 +783,20 @@ class StatefulBinaryNode : public TypedNode<OutType> {
     this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
   }
 
-Queue *Output() {
-	if(this->out_queue_ == nullptr){
-    	this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE*2, sizeof(Tuple<OutType>));
-	} 
-	this->out_count++;
-	return this->out_queue_; 
-	}
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->out_queue_->Clean();
-		this->clean_count = 0;
-	}
+  Queue *Output() {
+    if (this->out_queue_ == nullptr) {
+      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+    }
+    this->out_count++;
+    return this->out_queue_;
   }
-
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->out_queue_->Clean();
+      this->clean_count = 0;
+    }
+  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
   virtual void Compute() = 0;
@@ -1266,8 +1258,8 @@ class AggregateByNode : public TypedNode<OutType> {
   // function
  public:
   AggregateByNode(TypedNode<InType> *in_node,
-                  std::function<void(OutType *, InType *, int)> aggr_fun,
-                  std::function<void(InType *, MatchType *)> get_match)
+                  std::function<void(const InType &, OutType &)> aggr_fun,
+                  std::function<MatchType(const InType &)> get_match)
       : in_node_{in_node},
         in_queue_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()},
@@ -1280,20 +1272,19 @@ class AggregateByNode : public TypedNode<OutType> {
   }
 
   Queue *Output() {
-	if(this->out_queue == nullptr){
-    	this->out_queue = new Queue(DEFAULT_QUEUE_SIZE*2, sizeof(Tuple<OutType>));
-	} 
-	this->out_count++;
-	return this->out_queue; 
-	}
-  void CleanQueue(){
-	clean_count++;
-	if(this->clean_count == this->out_count){
-		this->produce_queue_->Clean();
-		this->clean_count = 0;
-	}
+    if (this->out_queue_ == nullptr) {
+      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+    }
+    this->out_count++;
+    return this->out_queue_;
   }
-
+  void CleanQueue() {
+    clean_count++;
+    if (this->clean_count == this->out_count) {
+      this->out_queue_->Clean();
+      this->clean_count = 0;
+    }
+  }
 
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
@@ -1316,8 +1307,7 @@ class AggregateByNode : public TypedNode<OutType> {
         this->index_to_deltas_.emplace_back(
             std::multiset<Delta, DeltaComparator>{in_tuple->delta});
 
-        MatchType match;
-        this->get_match_(&in_tuple->data, &match);
+        MatchType match = this->get_match_(in_tuple->data);
         if (!this->match_to_tuple_.contains(Key<MatchType>(match))) {
           this->match_to_tuple_[Key<MatchType>(match)] =
               std::list<std::array<char, sizeof(InType)>>{};
@@ -1338,8 +1328,9 @@ class AggregateByNode : public TypedNode<OutType> {
         if (this->emited_.contains(it->first)) {
           for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
             int index = this->tuple_to_index[*data_it];
-            aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
-                      this->index_to_deltas_[index].rbegin()->count);
+            for (int i = 0; i < this->index_to_deltas_[index].rbegin()->count; i++) {
+              aggr_fun_(*reinterpret_cast<InType *>(data_it->data()), accum);
+            }
           }
 
           // emit delete tuple
@@ -1364,8 +1355,9 @@ class AggregateByNode : public TypedNode<OutType> {
 
         for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
           int index = this->tuple_to_index[*data_it];
-          aggr_fun_(&accum, reinterpret_cast<InType *>(data_it->data()),
-                    this->index_to_deltas_[index].rbegin()->count);
+          for (int i = 0; i < this->index_to_deltas_[index].rbegin()->count; i++) {
+            aggr_fun_(*reinterpret_cast<InType *>(data_it->data()), accum);
+          }
         }
 
         // emit delete tuple
@@ -1421,8 +1413,9 @@ class AggregateByNode : public TypedNode<OutType> {
                      std::list<std::array<char, sizeof(InType)>>, KeyHash<MatchType>>
       match_to_tuple_;
 
-  std::function<void(InType *, MatchType *)> get_match_;
-  std::function<void(OutType *, InType *, int)> aggr_fun_;
+  std::function<void(InType &, OutType &)> aggr_fun_;
+  std::function<MatchType(InType &)> get_match_;
+
   OutType initial_value_;
 
   std::set<std::array<char, sizeof(MatchType)>> emited_;
@@ -1430,5 +1423,5 @@ class AggregateByNode : public TypedNode<OutType> {
   std::mutex node_mutex;
 };
 
-} // namespace AliceDB
+}  // namespace AliceDB
 #endif

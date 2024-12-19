@@ -1,21 +1,10 @@
-/** @todo 1) allow for attaching new nodes to input/outut 2) switch to
+/** @todo  switch to persistent storage, make sure timestamp updates make sense
  *
  * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
  * change after start command;
  *
- * for 1 we now need mechanism to stop allowing for new node creation after graph runtime is
- *started, prevent nodes from creating a circle, by throwing or something, and also to prevent
- *node from being part of 2 graphs
- *
- *2)
  * for nodes that needs match fields store in rocks db <Key: match_fields| data
  *><Value Index> for normal ones <Key: data ><Value: Index>
- *
- *
- *
- *
- *
- *
  *
  * we also store <index, ts> <count> in separate storage to calculate deltas
  */
@@ -127,6 +116,7 @@ class TypedNode : public Node {
   using value_type = OutType;
 };
 
+
 /* Source node is responsible for producing data through Compute function and
  * then writing output to both out_queue, and persistent table creator of this
  * node needs to specify how long delayed data might arrive
@@ -183,9 +173,6 @@ class SourceNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-    if (this->produce_queue_ == nullptr) {
-      this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-    }
     this->out_count++;
     return this->produce_queue_;
   }
@@ -441,9 +428,6 @@ class ProjectionNode : public TypedNode<OutType> {
   }
 
   Queue *Output() {
-    if (this->out_queue_ == nullptr) {
-      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
-    }
     this->out_count++;
     return this->out_queue_;
   }
@@ -508,9 +492,6 @@ class DistinctNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-    if (this->out_queue_ == nullptr) {
-      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-    }
     this->out_count++;
     return this->out_queue_;
   }
@@ -697,9 +678,6 @@ class PlusNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-    if (this->out_queue == nullptr) {
-      this->out_queue = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-    }
     this->out_count++;
     return this->out_queue;
   }
@@ -784,9 +762,6 @@ class StatefulBinaryNode : public TypedNode<OutType> {
   }
 
   Queue *Output() {
-    if (this->out_queue_ == nullptr) {
-      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
-    }
     this->out_count++;
     return this->out_queue_;
   }
@@ -1272,9 +1247,6 @@ class AggregateByNode : public TypedNode<OutType> {
   }
 
   Queue *Output() {
-    if (this->out_queue_ == nullptr) {
-      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
-    }
     this->out_count++;
     return this->out_queue_;
   }
@@ -1324,7 +1296,7 @@ class AggregateByNode : public TypedNode<OutType> {
 
       // iterate by match type
       for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
-        OutType accum = this->initial_value_;
+        OutType accum;
         if (this->emited_.contains(it->first)) {
           for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
             int index = this->tuple_to_index[*data_it];
@@ -1351,7 +1323,7 @@ class AggregateByNode : public TypedNode<OutType> {
       // iterate by match type this time we will insert, after compaction prev
       // index should be lst value and we want to insert it
       for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
-        OutType accum = this->initial_value_;
+        OutType accum;
 
         for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
           int index = this->tuple_to_index[*data_it];
@@ -1416,7 +1388,6 @@ class AggregateByNode : public TypedNode<OutType> {
   std::function<void(InType &, OutType &)> aggr_fun_;
   std::function<MatchType(InType &)> get_match_;
 
-  OutType initial_value_;
 
   std::set<std::array<char, sizeof(MatchType)>> emited_;
 

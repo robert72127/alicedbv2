@@ -24,6 +24,7 @@ class Graph {
     auto* source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
     all_nodes_.insert(static_cast<Node*>(source_node));
     sources_.insert(static_cast<Node*>(source_node));
+    source_node->set_graph(this);
     return source_node;
   }
 
@@ -34,6 +35,7 @@ class Graph {
     make_edge(static_cast<Node*>(in_node), static_cast<Node*>(sink));
     all_nodes_.insert(static_cast<Node*>(sink));
     sinks_.insert(static_cast<Node*>(sink));
+    sink->set_graph(this);
     return sink;
   }
 
@@ -43,6 +45,7 @@ class Graph {
     auto* filter = new FilterNode<Type>(in_node, condition);
     all_nodes_.insert(static_cast<Node*>(filter));
     make_edge(static_cast<Node*>(in_node), static_cast<Node*>(filter));
+    filter->set_graph(this);
     return filter;
   }
 
@@ -55,6 +58,7 @@ class Graph {
         new ProjectionNode<InType, OutType>(in_node, projection_function);
     all_nodes_.insert(static_cast<Node*>(projection));
     make_edge(static_cast<Node*>(in_node), static_cast<Node*>(projection));
+    projection->set_graph(this);
     return projection;
   }
 
@@ -64,6 +68,7 @@ class Graph {
     auto* distinct = new DistinctNode<Type>(in_node);
     all_nodes_.insert(static_cast<Node*>(distinct));
     make_edge(static_cast<Node*>(in_node), static_cast<Node*>(distinct));
+    distinct->set_graph(this);
     return distinct;
   }
 
@@ -74,6 +79,7 @@ class Graph {
     all_nodes_.insert(static_cast<Node*>(plus));
     make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
     make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
+    plus->set_graph(this);
     return Distinct(plus);
   }
 
@@ -84,6 +90,7 @@ class Graph {
     all_nodes_.insert(static_cast<Node*>(plus));
     make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(plus));
     make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(plus));
+    plus->set_graph(this);
     return Distinct(plus);
   }
 
@@ -94,6 +101,7 @@ class Graph {
     all_nodes_.insert(static_cast<Node*>(intersect));
     make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(intersect));
     make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(intersect));
+    intersect->set_graph(this);
     return Distinct(intersect);
   }
 
@@ -110,6 +118,7 @@ class Graph {
     all_nodes_.insert(static_cast<Node*>(cross_join));
     make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(cross_join));
     make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(cross_join));
+    cross_join->set_graph(this);
     return cross_join;
   }
 
@@ -132,6 +141,7 @@ class Graph {
     all_nodes_.insert(static_cast<Node*>(join));
     make_edge(static_cast<Node*>(in_node_left), static_cast<Node*>(join));
     make_edge(static_cast<Node*>(in_node_right), static_cast<Node*>(join));
+    join->set_graph(this);
     return join;
   }
 
@@ -144,6 +154,7 @@ class Graph {
         new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match);
     this->all_nodes_.insert(static_cast<Node*>(aggr));
     this->make_edge(static_cast<Node*>(in_node), static_cast<Node*>(aggr));
+    aggr->set_graph(this);
     return aggr;
   }
 

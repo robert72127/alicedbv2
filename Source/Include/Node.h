@@ -3,34 +3,20 @@
  * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
  * change after start command;
  *
- *
- *
- * persistent storage */
-/**
- *	actually don't allow attaching new nodes during runtime, nodes have to
- *be predefined at the start so single source might support multiple sinks, but
- *don't allow for modiication during runtime
- *
- *
- *
- *
- * ok let's think about how to implement this 1 problem)
- * first we actaully need to store vector of out_nodes and not single out_node,
- *it's just that for all other nodes than sink source, this vector will always
- *have 1 element
- *
- * When all out_queues are synchronized problem becomes very easy in fact,
- *operation look like now but instead of inserting to one out_queue we insert
- *into all out_queues,
- *
- * but before that we have one queue that is online and other that first need to
- *process all stale data ok let's add extra method to all
- *
+ * for 1 we now need mechanism to stop allowing for new node creation after graph runtime is started,
+ * prevent nodes from creating a circle, by throwing or something, and also to prevent node from being part of 2 graphs
  *
  *2)
  * for nodes that needs match fields store in rocks db <Key: match_fields| data
  *><Value Index> for normal ones <Key: data ><Value: Index>
  *
+ * 
+ * 
+ * 3) we can store graph in each node, start with null and then set graph, if current graph is different than set throw runtime error
+ * 
+ * 
+ * 
+ * 
  * we also store <index, ts> <count> in separate storage to calculate deltas
  */
 
@@ -69,6 +55,9 @@ struct KeyHash {
 #define DEFAULT_QUEUE_SIZE (200)
 
 namespace AliceDB {
+
+// we need this definition to store graph pointer in node
+class Graph;
 
 // generic compact deltas work's for almost any kind of node (doesn't work for
 // aggregations)
@@ -119,6 +108,16 @@ class Node {
    */
   virtual Queue *Output() = 0;
 
+  void set_graph(Graph *graph){
+	if(this->graph_ != nullptr && graph != this->graph_){
+		throw std::runtime_error("Node can't belong to two graphs\n");
+	}
+	this->graph_ = graph;
+  }
+
+
+private:
+ Graph *graph_ = nullptr;
 };
 
 template <typename OutType>

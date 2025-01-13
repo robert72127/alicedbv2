@@ -28,8 +28,8 @@ class Producer {
   virtual bool next(Tuple<Type> *storage) = 0;
 };
 
-// assume format:
-// insert|delete ts struct fields
+// assumes format:
+// insert/delete | timestamp | struct fields
 template <typename Type>
 class FileProducer : public Producer<Type> {
  public:

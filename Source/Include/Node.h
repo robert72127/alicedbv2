@@ -358,9 +358,6 @@ class FilterNode : public TypedNode<Type> {
   }
 
   Queue *Output() {
-    if (this->out_queue_ == nullptr) {
-      this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
-    }
     this->out_count++;
     return this->out_queue_;
   }
@@ -679,12 +676,12 @@ class PlusNode : public TypedNode<Type> {
 
   Queue *Output() {
     this->out_count++;
-    return this->out_queue;
+    return this->out_queue_;
   }
   void CleanQueue() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->produce_queue_->Clean();
+      this->out_queue_->Clean();
       this->clean_count = 0;
     }
   }

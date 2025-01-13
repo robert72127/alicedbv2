@@ -9,6 +9,7 @@
 #include "Producer.h"
 #include "Common.h"
 #include "Tuple.h"
+#include "WorkerPool.h"
 
 struct Person {
     std::array<char,50> name;
@@ -41,9 +42,6 @@ bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
                 return false; // parse error
             }
 
-            // Assign parsed fields to *out.
-            // Assuming Type has the fields in the same order:
-            
             // Copy name to the char array field. Ensure no overflow:
             std::strncpy(p->data.name.data(), name, sizeof(p->data.name));
             std::strncpy(p->data.surname.data(), surname, sizeof(p->data.surname));
@@ -311,10 +309,10 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     file_writer.close();
 
 
-    AliceDB::Producer<Person> *prod = new AliceDB::FileProducer<Person>(file_name,parseLine);
-    
-    AliceDB::Graph *g = new AliceDB::Graph;
-    
+    AliceDB::Producer<Person> *prod = new AliceDB::FileProducer<Person>(file_name,parseLine);    
+    AliceDB::WorkerPool *pool = new AliceDB::WorkerPool(1);
+    AliceDB::Graph *g = new AliceDB::Graph();
+
     auto *view = 
         g->View(
             g->Projection(
@@ -326,9 +324,20 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
             )
         );
 
+    pool->Start(g);
 
+    // bussy wait to test if input will get updated
+    int j = 0;
+    while(j < 10000000){
+        j++;
+    }
+
+    std::cout<<j<<std::endl;
     // make few iteration, to process whole data
-    g->Process(10);
+    //g->Process(10);
+
+
+
 
     // debugging
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);

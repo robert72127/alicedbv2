@@ -239,7 +239,7 @@ TEST(SIMPLESTATE_TEST, union_graph){
     
     auto *view =
         g->View( // or except or intersect
-            g->Intersect(
+            g->Union(
                 g->Source(prod_1, 0),
                 g->Source(prod_2,0)
             )
@@ -440,8 +440,8 @@ TEST(SIMPLESTATE_TEST, aggr_on_graphs){
             g->AggregateBy(
                //aggregate function like sum etc
                [](const Person &p, NameCumAge &n){  n.name = p.name, n.age+=p.age;},
-                // group by function, specifies what to group on
-                [](const Person &in){ return Name{in.name};},
+               // group by function, specifies what to group on
+               [](const Person &in){ return Name{in.name};},
                 g->Source(prod_1, 0)
             )
         );

@@ -61,17 +61,18 @@ namespace AliceDB{
 /**
  * @brief for now this is just wrapper around stl structures, but putting this into separate class will make implementing
  * real storage easier
+ * 
+ * later we will switch to using single table rockdb with table_name_prefix to separate deltas from different tables
  */
 class DeltaStorage{
 public:
     /** 
      * @brief insert new delta into the table
      */
-    void Insert(std::string table_name, index idx, const Delta &d ){        
+    bool Insert(std::string table_name, index idx, const Delta &d ){        
         // get correct table, and if it doesn't exists, create it
         if(!this->tables_.contains(table_name)){
             this->tables_[table_name] = std::vector<std::multiset<Delta, DeltaComparator>>();
-            this->table_next_index_[table_name] = 0;     
         }
         std::vector<std::multiset<Delta, DeltaComparator>> & index_to_deltas_ref = this->tables_[table_name];
 
@@ -79,7 +80,6 @@ public:
         size_t itd_size = index_to_deltas_ref.size();
         while(idx >= itd_size ){
             index_to_deltas_ref.push_back({});
-            this->table_next_index_[table_name]++;
         }
         
         std::multiset<Delta, DeltaComparator> & deltas_ref = index_to_deltas_ref[idx];
@@ -142,7 +142,6 @@ public:
      */
     bool DeleteTable(std::string table_name){
         this->tables_.erase(table_name);
-        this->table_next_index_.erase(table_name);
     }
 
 private:
@@ -154,12 +153,43 @@ private:
      * multiset of deltas -> deltas sorted by timestamp
      */
     std::map <std::string, std::vector<std::multiset<Delta, DeltaComparator>> > tables_;
-    // with what index should next value be inserted
-    std::map<std::string, int> table_next_index_;
-
-
 };
 
 }
+
+/**
+ * @brief 
+ * Storage for normal: Key|Value mappings, that is for:
+ *  Key|index mapping -> this is always one to one
+ *  and for 
+ *  MatchField | Key -> this is many to one
+ * 
+ *  best way would be to use some standard storage technology with buffer pool and b-tree | hashtable.
+ * 
+ *  What api do we need?
+ *  We might want to switch to iterator api, but for now let's use this simple one.
+ *  We will use normal bufferpool with disk backed storage
+ * 
+ *
+ * 
+ *  What api do we need for 
+ * 
+ *  for match-> tuple -> we need b-tree based search, and normal insertion with possible duplicated match keys
+ * 
+ *  for tuple -> index we need b-tree based search,heap search and normal insertion 
+ *  */
+
+template <typename K, typename V>
+class Table{
+
+    KVStorage(std::string table_name);
+
+    /** @brief returns vector of values associated with given key */
+    std::vector<V> Get(K key);
+    
+    /** @brief inserts new key value pair into the table */
+    bool Put(K key, V value);
+
+};
 
 #endif

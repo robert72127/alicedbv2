@@ -265,7 +265,7 @@ class SinkNode : public TypedNode<Type> {
     this->in_node_->CleanQueue();
   }
 
-  // print state of table at this moment
+  // print state of table at this moment, for debugging only
   void Print(timestamp ts, std::function<void(const char *)> print) {
     for (auto &pair : this->tuple_to_index_) {
       auto &current_data = pair.first;
@@ -647,11 +647,6 @@ class DistinctNode : public TypedNode<Type> {
   std::vector<bool> emited_;
 };
 
-/**
- * @brief this will implement all but Compute functions for Stateful binary
- * nodes
- */
-
 // stateless binary operator, combines data from both in queues and writes them
 // to out_queue
 /*
@@ -745,6 +740,10 @@ class PlusNode : public TypedNode<Type> {
   bool negate_left_;
 };
 
+/**
+ * @brief this will implement all but Compute functions for Stateful binary
+ * nodes
+ */
 template <typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public TypedNode<OutType> {
  public:

@@ -50,32 +50,23 @@ void proj_names(Person *p, Name *out){
     std::memcpy(&out->name, &p->name, 50);
 }
 
+bool parseLine(std::istringstream &iss, Person *p) {
 
-
-bool parseLine(const std::string &line, AliceDB::Tuple<Person> *p) {
-
-            std::istringstream iss(line);
-            AliceDB::timestamp ts;
-            std::string insert_delete;
             char name[50];
             char surname[50];
             int age;
 
-            if (!(iss >> insert_delete >> ts >> name >> surname >> age)) {
+            if (!(iss >> name >> surname >> p->age)) {
                 return false; // parse error
             }
 
-            // Assign parsed fields to *out.
-            // Assuming Type has the fields in the same order:
-            
             // Copy name to the char array field. Ensure no overflow:
-            std::strncpy(p->data.name.data(), name, sizeof(p->data.name));
-            std::strncpy(p->data.surname.data(), surname, sizeof(p->data.surname));
-            p->data.age = age;
-            p->delta.count = (insert_delete == "insert")? 1 : -1;
-            p->delta.ts = ts;
+            std::strncpy(p->name.data(), name, sizeof(p->name));
+            std::strncpy(p->surname.data(), surname, sizeof(p->surname));
+            
             return true;
 }
+
  
 void print_people(const char *data){
     const Person *p = reinterpret_cast<const Person*>(data);

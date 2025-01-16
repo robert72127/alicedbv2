@@ -1,5 +1,5 @@
-#ifndef ALICEDBcache
-#define ALICEDBcache
+#ifndef ALICEDBCACHE
+#define ALICEDBCACHE
 
 #include <cstdlib>
 #include <cstring>
@@ -61,6 +61,15 @@ struct Cache {
    * and reset internal state
    */
   void Clean() {
+    this->last_10_max_size_ =  this->last_10_max_size_ >  this->current_size_? this->last_10_max_size_ : this->current_size_;
+    this->check_resize_++;
+    if (this->check_resize_ > 9){
+      if(this->cache_size_ > this->last_10_max_size_){
+        this->Resize(last_10_max_size_);
+      }
+      this->check_resize_=0;
+    }
+
     std::memset(this->storage_, 0, cache_size_);
     this->current_offset_ = 0;
     this->current_size_ = 0;
@@ -96,8 +105,9 @@ struct Cache {
 
  private:
   bool Resize(size_t new_size) {
-    if (new_size <= this->cache_size_) {
-      // No point in resizing to something smaller or equal
+    
+    // Resize down only from statistics
+    if (new_size <= this->cache_size_ && this->check_resize_ < 9) {
       return false;
     }
 
@@ -116,7 +126,13 @@ struct Cache {
     this->storage_ = new_storage;
     this->cache_size_ = new_size;
     return true;
-  }
+
+ }
+  // statistics
+  // if we have statistics from last 10 usages, resize to max size of those if it's smaller than current one
+  size_t last_10_max_size_;
+  int check_resize_;
+
 };
 
 }  // namespace AliceDB

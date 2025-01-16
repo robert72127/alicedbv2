@@ -35,7 +35,7 @@ class FileProducer : public Producer<Type> {
  public:
   // produce's data from strings in file
   FileProducer(const std::string &filename,
-               std::function<bool(std::istringstream &, Type*)> produce)
+               std::function<bool(std::istringstream &, Type *)> produce)
       : current_line_(0), produce_{produce} {
     file_stream_.open(filename);
     if (!file_stream_.is_open()) {
@@ -66,17 +66,16 @@ class FileProducer : public Producer<Type> {
     std::istringstream iss(line);
     AliceDB::timestamp ts;
     std::string insert_delete;
- 
+
     if (!(iss >> insert_delete >> ts)) {
-        return false; // parse error
+      return false;  // parse error
     }
 
-    storage->delta.count = (insert_delete == "insert")? 1 : -1;
+    storage->delta.count = (insert_delete == "insert") ? 1 : -1;
     storage->delta.ts = ts;
-    
-    return this->produce_(iss, &storage->data); 
 
- }
+    return this->produce_(iss, &storage->data);
+  }
 
  private:
   /**
@@ -87,8 +86,8 @@ class FileProducer : public Producer<Type> {
    * - sscanf if you know the exact format string.
    */
 
-  //std::function<bool(std::string, Tuple<Type> *)> produce_;
-  std::function<bool(std::istringstream &, Type*)> produce_;
+  // std::function<bool(std::string, Tuple<Type> *)> produce_;
+  std::function<bool(std::istringstream &, Type *)> produce_;
   std::ifstream file_stream_;
   unsigned long current_line_;
 };

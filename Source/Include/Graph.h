@@ -14,11 +14,11 @@
 #include "Node.h"
 
 namespace AliceDB {
-/** 
+/**
  * @brief Graph of relational algebra processing nodes
  * where operators such as Filter etc are wrappers around Node with type inference,
  * and automatically keep track of node inputs and graph they belong to
- * 
+ *
  * Graph is started by calling Process function, after that no new node can be added
  */
 class Graph {
@@ -195,10 +195,10 @@ class Graph {
     return aggr;
   }
 
-  /** 
+  /**
    * @brief loop that processes all nodes in topological order for <iters> iterations
    * this can be called by worker thread to process current graph
-  */
+   */
   void Process(int iters = 1) {
     // after calling process once graph no longer will accept adding new nodes
     this->is_graph_running_ = true;
@@ -271,8 +271,8 @@ class Graph {
     }
   }
 
-  void check_running(){
-    if (this->is_graph_running_){
+  void check_running() {
+    if (this->is_graph_running_) {
       throw std::runtime_error("Graph is already running, can't add new nodes to it\n");
     }
   }
@@ -286,7 +286,6 @@ class Graph {
 
   // List of nodes representing topological orders
   std::list<Node*> topo_graph_;
-
 
   bool is_graph_running_ = false;
 };

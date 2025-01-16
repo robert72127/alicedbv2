@@ -116,7 +116,6 @@ class TypedNode : public Node {
   using value_type = OutType;
 };
 
-
 /* Source node is responsible for producing data through Compute function and
  * then writing output to both out_queue, and persistent table creator of this
  * node needs to specify how long delayed data might arrive
@@ -474,7 +473,8 @@ class ProjectionNode : public TypedNode<OutType> {
         if previouse state was 1
                 if now positive don't emit
                 if now negative emit -1
-
+        if there was no previous state:
+          if now positive emit 1
 */
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {
@@ -508,7 +508,6 @@ class DistinctNode : public TypedNode<Type> {
     while (this->in_queue_->GetNext(&in_data_)) {
       const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
       // if this data wasn't present insert with new index
-
       if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
         index match_index = this->next_index_;
         this->next_index_++;
@@ -824,7 +823,6 @@ class StatefulBinaryNode : public TypedNode<OutType> {
 };
 
 // this is node behind Intersect
-/** @todo it needs better name :) */
 template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
  public:
@@ -1089,8 +1087,8 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       for (auto tpl_it = this->match_to_tuple_right_[Key<MatchType>(match)].begin();
            tpl_it != this->match_to_tuple_right_[Key<MatchType>(match)].end(); tpl_it++) {
         // now iterate all version of this tuple
-        std::array<char, sizeof(InTypeLeft)> left_key = *tpl_it;
-        int idx = this->tuple_to_index_right[left_key];
+        std::array<char, sizeof(InTypeRight)> right_key = *tpl_it;
+        int idx = this->tuple_to_index_right[right_key];
 
         for (auto it = this->index_to_deltas_right_[idx].begin();
              it != this->index_to_deltas_right_[idx].end(); it++) {
@@ -1099,21 +1097,24 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
           out_tuple->data = this->join_layout_(
-              in_left_tuple->data, *reinterpret_cast<InTypeRight *>(left_key.data()));
+              in_left_tuple->data, *reinterpret_cast<InTypeRight *>(right_key.data()));
         }
       }
     }
+
+
     // compute right queue against left table
     while (this->in_queue_right_->GetNext(&in_data_right)) {
-      Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
+      Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // get all matching on data from right
       MatchType match = this->get_match_right_(in_right_tuple->data);
       // all tuples from right table that match this left tuple
+
       for (auto tpl_it = this->match_to_tuple_left_[Key<MatchType>(match)].begin();
            tpl_it != this->match_to_tuple_left_[Key<MatchType>(match)].end(); tpl_it++) {
         // now iterate all version of this tuple
-        std::array<char, sizeof(InTypeRight)> right_key = *tpl_it;
-        int idx = this->tuple_to_index_left[right_key];
+        std::array<char, sizeof(InTypeLeft)> left_key = *tpl_it;
+        int idx = this->tuple_to_index_left[left_key];
 
         for (auto it = this->index_to_deltas_left_[idx].begin();
              it != this->index_to_deltas_left_[idx].end(); it++) {
@@ -1121,8 +1122,8 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
-          out_tuple->data = this->join_layout_(
-              *reinterpret_cast<InTypeLeft *>(right_key.data()), in_right_tuple->data);
+          out_tuple->data = this->join_layout_(*reinterpret_cast<InTypeLeft *>(left_key.data()),
+                                               in_right_tuple->data);
         }
       }
     }
@@ -1152,6 +1153,7 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
     }
 
+    
     while (this->in_queue_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
@@ -1173,11 +1175,12 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
 
       else {
-        index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
-        this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
+        index match_index = this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)];
+        this->index_to_deltas_right_[match_index].insert(in_right_tuple->delta);
       }
     }
 
+    
     // clean in_queues
     this->in_node_left_->CleanQueue();
     this->in_node_right_->CleanQueue();
@@ -1383,7 +1386,6 @@ class AggregateByNode : public TypedNode<OutType> {
 
   std::function<void(InType &, OutType &)> aggr_fun_;
   std::function<MatchType(InType &)> get_match_;
-
 
   std::set<std::array<char, sizeof(MatchType)>> emited_;
 

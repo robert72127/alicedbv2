@@ -24,7 +24,7 @@
 
 #include "Common.h"
 #include "Producer.h"
-#include "Queue.h"
+#include "EdgeCache.h"
 
 template <typename Type>
 std::array<char, sizeof(Type)> Key(const Type &type) {
@@ -41,7 +41,7 @@ struct KeyHash {
   }
 };
 
-#define DEFAULT_QUEUE_SIZE (200)
+#define DEFAULT_CACHE_SIZE (200)
 
 namespace AliceDB {
 
@@ -84,7 +84,7 @@ class Node {
 
   virtual void Compute() = 0;
 
-  virtual void CleanQueue() = 0;
+  virtual void CleanCache() = 0;
   /**
    * @brief update lowest ts this node will need to hold
    */
@@ -93,9 +93,9 @@ class Node {
   virtual timestamp GetFrontierTs() const = 0;
 
   /**
-   * @brief returns Queue corresponding to output from this Tuple
+   * @brief returns cache corresponding to output from this Tuple
    */
-  virtual Queue *Output() = 0;
+  virtual Cache *Output() = 0;
 
   void set_graph(Graph *graph) {
     if (this->graph_ != nullptr && graph != this->graph_) {
@@ -117,7 +117,7 @@ class TypedNode : public Node {
 };
 
 /* Source node is responsible for producing data through Compute function and
- * then writing output to both out_queue, and persistent table creator of this
+ * then writing output to both out_cache, and persistent table creator of this
  * node needs to specify how long delayed data might arrive
  */
 template <typename Type>
@@ -125,7 +125,7 @@ class SourceNode : public TypedNode<Type> {
  public:
   SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500)
       : produce_{prod}, frontier_ts_{frontier_ts}, duration_us_{duration_us} {
-    this->produce_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
     this->ts_ = get_current_timestamp();
   }
 
@@ -135,22 +135,22 @@ class SourceNode : public TypedNode<Type> {
     auto end = start + duration;
     int cnt = 0;
     char *prod_data;
-    // produce some data with time limit set, into produce_queue
+    // produce some data with time limit set, into produce_cache
     while (std::chrono::steady_clock::now() < end) {
-      produce_queue_->ReserveNext(&prod_data);
+      produce_cache_->ReserveNext(&prod_data);
       Tuple<Type> *prod_tuple = (Tuple<Type> *)(prod_data);
       prod_tuple->delta.ts = get_current_timestamp();
       if (!this->produce_->next(prod_tuple)) {
-        // we reserved but won't insert so have to remove it from queue
-        produce_queue_->RemoveLast();
+        // we reserved but won't insert so have to remove it from cache
+        produce_cache_->RemoveLast();
         break;
       }
       cnt++;
     }
 
-    // insert data from produce_queue into the table
+    // insert data from produce_cache into the table
     const char *in_data;
-    while (this->produce_queue_->GetNext(&in_data)) {
+    while (this->produce_cache_->GetNext(&in_data)) {
       Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
@@ -171,15 +171,15 @@ class SourceNode : public TypedNode<Type> {
     }
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->produce_queue_;
+    return this->produce_cache_;
   }
 
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->produce_queue_->Clean();
+      this->produce_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -211,9 +211,9 @@ class SourceNode : public TypedNode<Type> {
 
   Producer<Type> *produce_;
 
-  // data from producer is put into this queue from it it's written into both
+  // data from producer is put into this cache from it it's written into both
   // table and passed to output nodes
-  Queue *produce_queue_;
+  Cache *produce_cache_;
   int out_count = 0;
   int clean_count = 0;
 
@@ -231,15 +231,15 @@ class SinkNode : public TypedNode<Type> {
  public:
   SinkNode(TypedNode<Type> *in_node)
       : in_node_(in_node),
-        in_queue_{in_node->Output()},
+        in_cache_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->ts_ = get_current_timestamp();
   }
 
   void Compute() {
-    // write in queue into out_table
+    // write in cache into out_table
     const char *in_data;
-    while (this->in_queue_->GetNext(&in_data)) {
+    while (this->in_cache_->GetNext(&in_data)) {
       Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
@@ -261,7 +261,7 @@ class SinkNode : public TypedNode<Type> {
       this->Compact();
       this->update_ts_ = false;
     }
-    this->in_node_->CleanQueue();
+    this->in_node_->CleanCache();
   }
 
   // print state of table at this moment, for debugging only
@@ -287,10 +287,10 @@ class SinkNode : public TypedNode<Type> {
     }
   }
 
-  // since all sink does is store state we can treat inqueue as out queue when we use sink(view)
+  // since all sink does is store state we can treat incache as out cache when we use sink(view)
   // as source
-  Queue *Output() { return this->in_node_->Output(); }
-  void CleanQueue() { this->in_node_->CleanQueue(); }
+  Cache *Output() { return this->in_node_->Output(); }
+  void CleanCache() { this->in_node_->CleanCache(); }
 
   void UpdateTimestamp(timestamp ts) {
     if (this->ts_ + this->frontier_ts_ < ts) {
@@ -317,8 +317,8 @@ class SinkNode : public TypedNode<Type> {
   timestamp ts_;
 
   TypedNode<Type> *in_node_;
-  // in queue is out queue :)
-  Queue *in_queue_;
+  // in cache is out cache :)
+  Cache *in_cache_;
 
   // we can treat whole tuple as a key, this will return it's index
   // we will later use some persistent storage for that mapping, maybe rocksdb
@@ -336,34 +336,34 @@ class FilterNode : public TypedNode<Type> {
   FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition)
       : condition_{condition},
         in_node_{in_node},
-        in_queue_{in_node->Output()},
+        in_cache_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
-    this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
     this->ts_ = get_current_timestamp();
   }
 
   // filters node
-  // those that pass are put into output queue, this is all that this node does
+  // those that pass are put into output cache, this is all that this node does
   void Compute() {
     const char *data;
     // pass function that match condition to output
-    while (this->in_queue_->GetNext(&data)) {
+    while (this->in_cache_->GetNext(&data)) {
       const Tuple<Type> *tuple = (const Tuple<Type> *)(data);
       if (this->condition_(tuple->data)) {
-        this->out_queue_->Insert(data);
+        this->out_cache_->Insert(data);
       }
     }
-    this->in_node_->CleanQueue();
+    this->in_node_->CleanCache();
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->out_queue_;
+    return this->out_cache_;
   }
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->out_queue_->Clean();
+      this->out_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -389,8 +389,8 @@ class FilterNode : public TypedNode<Type> {
   TypedNode<Type> *in_node_;
   timestamp ts_;
 
-  Queue *in_queue_;
-  Queue *out_queue_;
+  Cache *in_cache_;
+  Cache *out_cache_;
   int out_count = 0;
   int clean_count = 0;
 };
@@ -401,17 +401,17 @@ class ProjectionNode : public TypedNode<OutType> {
   ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection)
       : projection_{projection},
         in_node_{in_node},
-        in_queue_{in_node->Output()},
+        in_cache_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()} {
-    this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<OutType>));
+    this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<OutType>));
     this->ts_ = get_current_timestamp();
   }
 
   void Compute() {
     const char *in_data;
     char *out_data;
-    while (in_queue_->GetNext(&in_data)) {
-      this->out_queue_->ReserveNext(&out_data);
+    while (in_cache_->GetNext(&in_data)) {
+      this->out_cache_->ReserveNext(&out_data);
       Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
       Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 
@@ -420,17 +420,17 @@ class ProjectionNode : public TypedNode<OutType> {
       out_tuple->data = this->projection_(in_tuple->data);
     }
 
-    this->in_node_->CleanQueue();
+    this->in_node_->CleanCache();
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->out_queue_;
+    return this->out_cache_;
   }
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->out_queue_->Clean();
+      this->out_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -455,8 +455,8 @@ class ProjectionNode : public TypedNode<OutType> {
   // acquired from in node, this will be passed to output node
   timestamp frontier_ts_;
 
-  Queue *in_queue_;
-  Queue *out_queue_;
+  Cache *in_cache_;
+  Cache *out_cache_;
   int out_count = 0;
   int clean_count = 0;
 };
@@ -480,22 +480,22 @@ template <typename Type>
 class DistinctNode : public TypedNode<Type> {
  public:
   DistinctNode(TypedNode<Type> *in_node)
-      : in_queue_{in_node->Output()},
+      : in_cache_{in_node->Output()},
         in_node_{in_node},
         frontier_ts_{in_node->GetFrontierTs()} {
     this->ts_ = get_current_timestamp();
     this->previous_ts_ = 0;
-    this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->out_queue_;
+    return this->out_cache_;
   }
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->out_queue_->Clean();
+      this->out_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -503,9 +503,9 @@ class DistinctNode : public TypedNode<Type> {
   timestamp GetFrontierTs() const { return this->frontier_ts_; }
 
   void Compute() {
-    // first insert all new data from queue to table
+    // first insert all new data from cache to table
     const char *in_data_;
-    while (this->in_queue_->GetNext(&in_data_)) {
+    while (this->in_cache_->GetNext(&in_data_)) {
       const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
@@ -560,7 +560,7 @@ class DistinctNode : public TypedNode<Type> {
         // but if it's first iteration of this Node we need to always emit
         if (!this->emited_[it->second]) {
           if (current_positive) {
-            this->out_queue_->ReserveNext(&out_data);
+            this->out_cache_->ReserveNext(&out_data);
             Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
             update_tpl->delta.ts = cur_delta.ts;
             update_tpl->delta.count = 1;
@@ -575,7 +575,7 @@ class DistinctNode : public TypedNode<Type> {
             if (current_positive) {
               continue;
             } else {
-              this->out_queue_->ReserveNext(&out_data);
+              this->out_cache_->ReserveNext(&out_data);
               Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
               update_tpl->delta.ts = cur_delta.ts;
               update_tpl->delta.count = -1;
@@ -584,7 +584,7 @@ class DistinctNode : public TypedNode<Type> {
             }
           } else {
             if (current_positive) {
-              this->out_queue_->ReserveNext(&out_data);
+              this->out_cache_->ReserveNext(&out_data);
               Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
               update_tpl->delta.ts = cur_delta.ts;
               update_tpl->delta.count = 1;
@@ -625,9 +625,9 @@ class DistinctNode : public TypedNode<Type> {
 
   TypedNode<Type> *in_node_;
 
-  Queue *in_queue_;
+  Cache *in_cache_;
 
-  Queue *out_queue_;
+  Cache *out_cache_;
   int out_count = 0;
   int clean_count = 0;
 
@@ -646,8 +646,8 @@ class DistinctNode : public TypedNode<Type> {
   std::vector<bool> emited_;
 };
 
-// stateless binary operator, combines data from both in queues and writes them
-// to out_queue
+// stateless binary operator, combines data from both in caches and writes them
+// to out_cache
 /*
         Union is PlusNode -> DistinctNode
         Except is plus with NegateLeft -> DistinctNode
@@ -661,21 +661,21 @@ class PlusNode : public TypedNode<Type> {
       : negate_left_(negate_left),
         in_node_left_{in_node_left},
         in_node_right_{in_node_right},
-        in_queue_left_{in_node_left->Output()},
-        in_queue_right_{in_node_right->Output()},
+        in_cache_left_{in_node_left->Output()},
+        in_cache_right_{in_node_right->Output()},
         frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
     this->ts_ = get_current_timestamp();
-    this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE, sizeof(Tuple<Type>));
+    this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->out_queue_;
+    return this->out_cache_;
   }
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->out_queue_->Clean();
+      this->out_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -686,8 +686,8 @@ class PlusNode : public TypedNode<Type> {
     // process left input
     const char *in_data;
     char *out_data;
-    while (in_queue_left_->GetNext(&in_data)) {
-      this->out_queue_->ReserveNext(&out_data);
+    while (in_cache_left_->GetNext(&in_data)) {
+      this->out_cache_->ReserveNext(&out_data);
       Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
       Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
 
@@ -697,11 +697,11 @@ class PlusNode : public TypedNode<Type> {
     }
     in_data = nullptr;
     out_data = nullptr;
-    this->in_node_left_->CleanQueue();
+    this->in_node_left_->CleanCache();
 
     // process right input
-    while (in_queue_right_->GetNext(&in_data)) {
-      this->out_queue_->ReserveNext(&out_data);
+    while (in_cache_right_->GetNext(&in_data)) {
+      this->out_cache_->ReserveNext(&out_data);
       Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
       Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
       out_tuple->delta.ts = in_tuple->delta.ts;
@@ -710,7 +710,7 @@ class PlusNode : public TypedNode<Type> {
       std::memcpy(&out_tuple->data, &in_tuple->data, sizeof(Type));
     }
 
-    this->in_node_right_->CleanQueue();
+    this->in_node_right_->CleanCache();
   }
 
   void UpdateTimestamp(timestamp ts) {
@@ -729,10 +729,10 @@ class PlusNode : public TypedNode<Type> {
   TypedNode<Type> *in_node_left_;
   TypedNode<Type> *in_node_right_;
 
-  Queue *in_queue_left_;
-  Queue *in_queue_right_;
+  Cache *in_cache_left_;
+  Cache *in_cache_right_;
 
-  Queue *out_queue_;
+  Cache *out_cache_;
   int out_count = 0;
   int clean_count = 0;
 
@@ -749,21 +749,21 @@ class StatefulBinaryNode : public TypedNode<OutType> {
   StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right)
       : in_node_left_{in_node_left},
         in_node_right_{in_node_right},
-        in_queue_left_{in_node_left->Output()},
-        in_queue_right_{in_node_right->Output()},
+        in_cache_left_{in_node_left->Output()},
+        in_cache_right_{in_node_right->Output()},
         frontier_ts_{std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
     this->ts_ = get_current_timestamp();
-    this->out_queue_ = new Queue(DEFAULT_QUEUE_SIZE * 2, sizeof(Tuple<OutType>));
+    this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->out_queue_;
+    return this->out_cache_;
   }
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->out_queue_->Clean();
+      this->out_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -796,10 +796,10 @@ class StatefulBinaryNode : public TypedNode<OutType> {
   TypedNode<LeftType> *in_node_left_;
   TypedNode<RightType> *in_node_right_;
 
-  Queue *in_queue_left_;
-  Queue *in_queue_right_;
+  Cache *in_cache_left_;
+  Cache *in_cache_right_;
 
-  Queue *out_queue_;
+  Cache *out_cache_;
   int out_count = 0;
   int clean_count = 0;
 
@@ -830,19 +830,19 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
       : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right) {}
 
   void Compute() {
-    // compute right_queue against left_queue
+    // compute right_cache against left_cache
     // they are small and hold no indexes so we do it just by nested loop
     const char *in_data_left;
     const char *in_data_right;
     char *out_data;
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-      while (this->in_queue_right_->GetNext(&in_data_right)) {
+      while (this->in_cache_right_->GetNext(&in_data_right)) {
         Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-        // if left and right queues match on data put it into out_queue with new
+        // if left and right caches match on data put it into out_cache with new
         // delta
         if (!std::memcmp(&in_left_tuple->data, &in_right_tuple->data, sizeof(Type))) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
           Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
           std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
@@ -851,8 +851,8 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
       }
     }
 
-    // compute left queue against right table
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    // compute left cache against right table
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
       // get all matching on data from right
       if (this->tuple_to_index_right.contains(Key<Type>(in_left_tuple->data))) {
@@ -860,7 +860,7 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
 
         for (auto it = this->index_to_deltas_right_[match_index].begin();
              it != this->index_to_deltas_right_[match_index].end(); it++) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
           Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
           std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
@@ -869,15 +869,15 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
       }
     }
 
-    // compute right queue against left table
-    while (this->in_queue_right_->GetNext(&in_data_right)) {
+    // compute right cache against left table
+    while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
       // get all matching on data from right
       if (this->tuple_to_index_left.contains(Key<Type>(in_right_tuple->data))) {
         index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
         for (auto it = this->index_to_deltas_left_[match_index].begin();
              it != this->index_to_deltas_left_[match_index].end(); it++) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
           Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
           std::memcpy(&out_tuple->data, &in_right_tuple->data, sizeof(Type));
@@ -886,8 +886,8 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
       }
     }
 
-    // insert new deltas from in_queues
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    // insert new deltas from in_caches
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_left.contains(Key<Type>(in_left_tuple->data))) {
@@ -901,7 +901,7 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
         this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
       }
     }
-    while (this->in_queue_right_->GetNext(&in_data_right)) {
+    while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_right.contains(Key<Type>(in_right_tuple->data))) {
@@ -916,9 +916,9 @@ class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
       }
     }
 
-    // clean in_queues
-    this->in_node_left_->CleanQueue();
-    this->in_node_right_->CleanQueue();
+    // clean in_caches
+    this->in_node_left_->CleanCache();
+    this->in_node_right_->CleanCache();
 
     if (this->compact_) {
       this->Compact();
@@ -941,18 +941,18 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
         join_layout_{join_layout} {}
 
   void Compute() {
-    // compute right_queue against left_queue
+    // compute right_cache against left_cache
     // they are small and hold no indexes so we do it just by nested loop
     const char *in_data_left;
     const char *in_data_right;
     char *out_data;
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-      while (this->in_queue_right_->GetNext(&in_data_right)) {
+      while (this->in_cache_right_->GetNext(&in_data_right)) {
         Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-        // if left and right queues match on data put it into out_queue with new
+        // if left and right caches match on data put it into out_cache with new
         // delta
-        this->out_queue_->ReserveNext(&out_data);
+        this->out_cache_->ReserveNext(&out_data);
         Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
         out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
                             in_left_tuple->delta.count * in_right_tuple->delta.count};
@@ -960,14 +960,14 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
       }
     }
 
-    // compute left queue against right table
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    // compute left cache against right table
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // get all matching on data from right
       for (auto &[table_data, table_idx] : this->tuple_to_index_right) {
         for (auto it = this->index_to_deltas_right_[table_idx].begin();
              it != this->index_to_deltas_right_[table_idx].end(); it++) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
@@ -977,14 +977,14 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
       }
     }
 
-    // compute right queue against left table
-    while (this->in_queue_right_->GetNext(&in_data_right)) {
+    // compute right cache against left table
+    while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // get all matching on data from right
       for (auto &[table_data, table_idx] : this->tuple_to_index_left) {
         for (auto it = this->index_to_deltas_left_[table_idx].begin();
              it != this->index_to_deltas_left_[table_idx].end(); it++) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
@@ -995,8 +995,8 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
       }
     }
 
-    // insert new deltas from in_queues
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    // insert new deltas from in_caches
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))) {
@@ -1011,7 +1011,7 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
       }
     }
 
-    while (this->in_queue_right_->GetNext(&in_data_right)) {
+    while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))) {
@@ -1026,9 +1026,9 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
       }
     }
 
-    // clean in_queues
-    this->in_node_left_->CleanQueue();
-    this->in_node_right_->CleanQueue();
+    // clean in_caches
+    this->in_node_left_->CleanCache();
+    this->in_node_right_->CleanCache();
 
     if (this->compact_) {
       this->Compact();
@@ -1056,19 +1056,19 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 
   // this function changes
   void Compute() {
-    // compute right_queue against left_queue
+    // compute right_cache against left_cache
     // they are small and hold no indexes so we do it just by nested loop
     const char *in_data_left;
     const char *in_data_right;
     char *out_data;
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-      while (this->in_queue_right_->GetNext(&in_data_right)) {
+      while (this->in_cache_right_->GetNext(&in_data_right)) {
         Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-        // if left and right queues match on data put it into out_queue with new
+        // if left and right caches match on data put it into out_cache with new
         // delta
         if (this->Compare(&in_left_tuple->data, &in_right_tuple->data)) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
                               in_left_tuple->delta.count * in_right_tuple->delta.count};
@@ -1078,8 +1078,8 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
     }
 
-    // compute left queue against right table
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    // compute left cache against right table
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // get all matching on data from right
       MatchType match = this->get_match_left_(in_left_tuple->data);
@@ -1092,7 +1092,7 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 
         for (auto it = this->index_to_deltas_right_[idx].begin();
              it != this->index_to_deltas_right_[idx].end(); it++) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
                               in_left_tuple->delta.count * it->count};
@@ -1103,8 +1103,8 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
     }
 
 
-    // compute right queue against left table
-    while (this->in_queue_right_->GetNext(&in_data_right)) {
+    // compute right cache against left table
+    while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // get all matching on data from right
       MatchType match = this->get_match_right_(in_right_tuple->data);
@@ -1118,7 +1118,7 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 
         for (auto it = this->index_to_deltas_left_[idx].begin();
              it != this->index_to_deltas_left_[idx].end(); it++) {
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
           out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
                               in_right_tuple->delta.count * it->count};
@@ -1128,8 +1128,8 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
     }
 
-    // insert new deltas from in_queues
-    while (this->in_queue_left_->GetNext(&in_data_left)) {
+    // insert new deltas from in_caches
+    while (this->in_cache_left_->GetNext(&in_data_left)) {
       Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))) {
@@ -1154,7 +1154,7 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
     }
 
     
-    while (this->in_queue_right_->GetNext(&in_data_right)) {
+    while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))) {
@@ -1181,9 +1181,9 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
     }
 
     
-    // clean in_queues
-    this->in_node_left_->CleanQueue();
-    this->in_node_right_->CleanQueue();
+    // clean in_caches
+    this->in_node_left_->CleanCache();
+    this->in_node_right_->CleanCache();
 
     if (this->compact_) {
       this->Compact();
@@ -1235,24 +1235,24 @@ class AggregateByNode : public TypedNode<OutType> {
                   std::function<void(const InType &, OutType &)> aggr_fun,
                   std::function<MatchType(const InType &)> get_match)
       : in_node_{in_node},
-        in_queue_{in_node->Output()},
+        in_cache_{in_node->Output()},
         frontier_ts_{in_node->GetFrontierTs()},
         aggr_fun_{aggr_fun},
         get_match_{get_match} {
     this->ts_ = get_current_timestamp();
     // there will be single tuple emited at once probably, if not it will get
     // resized so chill
-    this->out_queue_ = new Queue(2, sizeof(Tuple<OutType>));
+    this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
   }
 
-  Queue *Output() {
+  Cache *Output() {
     this->out_count++;
-    return this->out_queue_;
+    return this->out_cache_;
   }
-  void CleanQueue() {
+  void CleanCache() {
     clean_count++;
     if (this->clean_count == this->out_count) {
-      this->out_queue_->Clean();
+      this->out_cache_->Clean();
       this->clean_count = 0;
     }
   }
@@ -1266,9 +1266,9 @@ class AggregateByNode : public TypedNode<OutType> {
   // -1 and insert current with count 1 at the same time then old should get
   // discarded
   void Compute() {
-    // insert new deltas from in_queues
+    // insert new deltas from in_caches
     const char *in_data;
-    while (this->in_queue_->GetNext(&in_data)) {
+    while (this->in_cache_->GetNext(&in_data)) {
       Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
       // if this data wasn't present insert with new index
       if (!this->tuple_to_index.contains(Key<InType>(in_tuple->data))) {
@@ -1306,7 +1306,7 @@ class AggregateByNode : public TypedNode<OutType> {
 
           // emit delete tuple
           char *out_data;
-          this->out_queue_->ReserveNext(&out_data);
+          this->out_cache_->ReserveNext(&out_data);
           Tuple<OutType> *del_tuple = (Tuple<OutType> *)(out_data);
           del_tuple->delta = {this->previous_ts_, -1};
           std::memcpy(&del_tuple->data, &accum, sizeof(OutType));
@@ -1333,7 +1333,7 @@ class AggregateByNode : public TypedNode<OutType> {
 
         // emit delete tuple
         char *out_data;
-        this->out_queue_->ReserveNext(&out_data);
+        this->out_cache_->ReserveNext(&out_data);
         Tuple<OutType> *ins_tuple = (Tuple<OutType> *)(out_data);
         ins_tuple->delta = {this->previous_ts_, 1};
         std::memcpy(&ins_tuple->data, &accum, sizeof(OutType));
@@ -1371,9 +1371,9 @@ class AggregateByNode : public TypedNode<OutType> {
 
   TypedNode<InType> *in_node_;
 
-  Queue *in_queue_;
+  Cache *in_cache_;
 
-  Queue *out_queue_;
+  Cache *out_cache_;
   int out_count = 0;
   int clean_count = 0;
 

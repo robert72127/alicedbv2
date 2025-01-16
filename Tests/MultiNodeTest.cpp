@@ -127,34 +127,43 @@ struct Person {
     float account_balance;
 };
 
-// for debugging
-void print_person(const char *data){
-    const Person *p = reinterpret_cast<const Person*>(data);
-
-    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " "  << p->age << " " << p->account_balance << std::endl; 
-} 
-
-
-
 struct Dog {
     std::array<char, 50> name;
     float cost;
 };
 
-// this is least nice part, we need to define transitional state struct
+// this is least nice part, we need to define transitional state structs
 
 struct JoinDogPerson {
     std::array<char, 50> name;
     std::array<char, 50> surname;
     std::array<char, 50> favourite_dog_race;
     float dog_cost;
+    float account_balace;
+    int age;
+
 };
+
+void print_joindogperson(const char *data){
+    const JoinDogPerson *p = reinterpret_cast<const JoinDogPerson*>(data);
+
+    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " " << p->dog_cost << " " << p->account_balace << " "  << p->age << std::endl; 
+} 
+
 
 
 /// and final state
 struct CanAffordDog{
     std::array<char, 50> name;
+    std::array<char, 50> surname;
 };
+
+void print_canafforddog(const char *data){
+    const CanAffordDog *p = reinterpret_cast<const CanAffordDog*>(data);
+
+    std::cout<<p->name.data() << " " << p->surname.data()  << std::endl; 
+} 
+
 
 
 // we need to provide parseLine function to specify how to parse structs from producer into source, we might change api
@@ -191,7 +200,7 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             return true;
 }
 
-TEST(PRESENTATION_TEST, presentation_test){
+TEST(MULTINODE_TEST, multinode_test){
     std::string dogs_fname = "dogs.txt";
     std::string people_fname = "people.txt";
     prepare_test_data_files(people_fname, dogs_fname);
@@ -211,29 +220,47 @@ TEST(PRESENTATION_TEST, presentation_test){
     // define processing graph
     auto *view = 
         g->View(
-            g->Filter(
-                [](const Person &p) -> bool {return p.age > 18;},
-                g->Source(prod_people,5)
+            g->Projection(
+                [](const JoinDogPerson &p) {
+                    return CanAffordDog{
+                       .name=p.name,
+                       .surname=p.surname, 
+                    };
+                },
+                g->Filter(
+                    [](const JoinDogPerson &p) -> bool {return p.account_balace > p.dog_cost;},
+                    g->Join(
+                        [](const Person &p)  { return p.favourite_dog_race;},
+                        [](const Dog &d)  { return d.name;},
+                        [](const Person &p, const Dog &d) { 
+                            return  JoinDogPerson{
+                                .name=p.name,
+                                .surname=p.surname,
+                                .favourite_dog_race=d.name,
+                                .dog_cost=d.cost,
+                                .account_balace=p.account_balance,
+                                .age=p.age
+                            };
+                        },
+                        g->Filter(
+                            [](const Person &p) -> bool {return p.age > 18;},
+                            g->Source(prod_people,0)
+                        ),
+                        g->Source(prod_dogs,0)
+                    )
+                    
+                )
             )
         );
-
     // start processing data
     pool->Start(g);
+    int i = 0;
+    for(; i < 100000000; i++);
+    std::cout<<i<<std::endl;
 
 
-    int j = 0;
-    while(j < 10000000){
-        j++;
-    }
+    AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
 
-
-    //g->Process(5);
-
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-
-    real_sink->Print(AliceDB::get_current_timestamp(), print_person);
-
-
-
+    real_sink->Print(AliceDB::get_current_timestamp(), print_canafforddog);
 
 }

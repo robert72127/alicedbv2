@@ -51,7 +51,7 @@ calling compute on each node in topological order
 ##### Processing node in streaming database graph
  
  for storage we need to:
- 1) be able to find count of tuple corresponding to given tuple in queue, - we can check that from the latest value and current one from queue
+ 1) be able to find count of tuple corresponding to given tuple in cache, - we can check that from the latest value and current one from cache 
  2) be able to tell if given value at time T can be deleted from persistent storage - we can do that by checking if it's newest value and if it's ts is greater or less than current one
  3) be able to search for all tuples that matches given one, yes by hashing on all fields, and storing mapping from this hash to list of indexes in table
  since collision could happen we will also need to check if it's a match
@@ -145,11 +145,11 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  or when we insert we should do the same but with	   previous_count + 1 instead 
  
  we will want to process both queuues at once, because we process graph in topological order, so both inputs are ready
- we can first merge queues to update corresponding count's and then do single insert to table and then write it to the output
+ we can first merge caches to update corresponding count's and then do single insert to table and then write it to the output
   
  ok what if we would do this :
  tuples comes in either from right or left:
- 	insert them all into table and put it into out_queue with updated count, and right timestamps
+ 	insert them all into table and put it into out_cache with updated count, and right timestamps
   
  
 ###### Intersect which is sql substitute of
@@ -161,8 +161,8 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
    FROM table2;
  
  It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_queue,
- then processed second one, also write it into table and then update result in out_queue if needed
+ we first process first, inserted it into table and written it into out_cache,
+ then processed second one, also write it into table and then update result in out_cache if needed
  
  keep two tables one for each source
  so first we insert into tables, than perform cross check on both right and left and put into out 
@@ -186,8 +186,8 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  and it will also need's to store table nr 1 to know what count to emit when we delete single value from table nr 1
  
  It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_queue,
- then processed second one, also write it into table and then update result in out_queue if needed
+ we first process first, inserted it into table and written it into out_cache,
+ then processed second one, also write it into table and then update result in out_cache if needed
  
  
  regarding count when second becomes negative new tuple will have - total_count of first,
@@ -210,8 +210,8 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  and it doesn't need to know their fields
  
  It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_queue,
- then processed second one, also write it into table and then update result in out_queue if needed
+ we first process first, inserted it into table and written it into out_cache,
+ then processed second one, also write it into table and then update result in out_cache if needed
  
  count will be multiplied of first and second
  
@@ -225,8 +225,8 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  WE need to keep both inputs in tables
  
  It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_queue,
- then processed second one, also write it into table and then update result in out_queue if needed
+ we first process first, inserted it into table and written it into out_cache,
+ then processed second one, also write it into table and then update result in out_cache if needed
  
  
  count will be multiplication of first and second
@@ -245,7 +245,7 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  
  HAVING filters groups based on aggregated values, while WHERE filters rows before aggregation.
  
- ok so in general it's stateful single in queue single out_queue, that appiles function to given rows,
+ ok so in general it's stateful single in cache single out_cache, that appiles function to given rows,
  
  it will create tuple with data | group_by field | rest of fields with appiled function
  
@@ -264,8 +264,8 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  we will store all nodes for all queries in single graph
  graph will we defined as set of connected nodes & N workers
  
- For each node we will let input accumulate in it's input queue,
- after some time, or amount of Tuple's in input queue we will start computation,
+ For each node we will let input accumulate in it's input cache,
+ after some time, or amount of Tuple's in input cache we will start computation,
  in topological order.
 
 ##### Table
@@ -361,7 +361,7 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
        Updating timestamp of internal tables possibly with garbage collection
        Computing out_tuples
  
-   Output: return out_queue of given node: this will be used by graph layer for chaining nodes
+   Output: return out_cache of given node: this will be used by graph layer for chaining nodes
  
  
    UpdateTimestamp: this will be called by output nodes it will update ts and propagate to input nodes

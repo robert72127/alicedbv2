@@ -1,5 +1,5 @@
 ## Nodes:
-    *   make sure algorithm is correct - it seems to be, maybe tweak time per node in source node, but besides that it's correct
+    *   make sure algorithm is correct - fix joins
 
 ## DataLoaders:
     *   Implement dataloaders for other sources such as kafka and network, if api to complicated use simpler one
@@ -10,14 +10,15 @@
     *   add mechanism to dynamically stop and start new tasks
 
 ## Queue:
-    * Think again whether it's implementation is good, maybe change it a bit
+    * Think again whether it's implementation is good, maybe change it a bit, for example maybe keep track of size and resize it down
+
 
 ------------------------------------------- Zrobić ten etap do końca tygodnia ( wziąć wolny czwartek i piątek )
 
 ## Storage:
     *   Either find good ready to use or implement persistent storage primitive
     *   Use alicedbV1 with added B+Tree for key|value mapping
-    *   Use rocksdb for delta storage
+    *   Use rocksdb for delta storage for also standard storage with b+ tree since it also grants prefix search for free
     *   allow for exporting view to some format & dropping database graph
 
 

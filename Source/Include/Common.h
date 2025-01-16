@@ -23,7 +23,7 @@ struct DeltaComparator {
   }
 };
 
-/* use buffer pool and memory arena for queue as two separate memory pools
+/* use buffer pool and memory arena for cache as two separate memory pools
 
 Starting: BufferPool start first then disk manager
 

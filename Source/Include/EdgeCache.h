@@ -1,5 +1,5 @@
-#ifndef ALICEDBQUEUE
-#define ALICEDBQUEUE
+#ifndef ALICEDBcache
+#define ALICEDBcache
 
 #include <cstdlib>
 #include <cstring>
@@ -10,31 +10,31 @@
 
 namespace AliceDB {
 
-struct Queue {
+struct Cache {
   /**
-   * @brief create queue with given size of queue_size * tuple_size where
+   * @brief create cache with given size of cache_size * tuple_size where
    * iterator jumps by tuple_size
-   * tuple size is size of QueueTuple<Type> size but we make it untyped on
+   * tuple size is size of cacheTuple<Type> size but we make it untyped on
    * purpouse, for easier chaining using abstract base class
    */
-  Queue(size_t queue_size, size_t tuple_size)
+  Cache(size_t cache_size, size_t tuple_size)
       : tuple_size_{tuple_size},
-        queue_size_{queue_size},
+        cache_size_{cache_size},
         current_size_{0},
         current_offset_{0},
-        storage_{new char[queue_size * tuple_size]} {}
+        storage_{new char[cache_size * tuple_size]} {}
 
   /**
-   * @brief deallocate queue memory
+   * @brief deallocate cache memory
    */
-  ~Queue() { delete[] storage_; }
+  ~Cache() { delete[] storage_; }
 
   /**
-   * @brief insert new element into queue
-   * @return true on success, false if there is no space in queue left
+   * @brief insert new element into cache
+   * @return true on success, false if there is no space in cache left
    */
   void Insert(const char *data) {
-    if (this->current_size_ + this->tuple_size_ > this->queue_size_) {
+    if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
       // just resize :)
       this->Resize(current_size_ * 2);
     }
@@ -44,30 +44,30 @@ struct Queue {
 
   /**
    * this is for writing
-   * @brief  reserve next free position in queue,
+   * @brief  reserve next free position in cache,
    * set data to point to next free position
    * and assume user will insert's data there thus
    * increase metadata as in Insert
    */
   void ReserveNext(char **data) {
-    if (this->current_size_ + this->tuple_size_ > this->queue_size_) {
+    if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
       this->Resize(current_size_ * 2);
     }
     *data = this->storage_ + this->current_size_;
     this->current_size_ += tuple_size_;
   }
   /**
-   * @brief set's queue memory to 0
+   * @brief set's cache memory to 0
    * and reset internal state
    */
   void Clean() {
-    std::memset(this->storage_, 0, queue_size_);
+    std::memset(this->storage_, 0, cache_size_);
     this->current_offset_ = 0;
     this->current_size_ = 0;
   }
   /**
    * this is used for reading
-   * set tuple to next tuple in queue,
+   * set tuple to next tuple in cache,
    * @return true if there are tuples left
    * false otherwise, then also reset current_offset to allow for new iteration
    */
@@ -87,7 +87,7 @@ struct Queue {
   void RemoveLast() { current_size_ -= tuple_size_; }
 
   char *storage_;
-  size_t queue_size_;
+  size_t cache_size_;
   size_t tuple_size_;
   // used for insterting
   size_t current_size_;
@@ -96,7 +96,7 @@ struct Queue {
 
  private:
   bool Resize(size_t new_size) {
-    if (new_size <= this->queue_size_) {
+    if (new_size <= this->cache_size_) {
       // No point in resizing to something smaller or equal
       return false;
     }
@@ -114,7 +114,7 @@ struct Queue {
 
     // Update pointers and size
     this->storage_ = new_storage;
-    this->queue_size_ = new_size;
+    this->cache_size_ = new_size;
     return true;
   }
 };

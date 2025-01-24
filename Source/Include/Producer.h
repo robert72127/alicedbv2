@@ -113,10 +113,11 @@ template <typename Type>
 class TCPClientProducer : public Producer<Type> {
  public:
   // produce's data reading data from tcp socket
-  TCPClientProducer(std::string IP_ADDR, int port,
+  TCPClientProducer(std::string IP_ADDR,
       std::function<bool(std::istringstream &, Type *)> produce)
       : produce_{produce}{
         
+    int port = 8080;
     this->client_socket_ = socket(AF_INET, SOCK_STREAM,0);
     if(client_socket_ < 0){
         throw std::runtime_error("Failed to create client socket\n");
@@ -125,6 +126,7 @@ class TCPClientProducer : public Producer<Type> {
     struct sockaddr_in server_address;
     std::memset(&server_address, 0, sizeof(server_address));
 
+  
     server_address.sin_family = AF_INET; // ipv4
     server_address.sin_port = htons(port); // set port
 

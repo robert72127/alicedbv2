@@ -302,7 +302,7 @@ TEST(TCP_TEST, simple_tcp){
     //Client();
 
 
-    AliceDB::Producer<Person> *prod = new AliceDB::TCPClientProducer<Person>(HOST, PORT, parseLine);    
+    AliceDB::Producer<Person> *prod = new AliceDB::TCPClientProducer<Person>(HOST, parseLine);    
     AliceDB::WorkerPool *pool = new AliceDB::WorkerPool(1);
     AliceDB::Graph *g = new AliceDB::Graph();
 

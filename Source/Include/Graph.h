@@ -16,8 +16,7 @@
 
 namespace AliceDB {
 
-
-
+enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING};
 
 /**
  * @brief Graph of relational algebra processing nodes
@@ -29,6 +28,10 @@ namespace AliceDB {
 
 class Graph {
  public:
+
+  // Node creations
+
+
   template <typename P>
   auto Source(P* prod, timestamp frontier_ts, int duration_us = 500)
       -> TypedNode<typename P::value_type>* {
@@ -201,21 +204,50 @@ class Graph {
     return aggr;
   }
 
+
+// Node processing
+
+  // return next node of the graph to be processed
   /**
-   * @brief loop that processes all nodes in topological order for <iters> iterations
-   * this can be called by worker thread to process current graph
+   * @brief set next_node to next node to be processed
+   * @return true on succes, false when there is no nodes at the current time to be processed
    */
-  void Process(int iters = 1) {
+  bool GetNext(Node **next_node){
+
+  }  
+
+  /**
+   * @return true if all nodes were processed in current iteration
+   */
+  bool AllProcesed(){
+
+    // all nodes are processed when all sink nodes are processed
+    for(const auto & node : this->sinks_){
+      if(this->nodes_state_[node] != NodeState::PROCESSED){
+        return false;
+      }
+    }
+    return true;
+  }
+
+
+  void SetState(Node *node, NodeState state ){
+    this->node_mutexes_[node].lock();
+    this->nodes_state_[node] = state;
+    this->node_mutexes_[node].unlock();
+  }
+
+
+  /**
+   * @brief
+   * Created when all nodes are appended to graph, and processing can be started,
+   * this is called by WorkerPool->Start(Graph *g)
+   */
+  void Start() {
     // after calling process once graph no longer will accept adding new nodes
     this->is_graph_running_ = true;
-
     if (this->topo_graph_.empty()) {
       this->topo_sort();
-    }
-    for (int i = 0; i < iters; i++) {
-      for (Node* n : topo_graph_) {
-        n->Compute();
-      }
     }
   }
 
@@ -271,14 +303,6 @@ class Graph {
     // Organize nodes into levels
     this->levels_.resize(max_level + 1);
     for (const auto& [node, level] : node_levels) {
-        // debug
-        /*
-        std::cout << " NODE : " << node << " LEVEL : " << level << " DEPENDENCIES : ";
-        for(auto & dep: this->node_dependencies_[node]){
-          std::cout << dep << ", ";
-        }
-        std::cout<<std::endl;
-        */
         this->levels_[level].push_back(node);
     }
 
@@ -378,6 +402,9 @@ class Graph {
   std::vector<std::list<Node*>> levels_;
   // map of all dependencies for given node
   std::unordered_map<Node*, std::set<Node*>> node_dependencies_;
+
+  std::unordered_map<Node*, NodeState> nodes_state_;
+  std::unordered_map<Node*, std::mutex> node_mutexes_;
 
   bool is_graph_running_ = false;
 };

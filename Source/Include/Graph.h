@@ -214,6 +214,35 @@ class Graph {
    */
   bool GetNext(Node **next_node){
 
+   this->graph_latch_.lock(); 
+    // this means we can reset levels
+    if(this->current_level_ == this->levels_.size() - 1  && AllProcesed() ){
+      this->current_level_ = 0;
+      this->current_index_=0;
+      for(const auto &node : this->all_nodes_){
+        this->nodes_state_[node] = NodeState::NOT_PROCESSED;
+      }
+    }
+
+    *next_node = this->levels_[current_level_][current_index_];
+    for(const auto  &node : this->node_dependencies_[*next_node]){
+      if (this->nodes_state_[node] != NodeState::PROCESSED){
+        *next_node = nullptr;
+        return false;
+      }
+    }
+
+    current_index_++;
+    if(current_index_ > this->levels_[current_level_].size()){
+      current_index_ = 0;
+      current_level_++;
+    }
+
+
+    this->SetState(*next_node, NodeState::PROCESSING);
+    this->graph_latch_.unlock(); 
+    
+    return true;
   }  
 
   /**
@@ -232,9 +261,7 @@ class Graph {
 
 
   void SetState(Node *node, NodeState state ){
-    this->node_mutexes_[node].lock();
     this->nodes_state_[node] = state;
-    this->node_mutexes_[node].unlock();
   }
 
 
@@ -399,14 +426,20 @@ class Graph {
   // List of nodes representing topological orders
   std::list<Node*> topo_graph_;
   // topolist but leveled, where node at level n can only depends on nodes on levels < n
-  std::vector<std::list<Node*>> levels_;
+  std::vector<std::vector<Node*>> levels_;
   // map of all dependencies for given node
   std::unordered_map<Node*, std::set<Node*>> node_dependencies_;
 
   std::unordered_map<Node*, NodeState> nodes_state_;
-  std::unordered_map<Node*, std::mutex> node_mutexes_;
+
+  std::mutex graph_latch_;
 
   bool is_graph_running_ = false;
+
+  int current_level_;
+  int current_index_;
+
+
 };
 
 }  // namespace AliceDB

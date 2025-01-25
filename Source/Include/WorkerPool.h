@@ -91,6 +91,7 @@ class WorkerPool {
         }
         // process this node
         n->Compute();
+        g->SetState(n, NodeState::PROCESSED);
         // if there is no work left to do find mechanism for waiting
       }
     } catch (const std::exception &e) {

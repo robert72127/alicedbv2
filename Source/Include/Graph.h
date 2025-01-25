@@ -4,6 +4,7 @@
 #include <functional>
 #include <list>
 #include <set>
+#include <unordered_map>
 #include <stack>
 #include <stdexcept>
 #include <type_traits>
@@ -14,6 +15,10 @@
 #include "Node.h"
 
 namespace AliceDB {
+
+
+
+
 /**
  * @brief Graph of relational algebra processing nodes
  * where operators such as Filter etc are wrappers around Node with type inference,
@@ -21,6 +26,7 @@ namespace AliceDB {
  *
  * Graph is started by calling Process function, after that no new node can be added
  */
+
 class Graph {
  public:
   template <typename P>
@@ -214,6 +220,84 @@ class Graph {
   }
 
  private:
+  /*
+      This datastructure is smiliar to standard topological order
+      list of graph except it's leveled.
+      Node at level N can depend on any node on level N-k where k <= N,
+      but not on any node at level N+i where i >= 0
+*/
+  void TopoLevelList(){
+    std::unordered_map<Node*, int> node_levels;
+    // list of all dependencies for given node
+    
+    
+    // iterate topo_list 
+    // set level 0 to first node, and set level 1 to all outputs
+    // for all out set level + 1 as level,
+     int max_level = 0;
+
+    for (auto node : this->topo_graph_) {
+      // If the node has no dependencies, it should be at level 0
+      // Since it's a topological sort, nodes are processed after their dependencies
+      // So the current level of 'node' has already been determined
+      
+      // If the node is not in node_levels, it means it has no dependencies
+      // because otherwise it's dependency would be in a topolist before
+      if (!node_levels.contains(node)){
+          node_levels[node] = 0;
+          this->node_dependencies_[node] = {};
+      }
+      
+      int current_level = node_levels[node];
+      
+      // Iterate through all children (nodes that depend on the current node)
+      for (auto child : out_edges_[node]) {
+          // Assign the child to the next level if necessary
+          if (!node_levels.contains(child)) {
+              node_levels[child] = current_level + 1;
+          } else {
+              node_levels[child] = node_levels[child] > current_level + 1 ? node_levels[child] : current_level+1;
+          }
+          
+          // Update the maximum level found so far
+          if (node_levels[child] > max_level) {
+              max_level = node_levels[child];
+          }
+          
+          this->append_parent_dependencies(child, node);
+      }
+   }
+
+    // Organize nodes into levels
+    this->levels_.resize(max_level + 1);
+    for (const auto& [node, level] : node_levels) {
+        // debug
+        /*
+        std::cout << " NODE : " << node << " LEVEL : " << level << " DEPENDENCIES : ";
+        for(auto & dep: this->node_dependencies_[node]){
+          std::cout << dep << ", ";
+        }
+        std::cout<<std::endl;
+        */
+        this->levels_[level].push_back(node);
+    }
+
+  }
+
+  void append_parent_dependencies(Node* child_node, Node *parent_node){
+    if(! this->node_dependencies_.contains(child_node)){
+      this->node_dependencies_[child_node] = {};
+    }
+    std::set<Node*> &child_deps = this->node_dependencies_[child_node];
+    std::set<Node*> &parent_deps = this->node_dependencies_[parent_node];
+    child_deps.insert(parent_node);
+    for(const auto &dep: parent_deps){
+      child_deps.insert(dep);
+    }
+  }
+
+
+
   void topo_sort() {
     std::set<Node*> visited;
     std::stack<Node*> stack;
@@ -241,7 +325,11 @@ class Graph {
       topo_graph_.push_back(stack.top());
       stack.pop();
     }
+
+    // create vector of list of nodes grouped by dependency level
+    this->TopoLevelList();
   }
+
   bool visit(Node* current, std::set<Node*>& visited, std::stack<Node*>& stack,
              std::set<Node*>& current_run) {
     bool has_cycle = 0;
@@ -286,6 +374,10 @@ class Graph {
 
   // List of nodes representing topological orders
   std::list<Node*> topo_graph_;
+  // topolist but leveled, where node at level n can only depends on nodes on levels < n
+  std::vector<std::list<Node*>> levels_;
+  // map of all dependencies for given node
+  std::unordered_map<Node*, std::set<Node*>> node_dependencies_;
 
   bool is_graph_running_ = false;
 };

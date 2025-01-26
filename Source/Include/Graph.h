@@ -215,15 +215,22 @@ class Graph {
   bool GetNext(Node **next_node){
 
    this->graph_latch_.lock(); 
+
+
     // this means we can reset levels
-    if(this->current_level_ == this->levels_.size() - 1  && AllProcesed() ){
+    if(this->current_level_ >= this->levels_.size() - 1  && AllProcesed() ){
+      // great all processed, reet state ad start from beginning
       this->current_level_ = 0;
-      this->current_index_=0;
+      this->current_index_ = 0;
       for(const auto &node : this->all_nodes_){
         this->nodes_state_[node] = NodeState::NOT_PROCESSED;
       }
     }
-
+    // we assigned all nodes at highest level but some were not processed yet, return false
+    if(this->current_level_ > this->levels_.size()){
+      return false;
+    }
+    
     *next_node = this->levels_[current_level_][current_index_];
     for(const auto  &node : this->node_dependencies_[*next_node]){
       if (this->nodes_state_[node] != NodeState::PROCESSED){
@@ -232,8 +239,9 @@ class Graph {
       }
     }
 
+    // all nodes at current level were assigned, graduate to new level
     current_index_++;
-    if(current_index_ > this->levels_[current_level_].size()){
+    if(current_index_ >= this->levels_[current_level_].size()){
       current_index_ = 0;
       current_level_++;
     }
@@ -436,8 +444,8 @@ class Graph {
 
   bool is_graph_running_ = false;
 
-  int current_level_;
-  int current_index_;
+  int current_level_ = 0;
+  int current_index_ = 0;
 
 
 };

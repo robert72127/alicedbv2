@@ -215,7 +215,7 @@ TEST(MULTINODE_TEST, multinode_test){
     AliceDB::Producer<Dog> *prod_dogs = new AliceDB::FileProducer<Dog>(dogs_fname,parseDog);
 
     // create worker pool with single worker thread
-    AliceDB::WorkerPool *pool = new AliceDB::WorkerPool(1);
+    AliceDB::WorkerPool *pool = new AliceDB::WorkerPool(2);
 
     // define processing graph
     auto *view = 

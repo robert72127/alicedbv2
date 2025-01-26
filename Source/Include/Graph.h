@@ -4,10 +4,10 @@
 #include <functional>
 #include <list>
 #include <set>
-#include <unordered_map>
 #include <stack>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -16,7 +16,7 @@
 
 namespace AliceDB {
 
-enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING};
+enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
 
 /**
  * @brief Graph of relational algebra processing nodes
@@ -28,9 +28,7 @@ enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING};
 
 class Graph {
  public:
-
   // Node creations
-
 
   template <typename P>
   auto Source(P* prod, timestamp frontier_ts, int duration_us = 500)
@@ -204,36 +202,33 @@ class Graph {
     return aggr;
   }
 
-
-// Node processing
+  // Node processing
 
   // return next node of the graph to be processed
   /**
    * @brief set next_node to next node to be processed
    * @return true on succes, false when there is no nodes at the current time to be processed
    */
-  bool GetNext(Node **next_node){
-
-   this->graph_latch_.lock(); 
-
+  bool GetNext(Node** next_node) {
+    this->graph_latch_.lock();
 
     // this means we can reset levels
-    if(this->current_level_ >= this->levels_.size() - 1  && AllProcesed() ){
+    if (this->current_level_ >= this->levels_.size() - 1 && AllProcesed()) {
       // great all processed, reet state ad start from beginning
       this->current_level_ = 0;
       this->current_index_ = 0;
-      for(const auto &node : this->all_nodes_){
+      for (const auto& node : this->all_nodes_) {
         this->nodes_state_[node] = NodeState::NOT_PROCESSED;
       }
     }
     // we assigned all nodes at highest level but some were not processed yet, return false
-    if(this->current_level_ > this->levels_.size()){
+    if (this->current_level_ > this->levels_.size()) {
       return false;
     }
-    
+
     *next_node = this->levels_[current_level_][current_index_];
-    for(const auto  &node : this->node_dependencies_[*next_node]){
-      if (this->nodes_state_[node] != NodeState::PROCESSED){
+    for (const auto& node : this->node_dependencies_[*next_node]) {
+      if (this->nodes_state_[node] != NodeState::PROCESSED) {
         *next_node = nullptr;
         return false;
       }
@@ -241,37 +236,31 @@ class Graph {
 
     // all nodes at current level were assigned, graduate to new level
     current_index_++;
-    if(current_index_ >= this->levels_[current_level_].size()){
+    if (current_index_ >= this->levels_[current_level_].size()) {
       current_index_ = 0;
       current_level_++;
     }
 
-
     this->SetState(*next_node, NodeState::PROCESSING);
-    this->graph_latch_.unlock(); 
-    
+    this->graph_latch_.unlock();
+
     return true;
-  }  
+  }
 
   /**
    * @return true if all nodes were processed in current iteration
    */
-  bool AllProcesed(){
-
+  bool AllProcesed() {
     // all nodes are processed when all sink nodes are processed
-    for(const auto & node : this->sinks_){
-      if(this->nodes_state_[node] != NodeState::PROCESSED){
+    for (const auto& node : this->sinks_) {
+      if (this->nodes_state_[node] != NodeState::PROCESSED) {
         return false;
       }
     }
     return true;
   }
 
-
-  void SetState(Node *node, NodeState state ){
-    this->nodes_state_[node] = state;
-  }
-
+  void SetState(Node* node, NodeState state) { this->nodes_state_[node] = state; }
 
   /**
    * @brief
@@ -293,69 +282,66 @@ class Graph {
       Node at level N can depend on any node on level N-k where k <= N,
       but not on any node at level N+i where i >= 0
 */
-  void TopoLevelList(){
+  void TopoLevelList() {
     std::unordered_map<Node*, int> node_levels;
     // list of all dependencies for given node
-    
-    
-    // iterate topo_list 
+
+    // iterate topo_list
     // set level 0 to first node, and set level 1 to all outputs
     // for all out set level + 1 as level,
-     int max_level = 0;
+    int max_level = 0;
 
     for (auto node : this->topo_graph_) {
       // If the node has no dependencies, it should be at level 0
       // Since it's a topological sort, nodes are processed after their dependencies
       // So the current level of 'node' has already been determined
-      
+
       // If the node is not in node_levels, it means it has no dependencies
       // because otherwise it's dependency would be in a topolist before
-      if (!node_levels.contains(node)){
-          node_levels[node] = 0;
-          this->node_dependencies_[node] = {};
+      if (!node_levels.contains(node)) {
+        node_levels[node] = 0;
+        this->node_dependencies_[node] = {};
       }
-      
+
       int current_level = node_levels[node];
-      
+
       // Iterate through all children (nodes that depend on the current node)
       for (auto child : out_edges_[node]) {
-          // Assign the child to the next level if necessary
-          if (!node_levels.contains(child)) {
-              node_levels[child] = current_level + 1;
-          } else {
-              node_levels[child] = node_levels[child] > current_level + 1 ? node_levels[child] : current_level+1;
-          }
-          
-          // Update the maximum level found so far
-          if (node_levels[child] > max_level) {
-              max_level = node_levels[child];
-          }
-          
-          this->append_parent_dependencies(child, node);
+        // Assign the child to the next level if necessary
+        if (!node_levels.contains(child)) {
+          node_levels[child] = current_level + 1;
+        } else {
+          node_levels[child] =
+              node_levels[child] > current_level + 1 ? node_levels[child] : current_level + 1;
+        }
+
+        // Update the maximum level found so far
+        if (node_levels[child] > max_level) {
+          max_level = node_levels[child];
+        }
+
+        this->append_parent_dependencies(child, node);
       }
-   }
+    }
 
     // Organize nodes into levels
     this->levels_.resize(max_level + 1);
     for (const auto& [node, level] : node_levels) {
-        this->levels_[level].push_back(node);
+      this->levels_[level].push_back(node);
     }
-
   }
 
-  void append_parent_dependencies(Node* child_node, Node *parent_node){
-    if(! this->node_dependencies_.contains(child_node)){
+  void append_parent_dependencies(Node* child_node, Node* parent_node) {
+    if (!this->node_dependencies_.contains(child_node)) {
       this->node_dependencies_[child_node] = {};
     }
-    std::set<Node*> &child_deps = this->node_dependencies_[child_node];
-    std::set<Node*> &parent_deps = this->node_dependencies_[parent_node];
+    std::set<Node*>& child_deps = this->node_dependencies_[child_node];
+    std::set<Node*>& parent_deps = this->node_dependencies_[parent_node];
     child_deps.insert(parent_node);
-    for(const auto &dep: parent_deps){
+    for (const auto& dep : parent_deps) {
       child_deps.insert(dep);
     }
   }
-
-
 
   void topo_sort() {
     std::set<Node*> visited;
@@ -446,8 +432,6 @@ class Graph {
 
   int current_level_ = 0;
   int current_index_ = 0;
-
-
 };
 
 }  // namespace AliceDB

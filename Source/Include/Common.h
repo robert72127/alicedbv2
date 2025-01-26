@@ -40,27 +40,22 @@ timestamp get_current_timestamp() {
   return duration.count();
 }
 
-
-
-
 class SpinLock {
-public:
-    SpinLock() : flag(ATOMIC_FLAG_INIT) {}
+ public:
+  SpinLock() : flag(ATOMIC_FLAG_INIT) {}
 
-    void lock() {
-        // Keep trying to set the flag until it was previously false
-        while (flag.test_and_set(std::memory_order_acquire)) {
-            // Optionally, add a pause to reduce CPU usage
-            std::this_thread::yield();
-        }
+  void lock() {
+    // Keep trying to set the flag until it was previously false
+    while (flag.test_and_set(std::memory_order_acquire)) {
+      // Optionally, add a pause to reduce CPU usage
+      std::this_thread::yield();
     }
+  }
 
-    void unlock() {
-        flag.clear(std::memory_order_release);
-    }
+  void unlock() { flag.clear(std::memory_order_release); }
 
-private:
-    std::atomic_flag flag;
+ private:
+  std::atomic_flag flag;
 };
 
 }  // namespace AliceDB

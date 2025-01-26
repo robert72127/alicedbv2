@@ -23,8 +23,8 @@
 #include <type_traits>
 
 #include "Common.h"
-#include "Producer.h"
 #include "EdgeCache.h"
+#include "Producer.h"
 
 template <typename Type>
 std::array<char, sizeof(Type)> Key(const Type &type) {
@@ -1102,7 +1102,6 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
     }
 
-
     // compute right cache against left table
     while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
@@ -1153,7 +1152,6 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
     }
 
-    
     while (this->in_cache_right_->GetNext(&in_data_right)) {
       Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
       // if this data wasn't present insert with new index
@@ -1180,7 +1178,6 @@ class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
       }
     }
 
-    
     // clean in_caches
     this->in_node_left_->CleanCache();
     this->in_node_right_->CleanCache();

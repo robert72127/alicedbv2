@@ -1,51 +1,75 @@
 /*
 We need to store three things:
 
-< Index | Timestamp > -> Count
+< Index | Timestamp > -> Count - this can either be done entirely in memory or also using btree, cause it gives us prefix search for free
 
-we will:
+<Key(Tuple) | index> - this can be done by btree
 
-insert new counts for given index and timestamp
-search for all <index|timestamp , count> tuples up to some timestamp
+<Match | Keys> - hmm this can be probably done by creating btree
 
-*********************************************************
-seems like something akin to lsm tree will work best here, like rocksdb, deffinetely we need
-sorted approach tho
+but before we go further let's think what are acces cases :
 
-and as a bonus we can actually store single global rockdb table for all tables, we will just
-prefix with table name
-----------------------------------------------------------------------
 
-<Key (large), index>
-we will:
+<index | timestamp  ||| count > - acces: 
 
-insert new tuple
-for given key retrieve index associated with it
+searching all indexes up to given timestamp for merge.
 
-this could be just b+tree or hash table with straighforward lookups
 
------------------------------------------------------------------------
+searching all indexes up to given timestamp for insert new item.
 
-Match | Key mapping
+inserting new timestamps
 
-used when:
+delete old timestamp
 
-we have two tables, first uses f1 for match and second uses f2, and we want to do things such as
-join
+so read is always sequential
 
-then for new tuples from table 1 we compute f1(tuple) = match1 and then compute f2(tuple) for
-each tuple in table 2 and perform join on matching from both
+hmm we can use in  memory only  structure, and log new timestamps to per table file,
+then during compaction update file to new one
 
-how to store: as secondary index?
-    by multiple fields?
-    by new match field?
+so if crash read log, and update persistent on save
 
-as separate table?
-    with mapping <match | key> -> this feels better cause it allows us to store even more
-interesting structures, and potentiall treat key as single field instead of splitting it into
-separate columns
 
-so it also will be b+tree / hash_table
+<Key(Tuple) ||| Index> -> acces:
+
+search : when we get tuple we can check whether it already has index by searching b+tree
+insert : assign new index
+search: find all matching tuples in other table
+
+
+<Match ||| Key(Tuple)> -> acces:
+
+search find all matching tuples in other table
+insert, create new entry that will point to right tuple
+
+
+------------------------------------------------------------------
+
+all in all we could simpy store
+
+
+<tuple ||| index ||| count > as persistent data.
+
++ log file for deltas
+
++ in memory <index| timestamp -> count > data structure for deltas
+
+and build b+tree indexed by:
+
+
+tuple for getting correct index'es
+
+match field for gettign correct tuples for joins
+
+Now there is also matter of indexes:
+
+cause in theory we could also build third b+tree that uses indexes this should be light since indexes are just ints so small data.
+However is it really needed? we could load it into memory once at the beginning and then once to persistent storage at the end
+
+
+So now we can implement api and then see if we can replace our storage with this design
+
+
+also all our storage can be single threaded since we work on single node by one thread at once
 
 */
 

@@ -76,10 +76,12 @@ also all our storage can be single threaded since we work on single node by one 
 #ifndef ALICEDBSTORAGE
 #define ALICEDBSTORAGE
 
-#include <map>
+#include <unordered_map>
 #include <set>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <fstream>
 
 #include "Common.h"
 
@@ -94,38 +96,37 @@ namespace AliceDB {
  */
 class DeltaStorage {
  public:
+
+  /*initialize delta storage from log file*/
+  DeltaStorage(std::string log_file): log_file_{log_file} {
+    if(this->ReadLogFile()){
+      // corrupted data, clean in memory stuff
+      deltas_.clear();
+    }
+  }
+
+  ~DeltaStorage(){
+    this->UpdateLogFile();
+  }
+
   /**
    * @brief insert new delta into the table
    */
-  bool Insert(std::string table_name, index idx, const Delta &d) {
-    // get correct table, and if it doesn't exists, create it
-    if (!this->tables_.contains(table_name)) {
-      this->tables_[table_name] = std::vector<std::multiset<Delta, DeltaComparator>>();
-    }
-    std::vector<std::multiset<Delta, DeltaComparator>> &index_to_deltas_ref =
-        this->tables_[table_name];
-
+  bool Insert(index idx, const Delta &d) {
     // get correct index
-    size_t itd_size = index_to_deltas_ref.size();
-    while (idx >= itd_size) {
-      index_to_deltas_ref.push_back({});
+    if(!this->deltas_.contains(idx)){
+      this->deltas_[idx] = {d};
+    }else{
+      deltas_[idx].insert(d);
     }
-
-    std::multiset<Delta, DeltaComparator> &deltas_ref = index_to_deltas_ref[idx];
-    deltas_ref.insert(d);
   }
 
   /**
    * @brief merge tuples by summing values, by index for given table up to end_timestamp
    */
   bool Merge(std::string table_name, timestamp end_ts) {
-    if (!this->tables_.contains(table_name)) {
-      return false;
-    }
-    std::vector<std::multiset<Delta, DeltaComparator>> &table = this->tables_[table_name];
-
-    for (int index = 0; index < table.size(); index++) {
-      auto &deltas = table[index];
+    for (int index = 0; index < deltas_.size(); index++) {
+      auto &deltas = deltas_[index];
       int previous_count = 0;
       timestamp ts = 0;
 
@@ -148,74 +149,147 @@ class DeltaStorage {
         }
       }
     }
+
+    UpdateLogFile();
   }
 
   /**
-   * @brief returns multiset of all the deltas for given key up to timestamp : up_to_ts
+   * @brief returns multiset of all the deltas for given key
    */
-  std::multiset<Delta, DeltaComparator> Scan(std::string table_name, index idx) {
-    if (!this->tables_.contains(table_name)) {
-      return {};
-    }
-
-    std::vector<std::multiset<Delta, DeltaComparator>> &table = this->tables_[table_name];
-    if (table.size() <= idx) {
-      return {};
-    }
-
-    return table[idx];
+  std::multiset<Delta, DeltaComparator> Scan(index idx) {
+    return this->deltas_[idx];
   }
-
-  /**
-   * @brief remove all key|value pairs associated with given table
-   */
-  bool DeleteTable(std::string table_name) { this->tables_.erase(table_name); }
 
  private:
-  /** @brief table is accesed by string(name) and it holds vector of multisets of deltast
-   *
-   * string -> return vector of multisets of deltas
-   * int -> return multiset of deltas for given index
-   * multiset of deltas -> deltas sorted by timestamp
-   */
-  std::map<std::string, std::vector<std::multiset<Delta, DeltaComparator>>> tables_;
+
+  bool UpdateLogFile(){
+    
+    std::string tmp_filename = this->log_file_ + "_tmp";
+
+    // open the temporary file for writing
+    std::ofstream file_stream(tmp_filename, std::ios::out);
+
+    for (auto &[idx, mst] : deltas_) {
+        // write the index and the size of the multiset
+        file_stream << idx << " " << mst.size();
+
+        // write out each Delta as "count ts"
+        for (auto &dlt : mst) {
+            file_stream << " " << dlt.count << " " << dlt.ts;
+        }
+        file_stream << "\n";
+    }
+
+    // flush
+    file_stream.close();
+
+    // atomically replace old file
+    std::filesystem::rename(tmp_filename, this->log_file_);
+
+  }
+
+  int ReadLogFile() {
+      std::ifstream file_stream(this->log_file_, std::ios::in);
+      // doesn't exists
+      if (!file_stream) { return;}
+
+      // clrear in mem stuff if there is any for some reason
+      deltas_.clear();
+
+      while (true) {
+          index idx;
+          std::size_t num_deltas;
+
+          // Try to read <index> and <numDeltas>
+          if (!(file_stream >> idx >> num_deltas)) {
+              // eof
+              return 0;
+              break;
+          }
+
+          std::multiset<Delta, DeltaComparator> ms;
+
+          // Read <count, ts> pairs 'numDeltas' times
+          for (std::size_t i = 0; i < num_deltas; i++) {
+              Delta d;
+              //corrupted
+              if (!(file_stream >> d.count >> d.ts)) {
+                  return 1;
+              }
+              ms.insert(d);
+          }
+
+          // move the collected deltas into the map
+          deltas_[idx] = std::move(ms);
+      }
+  }
+
+  // multiset of deltas for each index
+  std::unordered_map<index, std::multiset<Delta, DeltaComparator>> deltas_;
+
+  std::string log_file_;
+
 };
 
-}  // namespace AliceDB
+
+
+class BufferPool;
+/**
+ *  @brief persistent storage
+ * 
+ */
+template <typename Key, typename Value>
+class BTree{
+
+  Btree(BufferPool *bp)
+
+
+  bool Insert(Key *k, Value *v);
+
+  /** we should probably return vector of positions <page_index, tuple_index> so we will be able to access it in nice sorted order */
+  std::vector<TablePosition> Search(Key *k);
+
+  bool Delete(Key *k);
+
+};
 
 /**
- * @brief
- * Storage for normal: Key|Value mappings, that is for:
- *  Key|index mapping -> this is always one to one
- *  and for
- *  MatchField | Key -> this is many to one
- *
- *  best way would be to use some standard storage technology with buffer pool and b-tree |
- * hashtable.
- *
- *  What api do we need?
- *  We might want to switch to iterator api, but for now let's use this simple one.
- *  We will use normal bufferpool with disk backed storage
- *
- *
- *
- *  What api do we need for
- *
- *  for match-> tuple -> we need b-tree based search, and normal insertion with possible
- * duplicated match keys
- *
- *  for tuple -> index we need b-tree based search,heap search and normal insertion
- *  */
+ * @brief persistent swappable(on compress) storage for deltas
+ */
+class Log{
 
-template <typename K, typename V>
-class Table {
-  KVStorage(std::string table_name);
+  Log(std::string filename);
 
-  /** @brief returns vector of values associated with given key */
-  std::vector<V> Get(K key);
 
-  /** @brief inserts new key value pair into the table */
-  bool Put(K key, V value);
+  bool Append(const index &idx, const Delta &d);
+
+  static bool Swap(Log *old_log, Log *new_log);
 };
 
+
+
+
+/**
+ * @brief all the stuff that might be needed,
+ * B+tree's? we got em,
+ * Delta's with persistent storage? you guessed it we got em too
+ */
+class Table{
+
+Table(std::string table_name, BufferPool *bp){
+
+
+
+}
+
+
+private:
+
+  std::vector<index> data_page_indexes_;
+  std::vector<index> btree_page_indexes_;
+
+};
+
+
+}  // namespace AliceDB
 #endif

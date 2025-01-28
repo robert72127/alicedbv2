@@ -88,11 +88,9 @@ also all our storage can be single threaded since we work on single node by one 
 namespace AliceDB {
 
 /**
- * @brief for now this is just wrapper around stl structures, but putting this into separate
- * class will make implementing real storage easier
- *
- * later we will switch to using single table rockdb with table_name_prefix to separate deltas
- * from different tables
+ * Storage for <index | delta > mappings
+ * main idea is to store structure as stl container in memory and later overwrite log file on disk on compression op
+ * 
  */
 class DeltaStorage {
  public:
@@ -252,22 +250,6 @@ class BTree{
   bool Delete(Key *k);
 
 };
-
-/**
- * @brief persistent swappable(on compress) storage for deltas
- */
-class Log{
-
-  Log(std::string filename);
-
-
-  bool Append(const index &idx, const Delta &d);
-
-  static bool Swap(Log *old_log, Log *new_log);
-};
-
-
-
 
 /**
  * @brief all the stuff that might be needed,

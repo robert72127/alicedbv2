@@ -1,4 +1,7 @@
-add_library(AliceDB INTERFACE)
+add_library(AliceDB STATIC
+    Storage/BufferPool.cpp
+    Storage/DiskManager.cpp
+)
 
 # TARGET_LINK_LIBRARIES( AliceDB PRIVATE pthread)
 

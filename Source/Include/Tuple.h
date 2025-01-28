@@ -1,19 +1,19 @@
 #ifndef ALICEDBTUPLE
 #define ALICEDBTUPLE
 
-#include <cstddef>
-
 #include "Common.h"
+
+#include <cstddef>
 
 namespace AliceDB {
 
 // this will be used by cache to transfer data
 template <typename Type>
 struct Tuple {
-  Delta delta;
-  Type data;
+	Delta delta;
+	Type data;
 };
 
-}  // namespace AliceDB
+} // namespace AliceDB
 
 #endif

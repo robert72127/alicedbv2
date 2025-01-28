@@ -1,7 +1,8 @@
 /*
 We need to store three things:
 
-< Index | Timestamp > -> Count - this can either be done entirely in memory or also using btree, cause it gives us prefix search for free
+< Index | Timestamp > -> Count - this can either be done entirely in memory or also using btree, cause it gives us
+prefix search for free
 
 <Key(Tuple) | index> - this can be done by btree
 
@@ -10,7 +11,7 @@ We need to store three things:
 but before we go further let's think what are acces cases :
 
 
-<index | timestamp  ||| count > - acces: 
+<index | timestamp  ||| count > - acces:
 
 searching all indexes up to given timestamp for merge.
 
@@ -62,8 +63,9 @@ match field for gettign correct tuples for joins
 
 Now there is also matter of indexes:
 
-cause in theory we could also build third b+tree that uses indexes this should be light since indexes are just ints so small data.
-However is it really needed? we could load it into memory once at the beginning and then once to persistent storage at the end
+cause in theory we could also build third b+tree that uses indexes this should be light since indexes are just ints so
+small data. However is it really needed? we could load it into memory once at the beginning and then once to persistent
+storage at the end
 
 
 So now we can implement api and then see if we can replace our storage with this design
@@ -76,179 +78,174 @@ also all our storage can be single threaded since we work on single node by one 
 #ifndef ALICEDBSTORAGE
 #define ALICEDBSTORAGE
 
-#include <unordered_map>
-#include <set>
-#include <string>
-#include <vector>
+#include "Common.h"
+
 #include <filesystem>
 #include <fstream>
-
-#include "Common.h"
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace AliceDB {
 
 /**
  * Storage for <index | delta > mappings
  * main idea is to store structure as stl container in memory and later overwrite log file on disk on compression op
- * 
+ *
  */
 class DeltaStorage {
- public:
+public:
+	/*initialize delta storage from log file*/
+	DeltaStorage(std::string log_file) : log_file_ {log_file} {
+		if (this->ReadLogFile()) {
+			// corrupted data, clean in memory stuff
+			deltas_.clear();
+		}
+	}
 
-  /*initialize delta storage from log file*/
-  DeltaStorage(std::string log_file): log_file_{log_file} {
-    if(this->ReadLogFile()){
-      // corrupted data, clean in memory stuff
-      deltas_.clear();
-    }
-  }
+	~DeltaStorage() {
+		this->UpdateLogFile();
+	}
 
-  ~DeltaStorage(){
-    this->UpdateLogFile();
-  }
+	/**
+	 * @brief insert new delta into the table
+	 */
+	bool Insert(index idx, const Delta &d) {
+		// get correct index
+		if (!this->deltas_.contains(idx)) {
+			this->deltas_[idx] = {d};
+		} else {
+			deltas_[idx].insert(d);
+		}
+	}
 
-  /**
-   * @brief insert new delta into the table
-   */
-  bool Insert(index idx, const Delta &d) {
-    // get correct index
-    if(!this->deltas_.contains(idx)){
-      this->deltas_[idx] = {d};
-    }else{
-      deltas_[idx].insert(d);
-    }
-  }
+	/**
+	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
+	 */
+	bool Merge(std::string table_name, timestamp end_ts) {
+		for (int index = 0; index < deltas_.size(); index++) {
+			auto &deltas = deltas_[index];
+			int previous_count = 0;
+			timestamp ts = 0;
 
-  /**
-   * @brief merge tuples by summing values, by index for given table up to end_timestamp
-   */
-  bool Merge(std::string table_name, timestamp end_ts) {
-    for (int index = 0; index < deltas_.size(); index++) {
-      auto &deltas = deltas_[index];
-      int previous_count = 0;
-      timestamp ts = 0;
+			for (auto it = deltas.rbegin(); it != deltas.rend();) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
 
-      for (auto it = deltas.rbegin(); it != deltas.rend();) {
-        previous_count += it->count;
-        ts = it->ts;
-        auto base_it = std::next(it).base();
-        base_it = deltas.erase(base_it);
-        it = std::reverse_iterator<decltype(base_it)>(base_it);
+				// Check the condition: ts < ts_ - frontier_ts_
 
-        // Check the condition: ts < ts_ - frontier_ts_
+				// if current delta has bigger tiemstamp than one we are setting, or we
+				// iterated all deltas insert accumulated delta and break loop
+				if (it == deltas.rend() || it->ts > end_ts) {
+					deltas.insert(Delta {ts, previous_count});
+					break;
+				} else {
+					continue;
+				}
+			}
+		}
 
-        // if current delta has bigger tiemstamp than one we are setting, or we
-        // iterated all deltas insert accumulated delta and break loop
-        if (it == deltas.rend() || it->ts > end_ts) {
-          deltas.insert(Delta{ts, previous_count});
-          break;
-        } else {
-          continue;
-        }
-      }
-    }
+		UpdateLogFile();
+	}
 
-    UpdateLogFile();
-  }
+	/**
+	 * @brief returns multiset of all the deltas for given key
+	 */
+	std::multiset<Delta, DeltaComparator> Scan(index idx) {
+		return this->deltas_[idx];
+	}
 
-  /**
-   * @brief returns multiset of all the deltas for given key
-   */
-  std::multiset<Delta, DeltaComparator> Scan(index idx) {
-    return this->deltas_[idx];
-  }
+private:
+	bool UpdateLogFile() {
 
- private:
+		std::string tmp_filename = this->log_file_ + "_tmp";
 
-  bool UpdateLogFile(){
-    
-    std::string tmp_filename = this->log_file_ + "_tmp";
+		// open the temporary file for writing
+		std::ofstream file_stream(tmp_filename, std::ios::out);
 
-    // open the temporary file for writing
-    std::ofstream file_stream(tmp_filename, std::ios::out);
+		for (auto &[idx, mst] : deltas_) {
+			// write the index and the size of the multiset
+			file_stream << idx << " " << mst.size();
 
-    for (auto &[idx, mst] : deltas_) {
-        // write the index and the size of the multiset
-        file_stream << idx << " " << mst.size();
+			// write out each Delta as "count ts"
+			for (auto &dlt : mst) {
+				file_stream << " " << dlt.count << " " << dlt.ts;
+			}
+			file_stream << "\n";
+		}
 
-        // write out each Delta as "count ts"
-        for (auto &dlt : mst) {
-            file_stream << " " << dlt.count << " " << dlt.ts;
-        }
-        file_stream << "\n";
-    }
+		// flush
+		file_stream.close();
 
-    // flush
-    file_stream.close();
+		// atomically replace old file
+		std::filesystem::rename(tmp_filename, this->log_file_);
+	}
 
-    // atomically replace old file
-    std::filesystem::rename(tmp_filename, this->log_file_);
+	int ReadLogFile() {
+		std::ifstream file_stream(this->log_file_, std::ios::in);
+		// doesn't exists
+		if (!file_stream) {
+			return;
+		}
 
-  }
+		// clrear in mem stuff if there is any for some reason
+		deltas_.clear();
 
-  int ReadLogFile() {
-      std::ifstream file_stream(this->log_file_, std::ios::in);
-      // doesn't exists
-      if (!file_stream) { return;}
+		while (true) {
+			index idx;
+			std::size_t num_deltas;
 
-      // clrear in mem stuff if there is any for some reason
-      deltas_.clear();
+			// Try to read <index> and <numDeltas>
+			if (!(file_stream >> idx >> num_deltas)) {
+				// eof
+				return 0;
+				break;
+			}
 
-      while (true) {
-          index idx;
-          std::size_t num_deltas;
+			std::multiset<Delta, DeltaComparator> ms;
 
-          // Try to read <index> and <numDeltas>
-          if (!(file_stream >> idx >> num_deltas)) {
-              // eof
-              return 0;
-              break;
-          }
+			// Read <count, ts> pairs 'numDeltas' times
+			for (std::size_t i = 0; i < num_deltas; i++) {
+				Delta d;
+				// corrupted
+				if (!(file_stream >> d.count >> d.ts)) {
+					return 1;
+				}
+				ms.insert(d);
+			}
 
-          std::multiset<Delta, DeltaComparator> ms;
+			// move the collected deltas into the map
+			deltas_[idx] = std::move(ms);
+		}
+	}
 
-          // Read <count, ts> pairs 'numDeltas' times
-          for (std::size_t i = 0; i < num_deltas; i++) {
-              Delta d;
-              //corrupted
-              if (!(file_stream >> d.count >> d.ts)) {
-                  return 1;
-              }
-              ms.insert(d);
-          }
+	// multiset of deltas for each index
+	std::unordered_map<index, std::multiset<Delta, DeltaComparator>> deltas_;
 
-          // move the collected deltas into the map
-          deltas_[idx] = std::move(ms);
-      }
-  }
-
-  // multiset of deltas for each index
-  std::unordered_map<index, std::multiset<Delta, DeltaComparator>> deltas_;
-
-  std::string log_file_;
-
+	std::string log_file_;
 };
-
-
 
 class BufferPool;
 /**
  *  @brief persistent storage
- * 
+ *
  */
 template <typename Key, typename Value>
-class BTree{
+class BTree {
 
-  Btree(BufferPool *bp)
+	Btree(BufferPool *bp)
 
+	    bool Insert(Key *k, Value *v);
 
-  bool Insert(Key *k, Value *v);
+	/** we should probably return vector of positions <page_index, tuple_index> so we will be able to access it in nice
+	 * sorted order */
+	std::vector<TablePosition> Search(Key *k);
 
-  /** we should probably return vector of positions <page_index, tuple_index> so we will be able to access it in nice sorted order */
-  std::vector<TablePosition> Search(Key *k);
-
-  bool Delete(Key *k);
-
+	bool Delete(Key *k);
 };
 
 /**
@@ -256,22 +253,15 @@ class BTree{
  * B+tree's? we got em,
  * Delta's with persistent storage? you guessed it we got em too
  */
-class Table{
+class Table {
 
-Table(std::string table_name, BufferPool *bp){
-
-
-
-}
-
+	Table(std::string table_name, BufferPool *bp) {
+	}
 
 private:
-
-  std::vector<index> data_page_indexes_;
-  std::vector<index> btree_page_indexes_;
-
+	std::vector<index> data_page_indexes_;
+	std::vector<index> btree_page_indexes_;
 };
 
-
-}  // namespace AliceDB
+} // namespace AliceDB
 #endif

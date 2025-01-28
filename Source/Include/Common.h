@@ -12,15 +12,15 @@ using index = long long;
 using timestamp = unsigned long long;
 
 struct Delta {
-  timestamp ts;
-  int count;
+	timestamp ts;
+	int count;
 };
 
 // for automatically sorting by delta
 struct DeltaComparator {
-  bool operator()(const Delta &a, const Delta &b) const {
-    return a.ts < b.ts;  // Sort based on the timestamp
-  }
+	bool operator()(const Delta &a, const Delta &b) const {
+		return a.ts < b.ts; // Sort based on the timestamp
+	}
 };
 
 /* use buffer pool and memory arena for cache as two separate memory pools
@@ -35,18 +35,16 @@ template <typename T>
 concept Arithmetic = std::is_arithmetic_v<T>;
 
 timestamp get_current_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-  return duration.count();
+	auto now = std::chrono::system_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+	return duration.count();
 }
 
+struct TablePosition {
+	uint32_t page_index;
+	uint32_t tuple_index;
+};
 
-struct TablePosition{
-  uint32_t page_index;
-  uint32_t tuple_index;
-}; 
-
-
-}  // namespace AliceDB
+} // namespace AliceDB
 
 #endif

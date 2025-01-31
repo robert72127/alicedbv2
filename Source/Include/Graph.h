@@ -28,6 +28,24 @@ enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
 
 class Graph {
 public:
+	
+	Graph(std::string graph_filename){
+
+
+	}
+
+	~Graph(){
+		// update graph metadatafile
+		// ok and what do we actually need to store there?
+		// like connections and node lists is actually stored in object itself(in code)
+		// what we need to store instead is for each node it's metadata info such that each node will be called with
+		// right args for Table 
+
+
+	}
+
+
+
 	// Node creations
 
 	template <typename P>

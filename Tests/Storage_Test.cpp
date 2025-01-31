@@ -1,5 +1,5 @@
-#include "Storage/BufferPool.h"
-#include "Storage/DiskManager.h"
+#include "BufferPool.h"
+#include "DiskManager.h"
 #include "Common.h"
 
 #include "gtest/gtest.h"

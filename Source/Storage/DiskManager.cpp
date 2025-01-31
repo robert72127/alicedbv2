@@ -1,7 +1,6 @@
-#include "Storage/DiskManager.h"
-
+#include "DiskManager.h"
+#include "BufferPool.h"
 #include "Common.h"
-#include "Storage/BufferPool.h"
 
 #include <chrono>
 #include <condition_variable>

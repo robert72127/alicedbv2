@@ -2,7 +2,7 @@
 #define ALICEDBDISKMANAGER
 
 #include "Common.h"
-#include "Storage/BufferPool.h"
+#include "BufferPool.h"
 
 #include <atomic>
 #include <filesystem>

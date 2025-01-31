@@ -96,6 +96,7 @@ namespace AliceDB {
  */
 class DeltaStorage {
 public:
+	friend Table;
 	/*initialize delta storage from log file*/
 	DeltaStorage(std::string log_file) : log_file_ {log_file} {
 		if (this->ReadLogFile()) {
@@ -111,7 +112,7 @@ public:
 	/**
 	 * @brief insert new delta into the table
 	 */
-	bool Insert(index idx, const Delta &d) {
+	bool Insert(const index idx, const Delta &d) {
 		// get correct index
 		if (!this->deltas_.contains(idx)) {
 			this->deltas_[idx] = {d};
@@ -123,7 +124,7 @@ public:
 	/**
 	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
 	 */
-	bool Merge(std::string table_name, timestamp end_ts) {
+	bool Merge(const timestamp end_ts) {
 		for (int index = 0; index < deltas_.size(); index++) {
 			auto &deltas = deltas_[index];
 			int previous_count = 0;
@@ -155,7 +156,7 @@ public:
 	/**
 	 * @brief returns multiset of all the deltas for given key
 	 */
-	std::multiset<Delta, DeltaComparator> Scan(index idx) {
+	inline std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
 		return this->deltas_[idx];
 	}
 
@@ -246,6 +247,9 @@ class BTree {
 	std::vector<TablePosition> Search(Key *k);
 
 	bool Delete(Key *k);
+
+	private:
+	std::vector<index> btree_page_indexes_;
 };
 
 /**
@@ -253,15 +257,92 @@ class BTree {
  * B+tree's? we got em,
  * Delta's with persistent storage? you guessed it we got em too
  */
+
+template <typename Type>
 class Table {
 
-	Table(std::string table_name, BufferPool *bp) {
+	Table(std::string metadata_file, std::string delta_storage_fname, 
+			std::vector<index> data_page_indexes, 
+			BufferPool *bp): bp_{bp}, ds_{std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_{data_page_indexes} 
+	{
 	}
 
-private:
+	void Insert(const char *in_data){}
+
+	void Delete(const char *data){}
+
+
+	// other will be iterate all tuples, so heap based for 
+	// cross join
+	class HeapIterator;
+	HeapIterator begin();
+	HeapIterator end();
+
+	// methods to work with deltas
+	bool InsertDelta(const index idx, const Delta &d){
+		return this->ds_->Insert(idx, d);
+	}
+	bool MergeDelta(const timestamp end_ts) {
+		return this->ds_->Merge( end_ts);
+	}
+	std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
+		return this->ds_->deltas_[idx];
+	}
+
+
+protected:
 	std::vector<index> data_page_indexes_;
-	std::vector<index> btree_page_indexes_;
+
+	std::unique_ptr<DeltaStorage> ds_;
+	BufferPool *bp_;
+
 };
+
+
+template <typename Type>
+class BtreeTable : public Table{
+
+	BtreeTable(std::string metadata_file, std::string delta_storage_fname, 
+			std::vector<index> data_page_indexes, 
+			std::vector<index> btree_indexes, 
+			BufferPool *bp): Table(metadata_file, delta_storage_fname, data_page_indexes, bp), btree_indexes_(btree_indexes) 
+	{
+	}
+
+	~BtreeTable();
+
+	/** @todo this should maybe work like iterator? ie return next tuple?
+	 */
+	class BtreeItertor;
+	BtreeItertor begin(const char *find_data);
+	BtreeItertor end();
+
+protected:
+	std::vector<index> btree_indexes_;
+};
+
+
+template <typename Type, typename MatchType>
+class MatchTable: public : BtreeTable{
+
+	MatchTable(std::string metadata_file, std::string delta_storage_fname, 
+			std::vector<index> data_page_indexes, 
+			std::vector<index> btree_indexes, 
+			std::vector<index> match_indexes, 
+			BufferPool *bp): BtreeTable(metadata_file, delta_storage_fname, data_page_indexes, bp, btree_indexes), match_indexes_(match_indexes) {}
+
+	~MatchTable(); 
+	
+	// this is only needed for join node
+	class MatchIterator;
+	
+	MatchIterator<MatchTpe> begin(const char *find_data);
+	MatchIterator<MatchTpe> end();
+
+private:
+	std::vector<index> match_indexes_;
+};
+
 
 } // namespace AliceDB
 #endif

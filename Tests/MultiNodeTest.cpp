@@ -208,7 +208,7 @@ TEST(MULTINODE_TEST, multinode_test){
 
 
     // define new graph instance
-    AliceDB::Graph *g = new AliceDB::Graph;
+    AliceDB::Graph *g = new AliceDB::Graph("graph.txt");
 
     // define 2 data producers
     AliceDB::Producer<Person> *prod_people = new AliceDB::FileProducer<Person>(people_fname,parsePerson);

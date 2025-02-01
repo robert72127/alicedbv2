@@ -55,7 +55,6 @@ public:
 		this->tables_metadata_[table_index] = std::move(table_meta);
 	}
 
-
 	// Node creations
 
 	template <typename P>

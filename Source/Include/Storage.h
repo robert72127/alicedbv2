@@ -115,19 +115,27 @@ public:
 
 	/**
 	 * @brief insert new delta into the table
+	 * @return true if index wasn't present
+	 * false otherwise
 	 */
 	bool Insert(const index idx, const Delta &d) {
 		// get correct index
 		if (!this->deltas_.contains(idx)) {
 			this->deltas_[idx] = {d};
+			// index wasn't present return true
+			return faccessat;
 		} else {
+			// index was preset return false
 			deltas_[idx].insert(d);
+			return true;
 		}
 	}
 
 	/**
 	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
 	 */
+	// generic compact deltas work's for almost any kind of node (doesn't work for
+	// aggregations we will see :) )
 	bool Merge(const timestamp end_ts) {
 		for (int index = 0; index < deltas_.size(); index++) {
 			auto &deltas = deltas_[index];
@@ -162,6 +170,15 @@ public:
 	 */
 	inline std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
 		return this->deltas_[idx];
+	}
+
+	// return oldest delta for index
+	inline Delta Oldest(index idx) {
+		return *deltas_[idx].rbegin();
+	}
+
+	inline size_t Size() {
+		return this->deltas_.size();
 	}
 
 private:
@@ -264,35 +281,49 @@ private:
 template <typename Type>
 class Table {
 
-	Table(int table_idx, std::string delta_storage_fname, std::vector<index> data_page_indexes, BufferPool *bp,
-	      Graph *g)
+	Table(int table_idx, std::string delta_storage_fname, std::vector<index> data_page_indexes,
+	      std::vector<index> btree_indexes, BufferPool *bp, Graph *g)
 	    : table_idx_ {table_idx} bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
 	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes} {
 	}
 
-	virtual ~Table() {
-		// prepare metadata to be inserted
-		MetaState meta =
-		{.pages_ = this->data_page_indexes_ }
+	virtual ~Table() {// prepare metadata to be inserted
+	                  MetaState meta =
+	                      {
+	                          .pages_ = this->data_page_indexes_,
+	                          .btree_pages_ this->btree_indexes_,
+	                      }
 
-		this->g_->UpdateTableMetadata(meta)
-	}
+	                      this->g_->UpdateTableMetadata(meta)}
 
-	void Insert(const char *in_data) {
-		// firt insert into page
+	// return index if data already present in table, doesn't insert but just return index
+	index Insert(const char *in_data) {
+		// firt insert into page, if already contains doesn't need to insert
 		// this will return index,
 		// then call insert on b+tree with in_data(key), index(leaf) for btreetable
 		// then call insert on b+tree(match one) with in_data(key), index(leaf) for matchbtreetable
 	}
 
+	// searches for data(key) in table if finds returns true and sets index value to found index
+	bool Search(const char *data, int *index);
+
 	void Delete(const char *data) {
 	}
 
 	// other will be iterate all tuples, so heap based for
-	// cross join
+	// cross join and compact delta for distinct node
+
+	/** @todo all iterators should return tuple or sth so like data - pointer | index */
+
 	class HeapIterator;
 	HeapIterator begin();
 	HeapIterator end();
+
+	/** @todo this should maybe work like iterator? ie return next tuple?
+	 */
+	class BtreeItertor;
+	BtreeItertor begin(const char *find_data);
+	BtreeItertor end();
 
 	// methods to work with deltas
 	bool InsertDelta(const index idx, const Delta &d) {
@@ -305,8 +336,18 @@ class Table {
 		return this->ds_->deltas_[idx];
 	}
 
+	// return oldest delta for index
+	inline Delta OldestDelta(index idx) {
+		return this->ds->Oldest(idx);
+	}
+
+	inline size_t DeltasSize() {
+		return this->ds_->Size();
+	}
+
 protected:
 	std::vector<index> data_page_indexes_;
+	std::vector<index> btree_indexes_;
 	std::string ds_filename_;
 	std::unique_ptr<DeltaStorage> ds_;
 	BufferPool *bp_;
@@ -314,40 +355,14 @@ protected:
 	index table_idx_;
 };
 
-template <typename Type>
-class BtreeTable : public Table<Type> {
-
-	BtreeTable(int table_idx, std::string delta_storage_fname, std::vector<index> data_page_indexes,
-	           std::vector<index> btree_indexes, BufferPool *bp, Graph *g)
-	    : Table(table_idx, delta_storage_fname, data_page_indexes, bp, g), btree_indexes_(btree_indexes) {
-	}
-
-	~BtreeTable() {
-		// prepare metadata to be inserted
-		MetaState meta =
-		{.pages_ = this->data_page_indexes_,
-		 .btree_pages_ this->btree_indexes_ }
-
-		this->g_->UpdateTableMetadata(meta)
-	}
-
-	/** @todo this should maybe work like iterator? ie return next tuple?
-	 */
-	class BtreeItertor;
-	BtreeItertor begin(const char *find_data);
-	BtreeItertor end();
-
-protected:
-	std::vector<index> btree_indexes_;
-};
-
 template <typename Type, typename MatchType>
-class MatchTable : public BtreeTable<Type> {
+class MatchTable : public Table<Type> {
 
 	MatchTable(index table_idx, std::string delta_storage_fname, std::vector<index> data_page_indexes,
-	           std::vector<index> btree_indexes, std::vector<index> match_indexes, BufferPool *bp, Graph *g)
-	    : BtreeTable(table_idx, delta_storage_fname, data_page_indexes, btree_indexes, bp, g),
-	      match_indexes_(match_indexes) {
+	           std::vector<index> btree_indexes, std::vector<index> match_indexes, BufferPool *bp, Graph *g,
+	           std::function<MatchType(const Type &)> match_function, )
+	    : Table(table_idx, delta_storage_fname, data_page_indexes, btree_indexes, bp, g),
+	      match_indexes_(match_indexes), match_function_ {match_function} {
 	}
 
 	~MatchTable() {
@@ -360,6 +375,9 @@ class MatchTable : public BtreeTable<Type> {
 		this->g_->UpdateTableMetadata(meta)
 	}
 
+	/** @todo
+	 this needs to overwrite insert to also insert index into matchtable */
+
 	// this is only needed for join node
 	class MatchIterator;
 
@@ -368,6 +386,7 @@ class MatchTable : public BtreeTable<Type> {
 
 private:
 	std::vector<index> match_indexes_;
+	std::function<MatchType(const Type &)> match_function_;
 };
 
 } // namespace AliceDB

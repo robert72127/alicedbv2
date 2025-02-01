@@ -15,6 +15,7 @@
 #include "Common.h"
 #include "EdgeCache.h"
 #include "Producer.h"
+#include "Storage.h"
 
 #include <algorithm>
 #include <chrono>
@@ -47,35 +48,6 @@ namespace AliceDB {
 
 // we need this definition to store graph pointer in node
 class Graph;
-
-// generic compact deltas work's for almost any kind of node (doesn't work for
-// aggregations)
-void compact_deltas(std::vector<std::multiset<Delta, DeltaComparator>> &index_to_deltas, timestamp current_ts) {
-	for (int index = 0; index < index_to_deltas.size(); index++) {
-		auto &deltas = index_to_deltas[index];
-		int previous_count = 0;
-		timestamp ts = 0;
-
-		for (auto it = deltas.rbegin(); it != deltas.rend();) {
-			previous_count += it->count;
-			ts = it->ts;
-			auto base_it = std::next(it).base();
-			base_it = deltas.erase(base_it);
-			it = std::reverse_iterator<decltype(base_it)>(base_it);
-
-			// Check the condition: ts < ts_ - frontier_ts_
-
-			// if current delta has bigger tiemstamp than one we are setting, or we
-			// iterated all deltas insert accumulated delta and break loop
-			if (it == deltas.rend() || it->ts > current_ts) {
-				deltas.insert(Delta {ts, previous_count});
-				break;
-			} else {
-				continue;
-			}
-		}
-	}
-}
 
 class Node {
 public:
@@ -151,16 +123,8 @@ public:
 		const char *in_data;
 		while (this->produce_cache_->GetNext(&in_data)) {
 			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
-				index match_index = this->next_index_;
-				this->next_index_++;
-				this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
-				this->index_to_deltas_.emplace_back(std::multiset<Delta, DeltaComparator> {in_tuple->delta});
-			} else {
-				index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
-				this->index_to_deltas_[match_index].insert(in_tuple->delta);
-			}
+			index idx = this->table_->Insert(in_tuple->data);
+			this->table_->InsertDelta(idx, in_tuple->delta)
 		}
 
 		if (this->update_ts_) {
@@ -196,7 +160,7 @@ public:
 
 private:
 	void Compact() {
-		compact_deltas(this->index_to_deltas_, this->ts_);
+		this->table_->MergeDelta(this->ts_);
 	}
 
 	int duration_us_;
@@ -219,13 +183,7 @@ private:
 	int out_count = 0;
 	int clean_count = 0;
 
-	// we can treat whole tuple as a key, this will return it's index
-	// we will later use some persistent storage for that mapping, maybe rocksdb
-	// or something
-	std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
-	// from index we can get list of changes to the input, later
-	// we will use some better data structure for that
-	std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
+	Table<Type> *table_;
 };
 
 template <typename Type>
@@ -241,16 +199,8 @@ public:
 		const char *in_data;
 		while (this->in_cache_->GetNext(&in_data)) {
 			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
-				index match_index = this->next_index_;
-				this->next_index_++;
-				this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
-				this->index_to_deltas_.emplace_back(std::multiset<Delta, DeltaComparator> {in_tuple->delta});
-			} else {
-				index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
-				this->index_to_deltas_[match_index].insert(in_tuple->delta);
-			}
+			index idx = this->table_->Insert(in_tuple->data);
+			this->table_->InsertDelta(idx, in_tuple->delta)
 		}
 
 		// get current timestamp that can be considered
@@ -261,29 +211,6 @@ public:
 			this->update_ts_ = false;
 		}
 		this->in_node_->CleanCache();
-	}
-
-	// print state of table at this moment, for debugging only
-	void Print(timestamp ts, std::function<void(const char *)> print) {
-		for (auto &pair : this->tuple_to_index_) {
-			auto &current_data = pair.first;
-			// iterate deltas from oldest till current
-			int total = 0;
-			index current_index = pair.second;
-
-			std::multiset<Delta, DeltaComparator> &deltas = this->index_to_deltas_[current_index];
-			for (auto dit = deltas.begin(); dit != deltas.end(); dit++) {
-				const Delta &delta = *dit;
-				if (delta.ts > ts) {
-					break;
-				} else {
-					total += delta.count;
-				}
-			}
-			// now print positive's
-			std::cout << "COUNT : " << total << " |\t ";
-			print(current_data.data());
-		}
 	}
 
 	// since all sink does is store state we can treat incache as out cache when we use sink(view)
@@ -309,7 +236,7 @@ public:
 
 private:
 	void Compact() {
-		compact_deltas(this->index_to_deltas_, this->ts_);
+		this->table_->MergeDelta(this->ts_);
 	}
 
 	size_t next_index_ = 0;
@@ -331,10 +258,7 @@ private:
 	// we will later use some persistent storage for that mapping, maybe rocksdb
 	// or something
 
-	std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
-	// from index we can get list of changes to the input, later
-	// we will use some better data structure for that
-	std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
+	Table<Type> *table_
 };
 
 template <typename Type>
@@ -510,20 +434,19 @@ public:
 	}
 
 	void Compute() {
+		// whether tuple for given index was ever emited, this is needed for compute state machine
+		std::unordered_set<index> not_emited;
+
 		// first insert all new data from cache to table
 		const char *in_data_;
 		while (this->in_cache_->GetNext(&in_data_)) {
 			const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_.contains(Key<Type>(in_tuple->data))) {
-				index match_index = this->next_index_;
-				this->next_index_++;
-				this->tuple_to_index_[Key<Type>(in_tuple->data)] = match_index;
-				this->index_to_deltas_.emplace_back(std::multiset<Delta, DeltaComparator> {in_tuple->delta});
-				emited_.push_back(false);
-			} else {
-				index match_index = this->tuple_to_index_[Key<Type>(in_tuple->data)];
-				this->index_to_deltas_[match_index].insert(in_tuple->delta);
+
+			index idx = this->table_->Insert(in_tuple->data);
+			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
+
+			                       if (!was_present) {
+				not_emited.insert(idx);
 			}
 		}
 
@@ -531,22 +454,25 @@ public:
 		if (this->compact_) {
 			// delta_count for oldest keept verson fro this we can deduce what tuples
 			// to emit;
-			std::vector<Delta> oldest_deltas_ {this->tuple_to_index_.size()};
+			std::vector<Delta> oldest_deltas_ {this->table_->DeltasSize()};
 
 			// emit delete for oldest keept version, emit insert for previous_ts
 
 			// iterate by tuple to index
-			for (auto it = this->tuple_to_index_.begin(); it != this->tuple_to_index_.end(); it++) {
-				oldest_deltas_[it->second] = *(this->index_to_deltas_[it->second].rbegin());
+			for (size_t index = 0; index < this->table_->DeltasSize(); index++) {
+				oldest_deltas_[index] = this->table_->OldestDelta(index);
 			}
 
 			this->Compact();
 			this->compact_ = false;
 
-			for (auto it = this->tuple_to_index_.begin(); it != this->tuple_to_index_.end(); it++) {
-				// now we can get current oldest delta ie after compaction:
-				Delta cur_delta = *(this->index_to_deltas_[it->second].rbegin());
-				bool previous_positive = oldest_deltas_[it->second].count > 0;
+			// use heap iterator to go through all tuples
+			for (int index = 0, auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
+			     ++it, index++) {
+				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
+				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
+				Delta cur_delta = this->table_->OldestDelta[index];
+				bool previous_positive = oldest_deltas_.count > 0;
 				bool current_positive = cur_delta.count > 0;
 				/*
 				        Now we can deduce what to emit based on this index value from
@@ -561,19 +487,18 @@ public:
 				                if now negative emit -1
 
 				*/
+
 				char *out_data;
 
 				// but if it's first iteration of this Node we need to always emit
-				if (!this->emited_[it->second]) {
+				if (not_emited.contains(it->second)) {
 					if (current_positive) {
 						this->out_cache_->ReserveNext(&out_data);
 						Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
 						update_tpl->delta.ts = cur_delta.ts;
 						update_tpl->delta.count = 1;
 						// finally copy data
-						std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
-
-						this->emited_[it->second] = true;
+						std::memcpy(&update_tpl->data, &it, sizeof(Type));
 					}
 
 				} else {
@@ -586,7 +511,7 @@ public:
 							update_tpl->delta.ts = cur_delta.ts;
 							update_tpl->delta.count = -1;
 							// finally copy data
-							std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+							std::memcpy(&update_tpl->data, &it, sizeof(Type));
 						}
 					} else {
 						if (current_positive) {
@@ -595,7 +520,7 @@ public:
 							update_tpl->delta.ts = cur_delta.ts;
 							update_tpl->delta.count = 1;
 							// finally copy data
-							std::memcpy(&update_tpl->data, &it->first, sizeof(Type));
+							std::memcpy(&update_tpl->data, &it, sizeof(Type));
 						} else {
 							continue;
 						}
@@ -617,7 +542,7 @@ public:
 private:
 	void Compact() {
 		// leave previous_ts version as oldest one
-		compact_deltas(this->index_to_deltas_, this->previous_ts_);
+		this->table_->MergeDelta(this->previous_ts_);
 	}
 
 	// timestamp will be used to track valid tuples
@@ -637,19 +562,11 @@ private:
 	int out_count = 0;
 	int clean_count = 0;
 
-	size_t next_index_ = 0;
-
 	// we can treat whole tuple as a key, this will return it's index
 	// we will later use some persistent storage for that mapping, maybe rocksdb
 	// or something
-	std::unordered_map<std::array<char, sizeof(Type)>, index, KeyHash<Type>> tuple_to_index_;
-	// from index we can get multiset of changes to the input, later
-	// we will use some better data structure for that, but for now multiset is
-	// nice cause it auto sorts for us
-	std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
 
-	// whether tuple for given index was ever emited, this is needed for compute state machine
-	std::vector<bool> emited_;
+	Table<Type> *table_;
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -786,8 +703,8 @@ public:
 
 protected:
 	void Compact() {
-		compact_deltas(this->index_to_deltas_left_, this->ts_);
-		compact_deltas(this->index_to_deltas_right_, this->ts_);
+		this->left_table_->MergeDeltas(this->ts_);
+		this->right_table_->MergeDeltas(this->ts_);
 	}
 
 	// timestamp will be used to track valid tuples
@@ -807,19 +724,11 @@ protected:
 	int out_count = 0;
 	int clean_count = 0;
 
-	size_t next_index_left_ = 0;
-	size_t next_index_right_ = 0;
-
 	// we can treat whole tuple as a key, this will return it's index
 	// we will later use some persistent storage for that mapping, maybe rocksdb
 	// or something
-	std::unordered_map<std::array<char, sizeof(LeftType)>, index, KeyHash<LeftType>> tuple_to_index_left;
-	std::unordered_map<std::array<char, sizeof(RightType)>, index, KeyHash<RightType>> tuple_to_index_right;
-	// from index we can get multiset of changes to the input, later
-	// we will use some better data structure for that, but for now multiset is
-	// nice cause it auto sorts for us
-	std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_left_;
-	std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_right_;
+	table<LeftType> *left_table_;
+	table<RightType> *right_table_;
 
 	std::mutex node_mutex;
 };
@@ -857,14 +766,14 @@ public:
 		// compute left cache against right table
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-			// get all matching on data from right
-			if (this->tuple_to_index_right.contains(Key<Type>(in_left_tuple->data))) {
-				index match_index = this->tuple_to_index_right[Key<Type>(in_left_tuple->data)];
 
-				for (auto it = this->index_to_deltas_right_[match_index].begin();
-				     it != this->index_to_deltas_right_[match_index].end(); it++) {
+			// get matching on data from left and iterate it's deltas
+			index idx;
+			if (this->right_table_->Search(in_left_tuple->data, &idx)) {
+				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(index);
+				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Delta out_delta = this->delta_function_(in_left_tuple->delta, *it);
+					Delta out_delta = this->delta_function_(in_left_tuple->delta, right_delta);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
 					std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
 					out_tuple->delta = out_delta;
@@ -875,13 +784,12 @@ public:
 		// compute right cache against left table
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-			// get all matching on data from right
-			if (this->tuple_to_index_left.contains(Key<Type>(in_right_tuple->data))) {
-				index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
-				for (auto it = this->index_to_deltas_left_[match_index].begin();
-				     it != this->index_to_deltas_left_[match_index].end(); it++) {
+			// get matching on data from right and iterate it's deltas
+			if (this->left_table_->Search(in_right_tuple->data, &idx)) {
+				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(index);
+				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Delta out_delta = this->delta_function_(*it, in_right_tuple->delta);
+					Delta out_delta = this->delta_function_(left_delta, in_right_tuple->delta);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
 					std::memcpy(&out_tuple->data, &in_right_tuple->data, sizeof(Type));
 					out_tuple->delta = out_delta;
@@ -890,32 +798,15 @@ public:
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_left.contains(Key<Type>(in_left_tuple->data))) {
-				index match_index = this->next_index_left_;
-				this->next_index_left_++;
-				this->tuple_to_index_left[Key<Type>(in_left_tuple->data)] = match_index;
-				this->index_to_deltas_left_.emplace_back(std::multiset<Delta, DeltaComparator> {in_left_tuple->delta});
-			} else {
-				index match_index = this->tuple_to_index_left[Key<Type>(in_left_tuple->data)];
-				this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
-			}
-		}
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
+		while (this->in_cache_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_right.contains(Key<Type>(in_right_tuple->data))) {
-				index match_index = this->next_index_right_;
-				this->next_index_right_++;
-				this->tuple_to_index_right[Key<Type>(in_right_tuple->data)] = match_index;
-				this->index_to_deltas_right_.emplace_back(
-				    std::multiset<Delta, DeltaComparator> {in_right_tuple->delta});
-			} else {
-				index match_index = this->tuple_to_index_left[Key<Type>(in_right_tuple->data)];
-				this->index_to_deltas_right_[match_index].insert(in_right_tuple->delta);
-			}
+			index idx = this->table_->Insert(in_right_tuple->data);
+			this->table_->InsertDelta(idx, in_right_tuple->delta)
+		}
+		while (this->in_cache_->GetNext(&in_data_left)) {
+			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			index idx = this->table_->Insert(in_left_tuple->data);
+			this->table_->InsertDelta(idx, in_left_tuple->delta)
 		}
 
 		// clean in_caches
@@ -964,66 +855,57 @@ public:
 		}
 
 		// compute left cache against right table
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			// get all matching on data from right
-			for (auto &[table_data, table_idx] : this->tuple_to_index_right) {
-				for (auto it = this->index_to_deltas_right_[table_idx].begin();
-				     it != this->index_to_deltas_right_[table_idx].end(); it++) {
+		// right table
+		for (int index = 0, auto it = this->table_right_->HeapIterator.begin();
+		     it != this->table_right_->HeapIterator.end(); ++it, index++) {
+
+			// left cache
+			while (this->in_cache_left_->GetNext(&in_data_left)) {
+				Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
+
+				// deltas from right table
+				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(index);
+				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
-					                    in_left_tuple->delta.count * it->count};
-					out_tuple->data = this->join_layout_(in_left_tuple->data, *(InTypeRight *)table_data.data());
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, *it->data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta->ts),
+					                    in_left_tuple->delta.count * right_delta->count};
 				}
 			}
 		}
 
 		// compute right cache against left table
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-			// get all matching on data from right
-			for (auto &[table_data, table_idx] : this->tuple_to_index_left) {
-				for (auto it = this->index_to_deltas_left_[table_idx].begin();
-				     it != this->index_to_deltas_left_[table_idx].end(); it++) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
-					                    in_right_tuple->delta.count * it->count};
+		// right table
+		for (int index = 0, auto it = this->table_left_->HeapIterator.begin();
+		     it != this->table_left_->HeapIterator.end(); ++it, index++) {
 
-					out_tuple->data = this->join_layout_(*(InTypeLeft *)table_data.data(), in_right_tuple->data);
+			// left cache
+			while (this->in_cache_right_->GetNext(&in_data_right)) {
+				Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeLeft> *)(in_data_right);
+
+				// deltas from right table
+				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(index);
+				for (auto &left_delta : left_deltas) {
+					this->out_cache_->ReserveNext(&out_data);
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					out_tuple->data = this->join_layout_(*it->data, in_right_tuple->data);
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta->ts),
+					                    in_right_tuple->delta.count * left_delta->count};
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))) {
-				index match_index = this->next_index_left_;
-				this->next_index_left_++;
-				this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
-				this->index_to_deltas_left_.emplace_back(std::multiset<Delta, DeltaComparator> {in_left_tuple->delta});
-			} else {
-				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
-				this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
-			}
+		while (this->in_cache_->GetNext(&in_data_right)) {
+			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			index idx = this->table_->Insert(in_right_tuple->data);
+			this->table_->InsertDelta(idx, in_right_tuple->delta)
 		}
-
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))) {
-				index match_index = this->next_index_right_;
-				this->next_index_right_++;
-				this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
-				this->index_to_deltas_right_.emplace_back(
-				    std::multiset<Delta, DeltaComparator> {in_right_tuple->delta});
-			} else {
-				index match_index = this->tuple_to_index_left[Key<InTypeRight>(in_right_tuple->data)];
-				this->index_to_deltas_left_[match_index].insert(in_right_tuple->delta);
-			}
+		while (this->in_cache_->GetNext(&in_data_left)) {
+			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			index idx = this->table_->Insert(in_left_tuple->data);
+			this->table_->InsertDelta(idx, in_left_tuple->delta)
 		}
 
 		// clean in_caches
@@ -1080,23 +962,20 @@ public:
 		// compute left cache against right table
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			// get all matching on data from right
 			MatchType match = this->get_match_left_(in_left_tuple->data);
-			// all tuples from right table that match this left tuple
-			for (auto tpl_it = this->match_to_tuple_right_[Key<MatchType>(match)].begin();
-			     tpl_it != this->match_to_tuple_right_[Key<MatchType>(match)].end(); tpl_it++) {
-				// now iterate all version of this tuple
-				std::array<char, sizeof(InTypeRight)> right_key = *tpl_it;
-				int idx = this->tuple_to_index_right[right_key];
-
-				for (auto it = this->index_to_deltas_right_[idx].begin(); it != this->index_to_deltas_right_[idx].end();
-				     it++) {
+			// get all matching on data from right might be few but defo not much
+			for (MatchIterator it = this->right_table_->begin((char *)match); it != this->right_table_.end(); it++) {
+				int idx = it->index;
+				InTypeRight *right_data = it->data;
+				// deltas from right table
+				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+				// iterate all deltas of this tuple
+				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, it->ts),
-					                    in_left_tuple->delta.count * it->count};
-					out_tuple->data =
-					    this->join_layout_(in_left_tuple->data, *reinterpret_cast<InTypeRight *>(right_key.data()));
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta->ts),
+					                    in_left_tuple->delta.count * right_delta->count};
 				}
 			}
 		}
@@ -1104,75 +983,37 @@ public:
 		// compute right cache against left table
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-			// get all matching on data from right
 			MatchType match = this->get_match_right_(in_right_tuple->data);
-			// all tuples from right table that match this left tuple
-
-			for (auto tpl_it = this->match_to_tuple_left_[Key<MatchType>(match)].begin();
-			     tpl_it != this->match_to_tuple_left_[Key<MatchType>(match)].end(); tpl_it++) {
-				// now iterate all version of this tuple
-				std::array<char, sizeof(InTypeLeft)> left_key = *tpl_it;
-				int idx = this->tuple_to_index_left[left_key];
-
-				for (auto it = this->index_to_deltas_left_[idx].begin(); it != this->index_to_deltas_left_[idx].end();
-				     it++) {
+			// get all matching on data from right might be few but defo not much
+			for (MatchIterator it = this->left_table_->begin((char *)match); it != this->left_table_.end(); it++) {
+				int idx = it->index;
+				InTypeLeft *left_data = it->data;
+				// deltas from right table
+				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+				// iterate all deltas of this tuple
+				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, it->ts),
-					                    in_right_tuple->delta.count * it->count};
-					out_tuple->data =
-					    this->join_layout_(*reinterpret_cast<InTypeLeft *>(left_key.data()), in_right_tuple->data);
+					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					out_tuple->data =  this->join_layout_(left_data, in_right_tuple->data;
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_data->ts),
+											in_right_tuple->delta.count * left_delta->count};
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_left.contains(Key<InTypeLeft>(in_left_tuple->data))) {
-				index match_index = this->next_index_left_;
-				this->next_index_left_++;
-				this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)] = match_index;
-				this->index_to_deltas_left_.emplace_back(std::multiset<Delta, DeltaComparator> {in_left_tuple->delta});
-				// also insert matching for this tuple
-				MatchType left_match = this->get_match_left_(in_left_tuple->data);
-				if (!this->match_to_tuple_left_.contains(Key<MatchType>(left_match))) {
-					this->match_to_tuple_left_[Key<MatchType>(left_match)] =
-					    std::list<std::array<char, sizeof(InTypeLeft)>> {};
-				}
-				this->match_to_tuple_left_[Key<MatchType>(left_match)].push_back(Key<InTypeLeft>(in_left_tuple->data));
-
-			} else {
-				index match_index = this->tuple_to_index_left[Key<InTypeLeft>(in_left_tuple->data)];
-				this->index_to_deltas_left_[match_index].insert(in_left_tuple->delta);
-			}
+		while (this->in_cache_->GetNext(&in_data_right)) {
+			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			// and this will actually handle inserting into both match tree and normal btree
+			index idx = this->table_->Insert(in_right_tuple->data);
+			this->table_->InsertDelta(idx, in_right_tuple->delta)
 		}
 
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index_right.contains(Key<InTypeRight>(in_right_tuple->data))) {
-				index match_index = this->next_index_right_;
-				this->next_index_right_++;
-				this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)] = match_index;
-				this->index_to_deltas_right_.emplace_back(
-				    std::multiset<Delta, DeltaComparator> {in_right_tuple->delta});
-
-				// also insert matching for this tuple
-				MatchType right_match = this->get_match_right_(in_right_tuple->data);
-				if (!this->match_to_tuple_right_.contains(Key<MatchType>(right_match))) {
-					this->match_to_tuple_right_[Key<MatchType>(right_match)] =
-					    std::list<std::array<char, sizeof(InTypeRight)>> {};
-				}
-				this->match_to_tuple_right_[Key<MatchType>(right_match)].push_back(
-				    Key<InTypeRight>(in_right_tuple->data));
-			}
-
-			else {
-				index match_index = this->tuple_to_index_right[Key<InTypeRight>(in_right_tuple->data)];
-				this->index_to_deltas_right_[match_index].insert(in_right_tuple->delta);
-			}
+		while (this->in_cache_->GetNext(&in_data_left)) {
+			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			// and this will actually handle inserting into both match tree and normal btree
+			index idx = this->table_->Insert(in_left_tuple->data);
+			this->table_->InsertDelta(idx, in_left_tuple->delta)
 		}
 
 		// clean in_caches
@@ -1197,14 +1038,8 @@ private:
 	std::function<MatchType(const InTypeRight &)> get_match_right_;
 	std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 
-	// we need to get corresponding tuples using only match chars, this maps will
-	// help us with it
-	std::unordered_map<std::array<char, sizeof(MatchType)>, std::list<std::array<char, sizeof(InTypeLeft)>>,
-	                   KeyHash<MatchType>>
-	    match_to_tuple_left_;
-	std::unordered_map<std::array<char, sizeof(MatchType)>, std::list<std::array<char, sizeof(InTypeRight)>>,
-	                   KeyHash<MatchType>>
-	    match_to_tuple_right_;
+	MatchTable<InTypeLeft, MatchType> *left_table;
+	MatchTable<InTypeRight, MatchType> *right_table;
 };
 
 /**
@@ -1345,7 +1180,7 @@ private:
 	// discard old versions
 	void Compact() {
 		// compact all the way to previous version, we need it to to emit delete
-		compact_deltas(this->index_to_deltas_, this->previous_ts_);
+		this->table_->MergeDelta(this->previous_ts_);
 	}
 
 	// timestamp will be used to track valid tuples
@@ -1378,6 +1213,8 @@ private:
 	std::function<MatchType(InType &)> get_match_;
 
 	std::set<std::array<char, sizeof(MatchType)>> emited_;
+
+	Table<Type> *table_;
 
 	std::mutex node_mutex;
 };

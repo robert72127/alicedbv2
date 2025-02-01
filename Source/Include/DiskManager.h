@@ -1,8 +1,8 @@
 #ifndef ALICEDBDISKMANAGER
 #define ALICEDBDISKMANAGER
 
-#include "Common.h"
 #include "BufferPool.h"
+#include "Common.h"
 
 #include <atomic>
 #include <filesystem>

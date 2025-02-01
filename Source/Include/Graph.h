@@ -50,13 +50,11 @@ public:
 		// so we just need to write all this metadata to some files
 	}
 
+	// Tables call this on destruction to update info
 	void UpdateTableMetadata(MetaState &table_meta, int table_index) {
 		this->tables_metadata_[table_index] = std::move(table_meta);
 	}
 
-	// Tables call this on destruction to update info
-	void UpdateTableMetadata(index table_index, const std::vector<Field> &fields_) {
-	}
 
 	// Node creations
 

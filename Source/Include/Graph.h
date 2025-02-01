@@ -26,25 +26,37 @@ enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
  * Graph is started by calling Process function, after that no new node can be added
  */
 
+struct MetaState {
+	std::vector<index> pages_;
+	std::vector<index> btree_pages_;
+	std::vector<index> match_btree_pages_;
+};
+
 class Graph {
 public:
-	
-	Graph(std::string graph_filename){
-
-
+	Graph(std::string graph_filename) {
 	}
 
-	~Graph(){
+	~Graph() {
 		// update graph metadatafile
 		// ok and what do we actually need to store there?
 		// like connections and node lists is actually stored in object itself(in code)
 		// what we need to store instead is for each node it's metadata info such that each node will be called with
-		// right args for Table 
+		// right args for Table
 
+		// ok tables will hold reference to the catalog, so i think we need to just simply pass this pointer to the Node
+		// that is being created
 
+		// so we just need to write all this metadata to some files
 	}
 
+	void UpdateTableMetadata(MetaState &table_meta, int table_index) {
+		this->tables_metadata_[table_index] = std::move(table_meta);
+	}
 
+	// Tables call this on destruction to update info
+	void UpdateTableMetadata(index table_index, const std::vector<Field> &fields_) {
+	}
 
 	// Node creations
 
@@ -52,11 +64,24 @@ public:
 	auto Source(P *prod, timestamp frontier_ts, int duration_us = 500) -> TypedNode<typename P::value_type> * {
 		this->check_running();
 		using Type = typename P::value_type;
+		// source has 1 table
+		index idx = this->next_table_index_;
+		this->next_table_index_++;
+		/** @todo
+		    now we can read metadata from our graph state read from file ... and pass it into node constructor,
+		    we also should pass indexes so that we will be able to update state when closing the graph,
+		    repeat the same thing for other nodes, so that's kinda solved
+		*/
+
 		auto *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
 		all_nodes_.insert(static_cast<Node *>(source_node));
 		sources_.insert(static_cast<Node *>(source_node));
 		source_node->set_graph(this);
 		return source_node;
+
+		for (void *table : tables) {
+			this->table_to_index_[table] = idx;
+		}
 	}
 
 	template <typename N>
@@ -443,6 +468,10 @@ private:
 
 	int current_level_ = 0;
 	int current_index_ = 0;
+
+	// for persisten storage, each node might store from 0 to 2 tables
+	int next_table_index_ = 0;
+	std::unordered_map<index, MetaState> tables_metadata_;
 };
 
 } // namespace AliceDB

@@ -264,3 +264,22 @@ TEST(MULTINODE_TEST, multinode_test){
     real_sink->Print(AliceDB::get_current_timestamp(), print_canafforddog);
 
 }
+
+
+// notes where X in (table)
+
+// select with aggregate like : select sum(salary) from, select max()
+
+// select from, where ...  group by column x, column y, having x > 1000 (having is just extra filter)
+
+// subqueries: select x from y where x in z(table)
+/**
+ * select from where is essentially project -> filter and then applying aggregate op to result
+ * if we also add group by then it's aggregate with match
+ * if we add having it's appyling filter to result ie after aggregate, 
+ * 
+ * so really aggregate solves those issues
+ * 
+ * in - not supported but later we can add ability to iterate table results for view or something and this way in will work
+ * 
+ */

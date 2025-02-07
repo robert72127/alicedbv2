@@ -445,7 +445,7 @@ public:
 			index idx = this->table_->Insert(in_tuple->data);
 			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
 
-			                       if (!was_present) {
+			if (!was_present) {
 				not_emited.insert(idx);
 			}
 		}
@@ -1053,6 +1053,10 @@ private:
 // fields what if we would store in type and out type, and then for all tuples
 // would emit new version from their oldest version
 
+// finally we will only aggregate by single field be it max sum etc,
+// doesn't matter point is we aggregate on one thing only because for 
+// multiple aggregations we will be able to just chain them together
+
 template <typename InType, typename MatchType, typename OutType>
 class AggregateByNode : public TypedNode<OutType> {
 	// now output of aggr might be also dependent of count of in tuple, for
@@ -1093,27 +1097,47 @@ public:
 	// -1 and insert current with count 1 at the same time then old should get
 	// discarded
 	void Compute() {
-		// insert new deltas from in_caches
-		const char *in_data;
-		while (this->in_cache_->GetNext(&in_data)) {
-			Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
-			// if this data wasn't present insert with new index
-			if (!this->tuple_to_index.contains(Key<InType>(in_tuple->data))) {
-				index match_index = this->next_index_;
-				this->next_index_++;
-				this->tuple_to_index[Key<InType>(in_tuple->data)] = match_index;
-				this->index_to_deltas_.emplace_back(std::multiset<Delta, DeltaComparator> {in_tuple->delta});
+		std::unordered_set<index> not_emited;
+		std::unordered_set<MatchType> matches_from_queue;
 
-				MatchType match = this->get_match_(in_tuple->data);
-				if (!this->match_to_tuple_.contains(Key<MatchType>(match))) {
-					this->match_to_tuple_[Key<MatchType>(match)] = std::list<std::array<char, sizeof(InType)>> {};
-				}
-				this->match_to_tuple_[Key<MatchType>(match)].push_back(Key<InType>(in_tuple->data));
-			} else {
-				index match_index = this->tuple_to_index[Key<InType>(in_tuple->data)];
-				this->index_to_deltas_[match_index].insert(in_tuple->delta);
+
+		// first insert all new data from cache to table
+		const char *in_data_;
+		while (this->in_cache_->GetNext(&in_data_)) {
+			const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
+
+			index idx = this->table_->Insert(in_tuple->data);
+			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
+			matches_from_queue.insert(get_match_(in_tuple->data))
+			
+			if (!was_present) {
+				not_emited.insert(idx);
 			}
 		}
+
+		// and then we emit insert and delete based on index at the same time
+		
+		// itreate all tuples, if it's in match of inserted:
+		// compute aggregate for it
+
+
+		// ok how can we know that some tuple was already emited?
+		// if our oldest delta timestamp is less than or equal to previous ts,
+		// it means than it was already emited as insert, so we can emit this value with delete
+		// otherwise, there was no previous version and we can safely delete
+		
+		// now onto the way in which we will iterate: we need to iterate all tuples
+		// so in this node our table will be normal one and our match will be temoprar and not persistent
+
+
+		for (int index = 0, auto it = this->table_->HeapIterator.begin();
+		     it != this->table_->HeapIterator.end(); ++it, index++) {
+			
+
+
+
+		}
+
 
 		if (this->compact_) {
 			// emit delete for oldest keept version, emit insert for previous_ts
@@ -1129,7 +1153,8 @@ public:
 						}
 					}
 
-					// emit delete tuple
+
+					// emit delete tuple if tuple was prev emited
 					char *out_data;
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<OutType> *del_tuple = (Tuple<OutType> *)(out_data);
@@ -1156,7 +1181,7 @@ public:
 					}
 				}
 
-				// emit delete tuple
+				// emit insert tuple
 				char *out_data;
 				this->out_cache_->ReserveNext(&out_data);
 				Tuple<OutType> *ins_tuple = (Tuple<OutType> *)(out_data);
@@ -1164,6 +1189,7 @@ public:
 				std::memcpy(&ins_tuple->data, &accum, sizeof(OutType));
 			}
 		}
+
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -1179,7 +1205,7 @@ private:
 	// let's store full version data and not deltas in this node, so we can just
 	// discard old versions
 	void Compact() {
-		// compact all the way to previous version, we need it to to emit delete
+		// compact all the way to previous version, we need it to to emit delete later
 		this->table_->MergeDelta(this->previous_ts_);
 	}
 

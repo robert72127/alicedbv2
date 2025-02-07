@@ -1057,14 +1057,15 @@ private:
 // doesn't matter point is we aggregate on one thing only because for 
 // multiple aggregations we will be able to just chain them together
 
-template <typename InType, typename MatchType, typename OutType>
+template <typename InType, typename MatchType>
 class AggregateByNode : public TypedNode<OutType> {
 	// now output of aggr might be also dependent of count of in tuple, for
 	// example i sum inserting 5 Alice's should influence it different than one
 	// Alice but with min it should not, so it will be dependent on aggregate
 	// function
 public:
-	AggregateByNode(TypedNode<InType> *in_node, std::function<void(const InType &, OutType &)> aggr_fun,
+	AggregateByNode(TypedNode<InType> *in_node, 
+					std::function<InType(const InType &, const InType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match)
 	    : in_node_ {in_node}, in_cache_ {in_node->Output()},
 	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match} {
@@ -1098,7 +1099,6 @@ public:
 	// discarded
 	void Compute() {
 		std::unordered_set<index> not_emited;
-		std::unordered_set<MatchType> matches_from_queue;
 
 
 		// first insert all new data from cache to table
@@ -1108,7 +1108,6 @@ public:
 
 			index idx = this->table_->Insert(in_tuple->data);
 			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
-			matches_from_queue.insert(get_match_(in_tuple->data))
 			
 			if (!was_present) {
 				not_emited.insert(idx);
@@ -1130,66 +1129,57 @@ public:
 		// so in this node our table will be normal one and our match will be temoprar and not persistent
 
 
+		std::unordered_map<MatchType,InType> matches_;
 		for (int index = 0, auto it = this->table_->HeapIterator.begin();
 		     it != this->table_->HeapIterator.end(); ++it, index++) {
-			
 
-
-
+				Delta &olders_delta = *this->table_->Scan(index).rbegin();
+				// check if it oldest if previous ts that will mean it was already emited
+				if (olders_delta.ts <= this->previous_ts_){
+					if(matches_from_queue.contains( get_match_(it->data) )){
+						matches_[ get_match_(it->data)] = it->data;
+					}
+					else{
+						matches_[get_match_(it->data)] = aggr_fun_(matches_[get_match_(it->data)], it->data); 
+					}
+				}
 		}
-
-
-		if (this->compact_) {
-			// emit delete for oldest keept version, emit insert for previous_ts
-
-			// iterate by match type
-			for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
-				OutType accum;
-				if (this->emited_.contains(it->first)) {
-					for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
-						int index = this->tuple_to_index[*data_it];
-						for (int i = 0; i < this->index_to_deltas_[index].rbegin()->count; i++) {
-							aggr_fun_(*reinterpret_cast<InType *>(data_it->data()), accum);
-						}
-					}
-
-
-					// emit delete tuple if tuple was prev emited
-					char *out_data;
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *del_tuple = (Tuple<OutType> *)(out_data);
-					del_tuple->delta = {this->previous_ts_, -1};
-					std::memcpy(&del_tuple->data, &accum, sizeof(OutType));
-				} else {
-					this->emited_.insert(it->first);
-				}
-			}
-
-			this->Compact();
-
-			this->compact_ = false;
-
-			// iterate by match type this time we will insert, after compaction prev
-			// index should be lst value and we want to insert it
-			for (auto it = this->match_to_tuple_.begin(); it != this->match_to_tuple_.end(); it++) {
-				OutType accum;
-
-				for (auto data_it = it->second.begin(); data_it != it->second.end(); data_it++) {
-					int index = this->tuple_to_index[*data_it];
-					for (int i = 0; i < this->index_to_deltas_[index].rbegin()->count; i++) {
-						aggr_fun_(*reinterpret_cast<InType *>(data_it->data()), accum);
-					}
-				}
-
-				// emit insert tuple
+		// emit all matches from queue with delete
+		for(const auto& [_, in_data]: matches_  ){
 				char *out_data;
 				this->out_cache_->ReserveNext(&out_data);
-				Tuple<OutType> *ins_tuple = (Tuple<OutType> *)(out_data);
-				ins_tuple->delta = {this->previous_ts_, 1};
-				std::memcpy(&ins_tuple->data, &accum, sizeof(OutType));
-			}
+				Tuple<InType> *del_tuple = (Tuple<InType> *)(out_data);
+					del_tuple->delta = {this->previous_ts_, -1};
+					std::memcpy(&del_tuple->data, in_data, sizeof(OutType));
 		}
+		
+		this->Compact();
 
+		this->compact_ = false;
+
+		std::unordered_map<MatchType,InType> matches_ = {};
+		for (int index = 0, auto it = this->table_->HeapIterator.begin();
+		     it != this->table_->HeapIterator.end(); ++it, index++) {
+
+				Delta &olders_delta = *this->table_->Scan(index).rbegin();
+				// check if it oldest if previous ts that will mean it was already emited
+				if (olders_delta.ts <= this->previous_ts_){
+					if(matches_from_queue.contains( get_match_(it->data) )){
+						matches_[ get_match_(it->data)] = it->data;
+					}
+					else{
+						matches_[get_match_(it->data)] = aggr_fun_(matches_[get_match_(it->data)], it->data); 
+					}
+				}
+		}
+		// emit all matches from queue with delete
+		for(const auto& [_, in_data]: matches_  ){
+				char *out_data;
+				this->out_cache_->ReserveNext(&out_data);
+				Tuple<InType> *ins_tuple = (Tuple<InType> *)(out_data);
+					ins_tuple->delta = {this->previous_ts_, 11};
+					std::memcpy(&ins_tuple->data, in_data, sizeof(OutType));
+		}
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -1228,17 +1218,10 @@ private:
 	int out_count = 0;
 	int clean_count = 0;
 
-	std::unordered_map<std::array<char, sizeof(InType)>, index, KeyHash<InType>> tuple_to_index;
 
-	std::vector<std::multiset<Delta, DeltaComparator>> index_to_deltas_;
-	std::unordered_map<std::array<char, sizeof(MatchType)>, std::list<std::array<char, sizeof(InType)>>,
-	                   KeyHash<MatchType>>
-	    match_to_tuple_;
-
-	std::function<void(InType &, OutType &)> aggr_fun_;
-	std::function<MatchType(InType &)> get_match_;
-
-	std::set<std::array<char, sizeof(MatchType)>> emited_;
+	std::function<InType(const InType &, const InType &)> aggr_fun_;
+	std::function<MatchType(const InType &)> get_match_;
+	
 
 	Table<Type> *table_;
 

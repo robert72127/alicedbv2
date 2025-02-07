@@ -14,12 +14,9 @@
 
 
 ## Storage:
-    *   Either find good ready to use or implement persistent storage primitive
-    *   Use alicedbV1 with added B+Tree for key|value mapping
-    *   Use rocksdb for delta storage for also standard storage with b+ tree since it also grants prefix search for free
-    *   allow for exporting view to some format & dropping database graph
+    * Implement B+Tree [v]
+    * Add metadata loading/storing [v] 
+----------------------------------------------------------------------------------------------
 
-
-## Use some proper metafile to store metadata for all the classes
 
 ## Write PDF with description

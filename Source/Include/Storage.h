@@ -255,18 +255,28 @@ private:
  *  @brief persistent storage
  *
  */
-template <typename Key, typename Value>
+
+struct StorageIndex{
+	index page_id_;
+	index tuple_id_;
+};
+
+
+
+template <typename Key>
 class BTree {
 
 	Btree(BufferPool *bp)
 
-	    bool Insert(Key *k, Value *v);
+	    bool Insert(const Key &key, const StorageIndex &idx);
+	    
+		bool Delete(Key *key);
+
+		std::vector<StorageIndex> Search(const &Key);
 
 	/** we should probably return vector of positions <page_index, tuple_index> so we will be able to access it in nice
 	 * sorted order */
-	std::vector<TablePosition> Search(Key *k);
-
-	bool Delete(Key *k);
+	std::vector<StorageIndex> Search(Key *k);
 
 private:
 	std::vector<index> btree_page_indexes_;
@@ -304,7 +314,7 @@ class Table {
 		// then call insert on b+tree(match one) with in_data(key), index(leaf) for matchbtreetable
 	}
 
-	// searches for data(key) in table if finds returns true and sets index value to found index
+	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found index
 	bool Search(const char *data, int *index);
 
 	void Delete(const char *data) {
@@ -319,11 +329,6 @@ class Table {
 	HeapIterator begin();
 	HeapIterator end();
 
-	/** @todo this should maybe work like iterator? ie return next tuple?
-	 */
-	class BtreeItertor;
-	BtreeItertor begin(const char *find_data);
-	BtreeItertor end();
 
 	// methods to work with deltas
 	bool InsertDelta(const index idx, const Delta &d) {
@@ -332,6 +337,8 @@ class Table {
 	bool MergeDelta(const timestamp end_ts) {
 		return this->ds_->Merge(end_ts);
 	}
+
+	// returns all deltas for given index
 	std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
 		return this->ds_->deltas_[idx];
 	}

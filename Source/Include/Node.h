@@ -963,10 +963,8 @@ public:
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
-			// get all matching on data from right might be few but defo not much
-			for (MatchIterator it = this->right_table_->begin((char *)match); it != this->right_table_.end(); it++) {
-				int idx = it->index;
-				InTypeRight *right_data = it->data;
+			for(const auto &idx :  this->match_to_index_right_table_[Key<MatchType>match]){
+				InTypeRight *right_data = this->right_table->Get(idx);
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				// iterate all deltas of this tuple
@@ -979,17 +977,14 @@ public:
 				}
 			}
 		}
-
+		
 		// compute right cache against left table
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
+		while (this->in_cache_right_->GetNext(&in_data_left)) {
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
-			// get all matching on data from right might be few but defo not much
-			for (MatchIterator it = this->left_table_->begin((char *)match); it != this->left_table_.end(); it++) {
-				int idx = it->index;
-				InTypeLeft *left_data = it->data;
-				// deltas from right table
-				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+			for(const auto &idx :  this->match_to_index_left_table_[Key<MatchType>match]){
+				InTypeRight *right_data = this->left_table->Get(idx);
+					std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
@@ -1006,14 +1001,31 @@ public:
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 			// and this will actually handle inserting into both match tree and normal btree
 			index idx = this->table_->Insert(in_right_tuple->data);
-			this->table_->InsertDelta(idx, in_right_tuple->delta)
+
+		
+			this->table_->InsertDelta(idx, in_right_tuple->delta);
+		
+			// track match on insert
+			MatchType match = this->get_match_right_(in_data_right);
+			if(!this->match_to_index_right_table_.contains(Key<MatchType>match)){
+				this->match_to_index_right_table_[Key<MatchType>(match)] = {}
+			}
+			this->match_to_index_right_table_[match].insert(idx);
+			
 		}
 
 		while (this->in_cache_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
 			// and this will actually handle inserting into both match tree and normal btree
 			index idx = this->table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta)
+			this->table_->InsertDelta(idx, in_left_tuple->delta);
+
+			// track match on insert
+			MatchType match = this->get_match_left_(in_data_left);
+			if(!this->match_to_index_left_table_.contains(Key<MatchType>match)){
+				this->match_to_index_left_table_[Key<MatchType>(match)] = {}
+			}
+			this->match_to_index_left_table_[match].insert(idx);
 		}
 
 		// clean in_caches
@@ -1038,8 +1050,15 @@ private:
 	std::function<MatchType(const InTypeRight &)> get_match_right_;
 	std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 
-	MatchTable<InTypeLeft, MatchType> *left_table;
-	MatchTable<InTypeRight, MatchType> *right_table;
+	Table<InTypeLeft> *left_table;
+	Table<InTypeRight> *right_table;
+
+	/**  @todo we will store matches as non persistent storage,
+		on system start we will recalculate matches for all tuples,
+		then when inserting new tuples we will just compare their matches and check for indexes
+	*/
+	std::unordered_map< std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType> > match_to_index_left_table_;
+	std::unordered_map< std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType> > match_to_index_right_table_;
 };
 
 /**
@@ -1217,7 +1236,6 @@ private:
 	Cache *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
-
 
 	std::function<InType(const InType &, const InType &)> aggr_fun_;
 	std::function<MatchType(const InType &)> get_match_;

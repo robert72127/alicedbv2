@@ -320,6 +320,11 @@ class Table {
 	void Delete(const char *data) {
 	}
 
+	// return pointer to data corresponding to index, calculated using tuples per page & offset
+	// if index is larger than tuple count returns nullptr
+	Type* Get(const index &idx);
+
+
 	// other will be iterate all tuples, so heap based for
 	// cross join and compact delta for distinct node
 
@@ -360,40 +365,6 @@ protected:
 	BufferPool *bp_;
 	Graph *g_;
 	index table_idx_;
-};
-
-template <typename Type, typename MatchType>
-class MatchTable : public Table<Type> {
-
-	MatchTable(index table_idx, std::string delta_storage_fname, std::vector<index> data_page_indexes,
-	           std::vector<index> btree_indexes, std::vector<index> match_indexes, BufferPool *bp, Graph *g,
-	           std::function<MatchType(const Type &)> match_function, )
-	    : Table(table_idx, delta_storage_fname, data_page_indexes, btree_indexes, bp, g),
-	      match_indexes_(match_indexes), match_function_ {match_function} {
-	}
-
-	~MatchTable() {
-		// prepare metadata to be inserted
-		MetaState meta =
-		{.pages_ = this->data_page_indexes_,
-		 .btree_pages_ this->btree_indexes_,
-		 .match_btree_pages_ = this->match_indexes_ }
-
-		this->g_->UpdateTableMetadata(meta)
-	}
-
-	/** @todo
-	 this needs to overwrite insert to also insert index into matchtable */
-
-	// this is only needed for join node
-	class MatchIterator;
-
-	MatchIterator<MatchTpe> begin(const char *find_data);
-	MatchIterator<MatchTpe> end();
-
-private:
-	std::vector<index> match_indexes_;
-	std::function<MatchType(const Type &)> match_function_;
 };
 
 } // namespace AliceDB

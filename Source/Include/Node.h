@@ -67,18 +67,6 @@ public:
 	 * @brief returns cache corresponding to output from this Tuple
 	 */
 	virtual Cache *Output() = 0;
-
-	void set_graph(Graph *graph) {
-		if (this->graph_ != nullptr && graph != this->graph_) {
-			throw std::runtime_error("Node can't belong to two graphs\n");
-		}
-		this->graph_ = graph;
-	}
-
-private:
-	//  We can store graph in each node, start with null and then set graph, if current graph is
-	//  different than set throw runtime error
-	Graph *graph_ = nullptr;
 };
 
 template <typename OutType>
@@ -119,18 +107,6 @@ public:
 			cnt++;
 		}
 
-		// insert data from produce_cache into the table
-		const char *in_data;
-		while (this->produce_cache_->GetNext(&in_data)) {
-			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
-			index idx = this->table_->Insert(in_tuple->data);
-			this->table_->InsertDelta(idx, in_tuple->delta)
-		}
-
-		if (this->update_ts_) {
-			this->Compact();
-			this->update_ts_ = false;
-		}
 	}
 
 	Cache *Output() {
@@ -149,7 +125,6 @@ public:
 	void UpdateTimestamp(timestamp ts) {
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->ts_ = ts;
-			this->update_ts_ = true;
 		}
 		return;
 	}
@@ -159,9 +134,6 @@ public:
 	}
 
 private:
-	void Compact() {
-		this->table_->MergeDelta(this->ts_);
-	}
 
 	int duration_us_;
 
@@ -183,7 +155,6 @@ private:
 	int out_count = 0;
 	int clean_count = 0;
 
-	Table<Type> *table_;
 };
 
 template <typename Type>
@@ -491,14 +462,14 @@ public:
 				char *out_data;
 
 				// but if it's first iteration of this Node we need to always emit
-				if (not_emited.contains(it->second)) {
+				if (not_emited.contains(index)) {
 					if (current_positive) {
 						this->out_cache_->ReserveNext(&out_data);
 						Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
 						update_tpl->delta.ts = cur_delta.ts;
 						update_tpl->delta.count = 1;
 						// finally copy data
-						std::memcpy(&update_tpl->data, &it, sizeof(Type));
+						std::memcpy(&update_tpl->data, *it, sizeof(Type));
 					}
 
 				} else {
@@ -511,7 +482,7 @@ public:
 							update_tpl->delta.ts = cur_delta.ts;
 							update_tpl->delta.count = -1;
 							// finally copy data
-							std::memcpy(&update_tpl->data, &it, sizeof(Type));
+							std::memcpy(&update_tpl->data, *it, sizeof(Type));
 						}
 					} else {
 						if (current_positive) {
@@ -520,7 +491,7 @@ public:
 							update_tpl->delta.ts = cur_delta.ts;
 							update_tpl->delta.count = 1;
 							// finally copy data
-							std::memcpy(&update_tpl->data, &it, sizeof(Type));
+							std::memcpy(&update_tpl->data, *it, sizeof(Type));
 						} else {
 							continue;
 						}
@@ -868,7 +839,7 @@ public:
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, *it->data);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, *it);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta->ts),
 					                    in_left_tuple->delta.count * right_delta->count};
 				}
@@ -889,7 +860,7 @@ public:
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data = this->join_layout_(*it->data, in_right_tuple->data);
+					out_tuple->data = this->join_layout_(*it, in_right_tuple->data);
 					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta->ts),
 					                    in_right_tuple->delta.count * left_delta->count};
 				}
@@ -1155,11 +1126,11 @@ public:
 				Delta &olders_delta = *this->table_->Scan(index).rbegin();
 				// check if it oldest if previous ts that will mean it was already emited
 				if (olders_delta.ts <= this->previous_ts_){
-					if(matches_from_queue.contains( get_match_(it->data) )){
-						matches_[ get_match_(it->data)] = it->data;
+					if(matches_from_queue.contains( get_match_(*it) )){
+						matches_[ get_match_(*it)] = *it;
 					}
 					else{
-						matches_[get_match_(it->data)] = aggr_fun_(matches_[get_match_(it->data)], it->data); 
+						matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it); 
 					}
 				}
 		}
@@ -1183,11 +1154,11 @@ public:
 				Delta &olders_delta = *this->table_->Scan(index).rbegin();
 				// check if it oldest if previous ts that will mean it was already emited
 				if (olders_delta.ts <= this->previous_ts_){
-					if(matches_from_queue.contains( get_match_(it->data) )){
-						matches_[ get_match_(it->data)] = it->data;
+					if(matches_from_queue.contains( get_match_(*it) )){
+						matches_[ get_match_(*it)] = *it;
 					}
 					else{
-						matches_[get_match_(it->data)] = aggr_fun_(matches_[get_match_(it->data)], it->data); 
+						matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it); 
 					}
 				}
 		}

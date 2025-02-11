@@ -18,6 +18,12 @@ namespace AliceDB {
 
 enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
 
+struct MetaState {
+	std::vector<index> pages_;
+	std::vector<index> btree_pages_;
+	std::string delta_filename_;
+};
+
 /**
  * @brief Graph of relational algebra processing nodes
  * where operators such as Filter etc are wrappers around Node with type inference,
@@ -25,17 +31,95 @@ enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
  *
  * Graph is started by calling Process function, after that no new node can be added
  */
-
-struct MetaState {
-	std::vector<index> pages_;
-	std::vector<index> btree_pages_;
-	std::vector<index> match_btree_pages_;
-};
-
 class Graph {
 public:
-	Graph(std::string graph_filename) {
-	}
+	Graph(std::string graph_filename): graph_filename_{graph_filename} {
+		// graph file format:
+		/*
+		INDEX <idx>
+		DELTAFILENAME <metafilename>
+		PAGES <page_idx ....>
+		ENDPAGES
+		BTREEPAGES <page_idx ...>
+		ENDBTREEPAGES <page_idx...>
+		ENDINDEX
+		*/
+        std::ifstream input_stream(graph_filename);
+        if (!input_stream) {
+            throw std::runtime_error("Could not open file: " + graph_filename);
+        }
+        
+        std::string token;
+        // Continue reading until end-of-file.
+        while (input_stream >> token) {
+            // Each record must start with "INDEX"
+            if (token != "INDEX") {
+                throw std::runtime_error("Expected INDEX, got: " + token);
+            }
+            // Read the table index.
+            index table_idx;
+            if (!(input_stream >> table_idx)) {
+                throw std::runtime_error("Error reading table index value");
+            }
+            
+            MetaState meta;
+
+			// EXPECT DELTAFILENAME <deltafilename>
+	        input_stream >> token;
+            if (token != "DELTAFILENAME") {
+                throw std::runtime_error("Expected DELTAFILENAME, got: " + token);
+            }
+			input_stream >> meta.delta_filename_;
+
+
+            // Expect the "PAGES" block.
+            input_stream >> token;
+            if (token != "PAGES") {
+                throw std::runtime_error("Expected PAGES, got: " + token);
+            }
+            // Read all page indices until the ENDPAGES token.
+            while (input_stream >> token && token != "ENDPAGES") {
+                std::istringstream iss(token);
+                index page;
+                if (!(iss >> page)) {
+                    throw std::runtime_error("Error reading page index: " + token);
+                }
+                meta.pages_.push_back(page);
+            }
+            // We expect token == "ENDPAGES" here.
+            if (token != "ENDPAGES") {
+                throw std::runtime_error("Did not find ENDPAGES token");
+            }
+            
+            // Next, expect the "BTREEPAGES" block.
+            input_stream >> token;
+            if (token != "BTREEPAGES") {
+                throw std::runtime_error("Expected BTREEPAGES, got: " + token);
+            }
+            // Read all btree page indices until the ENDBTREEPAGES token.
+            while (input_stream >> token && token != "ENDBTREEPAGES") {
+                std::istringstream iss(token);
+                index btree_page;
+                if (!(iss >> btree_page)) {
+                    throw std::runtime_error("Error reading btree page index: " + token);
+                }
+                meta.btree_pages_.push_back(btree_page);
+            }
+            if (token != "ENDBTREEPAGES") {
+                throw std::runtime_error("Did not find ENDBTREEPAGES token");
+            }
+            
+            // Finally, expect the "ENDINDEX" token.
+            input_stream >> token;
+            if (token != "ENDINDEX") {
+                throw std::runtime_error("Expected ENDINDEX, got: " + token);
+            }
+            
+            // Save the parsed MetaState into the unordered_map.
+            tables_metadata_[table_idx] = meta;
+        }
+    }
+
 
 	~Graph() {
 		// update graph metadatafile
@@ -48,7 +132,32 @@ public:
 		// that is being created
 
 		// so we just need to write all this metadata to some files
-	}
+		std::ofstream output_stream(graph_filename_, std::ios::trunc);
+
+		std::string tmp_filename = this->graph_filename_ + "_tmp";
+		
+		for (const auto &entry : tables_metadata_) {
+            index table_idx = entry.first;
+            const MetaState &meta = entry.second;
+            output_stream << "INDEX " << table_idx << "\n";
+
+			output_stream << "DELTAFILENAME " << meta.delta_filename_ << "\n";
+
+            output_stream << "PAGES";
+            for (const auto &page : meta.pages_) {
+                output_stream << " " << page;
+            }
+            output_stream << "\nENDPAGES\n";
+
+            output_stream << "BTREEPAGES";
+            for (const auto &btree_page : meta.btree_pages_) {
+                output_stream << " " << btree_page;
+            }
+            output_stream << "\nENDBTREEPAGES\n";
+
+            output_stream << "ENDINDEX\n";
+        }
+    }
 
 	// Tables call this on destruction to update info
 	void UpdateTableMetadata(MetaState &table_meta, int table_index) {
@@ -62,34 +171,24 @@ public:
 		this->check_running();
 		using Type = typename P::value_type;
 		// source has 1 table
-		index idx = this->next_table_index_;
-		this->next_table_index_++;
-		/** @todo
-		    now we can read metadata from our graph state read from file ... and pass it into node constructor,
-		    we also should pass indexes so that we will be able to update state when closing the graph,
-		    repeat the same thing for other nodes, so that's kinda solved
-		*/
-
-		auto *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us);
+		auto *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us, this);
 		all_nodes_.insert(static_cast<Node *>(source_node));
 		sources_.insert(static_cast<Node *>(source_node));
-		source_node->set_graph(this);
 		return source_node;
-
-		for (void *table : tables) {
-			this->table_to_index_[table] = idx;
-		}
 	}
 
 	template <typename N>
 	auto View(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
+		
+		index table_index = next_table_index_;
+		next_table_index_++;
+		
 		using InType = typename N::value_type;
-		TypedNode<InType> *sink = new SinkNode<InType>(in_node);
+		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, table_index);
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(sink));
 		all_nodes_.insert(static_cast<Node *>(sink));
 		sinks_.insert(static_cast<Node *>(sink));
-		sink->set_graph(this);
 		return sink;
 	}
 
@@ -97,10 +196,9 @@ public:
 	auto Filter(F condition, N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 		using Type = typename N::value_type;
-		auto *filter = new FilterNode<Type>(in_node, condition);
+		auto *filter = new FilterNode<Type>(in_node, condition, this);
 		all_nodes_.insert(static_cast<Node *>(filter));
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(filter));
-		filter->set_graph(this);
 		return filter;
 	}
 
@@ -110,21 +208,23 @@ public:
 		this->check_running();
 		using InType = typename N::value_type;
 		using OutType = std::invoke_result_t<F, const InType &>;
-		TypedNode<OutType> *projection = new ProjectionNode<InType, OutType>(in_node, projection_function);
+		TypedNode<OutType> *projection = new ProjectionNode<InType, OutType>(in_node, projection_function, this);
 		all_nodes_.insert(static_cast<Node *>(projection));
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(projection));
-		projection->set_graph(this);
 		return projection;
 	}
 
 	template <typename N>
 	auto Distinct(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
+		
+		int table_index = this->next_table_index_;
+		this->next_table_index_++;
+		
 		using Type = typename N::value_type;
-		auto *distinct = new DistinctNode<Type>(in_node);
+		auto *distinct = new DistinctNode<Type>(in_node, this, table_index);
 		all_nodes_.insert(static_cast<Node *>(distinct));
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(distinct));
-		distinct->set_graph(this);
 		return distinct;
 	}
 
@@ -132,11 +232,10 @@ public:
 	auto Union(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 		using Type = typename N::value_type;
-		TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, false);
+		TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, false, this);
 		all_nodes_.insert(static_cast<Node *>(plus));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(plus));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(plus));
-		plus->set_graph(this);
 		return Distinct(plus);
 	}
 
@@ -144,23 +243,28 @@ public:
 	auto Except(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 		using Type = typename N::value_type;
-		TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, true);
+		TypedNode<Type> *plus = new PlusNode<Type>(in_node_left, in_node_right, true, this);
 		all_nodes_.insert(static_cast<Node *>(plus));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(plus));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(plus));
-		plus->set_graph(this);
 		return Distinct(plus);
 	}
 
 	template <typename N>
 	auto Intersect(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
+		
+		int left_table_index = this->next_table_index_;
+		this->next_table_index_++;
+		int right_table_index = this->next_table_index_;
+		this->next_table_index_++;
+
 		using Type = typename N::value_type;
-		TypedNode<Type> *intersect = new IntersectNode<Type>(in_node_left, in_node_right);
+		TypedNode<Type> *intersect = new IntersectNode<Type>(in_node_left, in_node_right,this, left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(intersect));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(intersect));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(intersect));
-		intersect->set_graph(this);
+		
 		return Distinct(intersect);
 	}
 
@@ -169,15 +273,22 @@ public:
 	auto CrossJoin(F join_layout, NL *in_node_left, NR *in_node_right)
 	    -> TypedNode<std::invoke_result_t<F, const typename NL::value_type &, const typename NR::value_type &>> * {
 		this->check_running();
+
+		int left_table_index = this->next_table_index_;
+		this->next_table_index_++;
+		int right_table_index = this->next_table_index_;
+		this->next_table_index_++;
+
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using OutType = std::invoke_result_t<F, const InTypeLeft &, const InTypeRight &>;
+	
 		TypedNode<OutType> *cross_join =
-		    new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, join_layout);
+		    new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, join_layout, this, left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(cross_join));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(cross_join));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(cross_join));
-		cross_join->set_graph(this);
+		
 		return cross_join;
 	}
 
@@ -186,6 +297,12 @@ public:
 	auto Join(F_left get_match_left, F_right get_match_right, F_join join_layout, NL *in_node_left, NR *in_node_right)
 	    -> TypedNode<std::invoke_result_t<F_join, const typename NL::value_type &, const typename NR::value_type &>> * {
 		this->check_running();
+
+		int left_table_index = this->next_table_index_;
+		this->next_table_index_++;
+		int right_table_index = this->next_table_index_;
+		this->next_table_index_++;
+
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using MatchTypeLeft = std::invoke_result_t<F_left, const InTypeLeft &>;
@@ -194,11 +311,11 @@ public:
 		using MatchType = MatchTypeLeft;
 		using OutType = std::invoke_result_t<F_join, const InTypeLeft &, const InTypeRight &>;
 		TypedNode<OutType> *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
-		    in_node_left, in_node_right, get_match_left, get_match_right, join_layout);
+		    in_node_left, in_node_right, get_match_left, get_match_right, join_layout, this, left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(join));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(join));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(join));
-		join->set_graph(this);
+	
 		return join;
 	}
 
@@ -215,6 +332,10 @@ public:
 	auto AggregateBy(F_aggr aggr_fun, F_getmatch get_match, N *in_node) -> TypedNode<
 	    std::remove_reference_t<std::tuple_element_t<1, typename function_traits<F_aggr>::arguments_tuple>>> * {
 		this->check_running();
+		
+		int table_index = this->next_table_index_;
+		this->next_table_index_++;
+		
 		using InType = typename N::value_type;
 
 		// extract parameter types from aggr_fun
@@ -227,10 +348,11 @@ public:
 		using OutType = std::remove_reference_t<SecondAggrArg>;
 		using MatchType = std::invoke_result_t<F_getmatch, const InType &>;
 
-		TypedNode<OutType> *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match);
+		
+		TypedNode<OutType> *aggr = new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match, this, table_index);
 		this->all_nodes_.insert(static_cast<Node *>(aggr));
 		this->make_edge(static_cast<Node *>(in_node), static_cast<Node *>(aggr));
-		aggr->set_graph(this);
+		
 		return aggr;
 	}
 
@@ -469,6 +591,8 @@ private:
 	// for persisten storage, each node might store from 0 to 2 tables
 	int next_table_index_ = 0;
 	std::unordered_map<index, MetaState> tables_metadata_;
+
+	std::string graph_filename_;
 };
 
 } // namespace AliceDB

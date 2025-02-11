@@ -291,7 +291,7 @@ private:
 template <typename Type>
 class Table {
 
-	Table(int table_idx, std::string delta_storage_fname, std::vector<index> data_page_indexes,
+	Table(std::string delta_storage_fname, std::vector<index> data_page_indexes,
 	      std::vector<index> btree_indexes, BufferPool *bp, Graph *g)
 	    : table_idx_ {table_idx} bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
 	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes} {
@@ -364,7 +364,6 @@ protected:
 	std::unique_ptr<DeltaStorage> ds_;
 	BufferPool *bp_;
 	Graph *g_;
-	index table_idx_;
 };
 
 } // namespace AliceDB

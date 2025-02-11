@@ -159,10 +159,11 @@ public:
         }
     }
 
-	// Tables call this on destruction to update info
-	void UpdateTableMetadata(MetaState &table_meta, int table_index) {
-		this->tables_metadata_[table_index] = std::move(table_meta);
+	// we will store all metadata in graph. nodes will just hold references to it's own meta state based on index
+	MetaState& GetTableMetadata(index table_idx){
+		return this->tables_metadata_[table_idx];
 	}
+
 
 	// Node creations
 
@@ -182,6 +183,9 @@ public:
 		this->check_running();
 		
 		index table_index = next_table_index_;
+		if(!this->tables_metadata_.contains[table_index]){
+			this->tables_metadata_[table_index] = {};
+		}
 		next_table_index_++;
 		
 		using InType = typename N::value_type;
@@ -220,7 +224,10 @@ public:
 		
 		int table_index = this->next_table_index_;
 		this->next_table_index_++;
-		
+		if(!this->tables_metadata_.contains[table_index]){
+			this->tables_metadata_[table_index] = {};
+		}
+
 		using Type = typename N::value_type;
 		auto *distinct = new DistinctNode<Type>(in_node, this, table_index);
 		all_nodes_.insert(static_cast<Node *>(distinct));
@@ -256,8 +263,14 @@ public:
 		
 		int left_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[left_table_index]){
+			this->tables_metadata_[left_table_index] = {};
+		}
 		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[right_table_index]){
+			this->tables_metadata_[right_table_index] = {};
+		}
 
 		using Type = typename N::value_type;
 		TypedNode<Type> *intersect = new IntersectNode<Type>(in_node_left, in_node_right,this, left_table_index, right_table_index);
@@ -276,8 +289,14 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[left_table_index]){
+			this->tables_metadata_[left_table_index] = {};
+		}
 		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[right_table_index]){
+			this->tables_metadata_[right_table_index] = {};
+		}
 
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
@@ -300,8 +319,14 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[left_table_index]){
+			this->tables_metadata_[left_table_index] = {};
+		}
 		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[right_table_index]){
+			this->tables_metadata_[right_table_index] = {};
+		}
 
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
@@ -335,6 +360,9 @@ public:
 		
 		int table_index = this->next_table_index_;
 		this->next_table_index_++;
+		if(!this->tables_metadata_.contains[table_index]){
+			this->tables_metadata_[table_index] = {};
+		}
 		
 		using InType = typename N::value_type;
 

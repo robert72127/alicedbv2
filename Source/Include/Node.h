@@ -82,8 +82,8 @@ public:
 template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
-	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500)
-	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us} {
+	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500, Graph *graph)
+	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_{graph} {
 		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -149,6 +149,8 @@ private:
 
 	Producer<Type> *produce_;
 
+	Graph *graph_;
+
 	// data from producer is put into this cache from it it's written into both
 	// table and passed to output nodes
 	Cache *produce_cache_;
@@ -160,9 +162,13 @@ private:
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
-	SinkNode(TypedNode<Type> *in_node)
-	    : in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()} {
+	SinkNode(TypedNode<Type> *in_node, Graph *graph, index table_index)
+	    : in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()}, graph_{graph} {
 		this->ts_ = get_current_timestamp();
+
+		// init table from graph metastate based on index
+		/** @todo do this for other nodes */	
+
 	}
 
 	void Compute() {
@@ -230,6 +236,8 @@ private:
 	// or something
 
 	Table<Type> *table_
+	
+	Graph *graph_;
 };
 
 template <typename Type>

@@ -1,9 +1,9 @@
 #ifndef ALICEDBTABLEPAGE
 #define ALICEDBTABLEPAGE
 
-#include "Catalog/Tuple.h"
+#include "Tuple.h"
 #include "Common.h"
-#include "Storage/BufferPool.h"
+#include "BufferPool.h"
 
 #include <cstddef>
 #include <stdexcept>
@@ -28,7 +28,6 @@ struct TablePage {
 			throw std::runtime_error("Failed to get on disk page " + std::to_string(on_disk_pid) +
 			                         ", into buffer pool");
 		}
-		this->tuple_size_ = sizeof(TableTuple<Type>);
 
 		char *data = this->bp_->GetDataWriteable(this->in_memory_pid_);
 		this->slots_ = reinterpret_cast<bool *>(data);
@@ -39,7 +38,6 @@ struct TablePage {
 
 	TablePage(BufferPool *bp, size_t tuple_size, size_t tuple_count) : bp_ {bp}, tuple_count_ {tuple_count} {
 
-		this->tuple_size_ = sizeof(TableTuple<Type>);
 
 		index index = this->bp_->CreatePage();
 
@@ -59,22 +57,22 @@ struct TablePage {
 
 	/** @brief removes data stored on given index in page*/
 	void Remove(const index &id) {
-		if (this->tuple_count_ + this->tuple_size_ * id > PageSize) {
+		if (this->tuple_count_ + sizeof(Type) * id > PageSize) {
 			throw std::runtime_error("Index doesn't exists");
 		}
 		this->slots_[id] = false;
-		memset(this->storage_ + id, 0, this->tuple_size_);
+		memset(this->storage_ + id, 0, sizeof(Type));
 	}
 
 	/** @brief Inserts tuple at first free index into table
 	 * @return true on succesful insert, false if there is no space left,
 	 */
-	bool Insert(TableTuple<Type> *tuple, index *id) {
+	bool Insert(Type *tuple, index *id) {
 		int i = 0;
 		for (; i < this->tuple_count_; i++) {
 			if (this->slots_[i] == 0) {
 				this->slots_[i] = true;
-				memcpy(this->storage_ + (this->tuple_size_ * i), tuple, tuple_size_);
+				memcpy(this->storage_ + sizeof(Type) * i, tuple,  sizeof(Type));
 				*id = i;
 				return true;
 			}
@@ -83,17 +81,16 @@ struct TablePage {
 	}
 
 	/** @brief return tuple stored at given index in Table */
-	TableTuple<Type> *Get(const index &id) {
-		if (this->tuple_count_ + this->tuple_size_ * id > PageSize) {
+	Type *Get(const index &id) {
+		if (this->tuple_count_ + sizeof(Type) * id > PageSize) {
 			throw std::runtime_error("Index doesn't exists");
 		}
-		return (TableTuple<Type> *)(this->storage_ + id * sizeof(TableTuple<Type>));
+		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
 
 	// this is set by Table that own this struct
 	BufferPool *bp_;
 	size_t tuple_count_;
-	const size_t tuple_size_;
 	index in_memory_pid_;
 
 	/* this is stored in actuall BufferPool page */
@@ -119,7 +116,6 @@ struct TablePageReadOnly {
 			                         ", into buffer pool");
 		}
 
-		this->tuple_size_ = sizeof(TableTuple<Type>);
 
 		const char *data = this->bp_->GetDataReadonly(this->in_memory_pid_);
 		this->slots_ = reinterpret_cast<const bool *>(data);
@@ -137,16 +133,15 @@ struct TablePageReadOnly {
 
 	/** @brief return tuple stored at given index in Table */
 	const char *Get(const index &id) {
-		if (this->tuple_count_ + this->tuple_size_ * id > PageSize) {
+		if (this->tuple_count_ + sizeof(Type) * id > PageSize) {
 			throw std::runtime_error("Index doesn't exists");
 		}
 
-		return (TableTuple<Type> *)(this->storage_ + id);
+		return (Type *)(this->storage_ + id);
 	}
 
 	BufferPool *bp_;
 	size_t tuple_count_;
-	const size_t tuple_size_;
 	index in_memory_pid_;
 
 	/* this is stored in actuall BufferPool page */

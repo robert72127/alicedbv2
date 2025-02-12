@@ -84,7 +84,7 @@ template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
 	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500, Graph *graph)
-	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_{graph} {
+	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_ {graph} {
 		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -107,7 +107,6 @@ public:
 			}
 			cnt++;
 		}
-
 	}
 
 	Cache *Output() {
@@ -135,7 +134,6 @@ public:
 	}
 
 private:
-
 	int duration_us_;
 
 	size_t next_index_ = 0;
@@ -157,18 +155,17 @@ private:
 	Cache *produce_cache_;
 	int out_count = 0;
 	int clean_count = 0;
-
 };
 
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
 	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
-	    : in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()}, graph_{graph} {
+	    : in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->ts_ = get_current_timestamp();
 
 		// init table from graph metastate based on index
-		
+
 		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
@@ -177,7 +174,6 @@ public:
 		// we also need to set ts for the node
 		ts_ = meta.ts_;
 	}
-
 
 	void Compute() {
 		// write in cache into out_table
@@ -232,7 +228,7 @@ private:
 	// how much time back from current time do we have to store values
 	timestamp frontier_ts_;
 
-	// what is oldest timestamp that needs to be keept by this Node Tables 
+	// what is oldest timestamp that needs to be keept by this Node Tables
 	timestamp &ts_;
 
 	TypedNode<Type> *in_node_;
@@ -244,16 +240,16 @@ private:
 	// or something
 
 	Table<Type> *table_
-	
-	Graph *graph_;
+
+	    Graph *graph_;
 };
 
 template <typename Type>
 class FilterNode : public TypedNode<Type> {
 public:
 	FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition, Graph *graph)
-	    : condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()}, frontier_ts_ {
-	                                                                                     in_node->GetFrontierTs()}, graph_{graph} {
+	    : condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()},
+	      frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -319,8 +315,8 @@ template <typename InType, typename OutType>
 class ProjectionNode : public TypedNode<OutType> {
 public:
 	ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection, Graph *graph)
-	    : projection_ {projection}, in_node_ {in_node}, in_cache_ {in_node->Output()}, frontier_ts_ {
-	                                                                                       in_node->GetFrontierTs()}, graph_{graph} {
+	    : projection_ {projection}, in_node_ {in_node}, in_cache_ {in_node->Output()},
+	      frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<OutType>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -402,14 +398,13 @@ template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
 	DistinctNode(TypedNode<Type> *in_node, Graph *graph_, BufferPool *bp, index table_index)
-	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_{graph} {
+	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->ts_ = get_current_timestamp();
 		this->previous_ts_ = 0;
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 
-
 		// init table from graph metastate based on index
-		
+
 		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
@@ -447,7 +442,7 @@ public:
 			index idx = this->table_->Insert(in_tuple->data);
 			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
 
-			if (!was_present) {
+			                       if (!was_present) {
 				not_emited.insert(idx);
 			}
 		}
@@ -669,16 +664,16 @@ private:
 template <typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public TypedNode<OutType> {
 public:
-	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
+	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph,
+	                   BufferPool *bp, index left_table_index, index right_table_index)
 	    : in_node_left_ {in_node_left}, in_node_right_ {in_node_right}, in_cache_left_ {in_node_left->Output()},
 	      in_cache_right_ {in_node_right->Output()}, frontier_ts_ {std::max(in_node_left->GetFrontierTs(),
 	                                                                        in_node_right->GetFrontierTs())} {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
-
 		// init table from graph metastate based on index
-		
+
 		// get reference to corresponding metastate
 		MetaState &meta_left = this->graph_->tables_metadata_(left_table_index);
 
@@ -687,7 +682,6 @@ public:
 		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
 		ts_ = meta.ts_;
 
-		
 		// get reference to corresponding metastate
 		MetaState &meta_right = this->graph_->tables_metadata_(right_table_index);
 
@@ -756,8 +750,10 @@ protected:
 template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
 public:
-	IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right,Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
-	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, left_table_index, right_table_index) {
+	IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, Graph *graph, BufferPool *bp,
+	              index left_table_index, index right_table_index)
+	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, left_table_index,
+	                                           right_table_index) {
 	}
 
 	void Compute() {
@@ -848,9 +844,11 @@ template <typename InTypeLeft, typename InTypeRight, typename OutType>
 class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
 	CrossJoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
-	              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
-	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index, right_table_index), join_layout_ {
-	                                                                                             join_layout} {
+	              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph,
+	              BufferPool *bp, index left_table_index, index right_table_index)
+	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index,
+	                                                           right_table_index),
+	      join_layout_ {join_layout} {
 	}
 
 	void Compute() {
@@ -949,9 +947,10 @@ public:
 	JoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
 	         std::function<MatchType(const InTypeLeft &)> get_match_left,
 	         std::function<MatchType(const InTypeRight &)> get_match_right,
-	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,
-			 Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
-	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index, right_table_index),
+	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph, BufferPool *bp,
+	         index left_table_index, index right_table_index)
+	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index,
+	                                                           right_table_index),
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 	}
 
@@ -983,7 +982,7 @@ public:
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
-			for(const auto &idx :  this->match_to_index_right_table_[Key<MatchType>match]){
+			for (const auto &idx : this->match_to_index_right_table_[Key<MatchType> match]) {
 				InTypeRight *right_data = this->right_table->Get(idx);
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
@@ -997,14 +996,14 @@ public:
 				}
 			}
 		}
-		
+
 		// compute right cache against left table
 		while (this->in_cache_right_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
-			for(const auto &idx :  this->match_to_index_left_table_[Key<MatchType>match]){
+			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType> match]) {
 				InTypeRight *right_data = this->left_table->Get(idx);
-					std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
@@ -1022,16 +1021,14 @@ public:
 			// and this will actually handle inserting into both match tree and normal btree
 			index idx = this->table_->Insert(in_right_tuple->data);
 
-		
 			this->table_->InsertDelta(idx, in_right_tuple->delta);
-		
+
 			// track match on insert
 			MatchType match = this->get_match_right_(in_data_right);
-			if(!this->match_to_index_right_table_.contains(Key<MatchType>match)){
+			if (!this->match_to_index_right_table_.contains(Key<MatchType> match)) {
 				this->match_to_index_right_table_[Key<MatchType>(match)] = {}
 			}
 			this->match_to_index_right_table_[match].insert(idx);
-			
 		}
 
 		while (this->in_cache_->GetNext(&in_data_left)) {
@@ -1042,7 +1039,7 @@ public:
 
 			// track match on insert
 			MatchType match = this->get_match_left_(in_data_left);
-			if(!this->match_to_index_left_table_.contains(Key<MatchType>match)){
+			if (!this->match_to_index_left_table_.contains(Key<MatchType> match)) {
 				this->match_to_index_left_table_[Key<MatchType>(match)] = {}
 			}
 			this->match_to_index_left_table_[match].insert(idx);
@@ -1074,11 +1071,13 @@ private:
 	Table<InTypeRight> *right_table;
 
 	/**  @todo we will store matches as non persistent storage,
-		on system start we will recalculate matches for all tuples,
-		then when inserting new tuples we will just compare their matches and check for indexes
+	    on system start we will recalculate matches for all tuples,
+	    then when inserting new tuples we will just compare their matches and check for indexes
 	*/
-	std::unordered_map< std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType> > match_to_index_left_table_;
-	std::unordered_map< std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType> > match_to_index_right_table_;
+	std::unordered_map<std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType>>
+	    match_to_index_left_table_;
+	std::unordered_map<std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType>>
+	    match_to_index_right_table_;
 };
 
 /**
@@ -1093,7 +1092,7 @@ private:
 // would emit new version from their oldest version
 
 // finally we will only aggregate by single field be it max sum etc,
-// doesn't matter point is we aggregate on one thing only because for 
+// doesn't matter point is we aggregate on one thing only because for
 // multiple aggregations we will be able to just chain them together
 
 template <typename InType, typename MatchType>
@@ -1103,19 +1102,17 @@ class AggregateByNode : public TypedNode<OutType> {
 	// Alice but with min it should not, so it will be dependent on aggregate
 	// function
 public:
-	AggregateByNode(TypedNode<InType> *in_node, 
-					std::function<InType(const InType &, const InType &)> aggr_fun,
+	AggregateByNode(TypedNode<InType> *in_node, std::function<InType(const InType &, const InType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp, index table_index)
 	    : in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_{graph} {
+	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph} {
 		this->ts_ = get_current_timestamp();
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
 		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
 
-
 		// init table from graph metastate based on index
-		
+
 		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
@@ -1150,7 +1147,6 @@ public:
 	void Compute() {
 		std::unordered_set<index> not_emited;
 
-
 		// first insert all new data from cache to table
 		const char *in_data_;
 		while (this->in_cache_->GetNext(&in_data_)) {
@@ -1158,77 +1154,73 @@ public:
 
 			index idx = this->table_->Insert(in_tuple->data);
 			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
-			
-			if (!was_present) {
+
+			                       if (!was_present) {
 				not_emited.insert(idx);
 			}
 		}
 
 		// and then we emit insert and delete based on index at the same time
-		
+
 		// itreate all tuples, if it's in match of inserted:
 		// compute aggregate for it
-
 
 		// ok how can we know that some tuple was already emited?
 		// if our oldest delta timestamp is less than or equal to previous ts,
 		// it means than it was already emited as insert, so we can emit this value with delete
 		// otherwise, there was no previous version and we can safely delete
-		
+
 		// now onto the way in which we will iterate: we need to iterate all tuples
 		// so in this node our table will be normal one and our match will be temoprar and not persistent
 
+		std::unordered_map<MatchType, InType> matches_;
+		for (int index = 0, auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
+		     ++it, index++) {
 
-		std::unordered_map<MatchType,InType> matches_;
-		for (int index = 0, auto it = this->table_->HeapIterator.begin();
-		     it != this->table_->HeapIterator.end(); ++it, index++) {
-
-				Delta &olders_delta = *this->table_->Scan(index).rbegin();
-				// check if it oldest if previous ts that will mean it was already emited
-				if (olders_delta.ts <= this->previous_ts_){
-					if(matches_from_queue.contains( get_match_(*it) )){
-						matches_[ get_match_(*it)] = *it;
-					}
-					else{
-						matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it); 
-					}
+			Delta &olders_delta = *this->table_->Scan(index).rbegin();
+			// check if it oldest if previous ts that will mean it was already emited
+			if (olders_delta.ts <= this->previous_ts_) {
+				if (matches_from_queue.contains(get_match_(*it))) {
+					matches_[get_match_(*it)] = *it;
+				} else {
+					matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it);
 				}
+			}
 		}
 		// emit all matches from queue with delete
-		for(const auto& [_, in_data]: matches_  ){
-				char *out_data;
-				this->out_cache_->ReserveNext(&out_data);
-				Tuple<InType> *del_tuple = (Tuple<InType> *)(out_data);
-					del_tuple->delta = {this->previous_ts_, -1};
-					std::memcpy(&del_tuple->data, in_data, sizeof(OutType));
+		for (const auto &[_, in_data] : matches_) {
+			char *out_data;
+			this->out_cache_->ReserveNext(&out_data);
+			Tuple<InType> *del_tuple = (Tuple<InType> *)(out_data);
+			del_tuple->delta = {this->previous_ts_, -1};
+			std::memcpy(&del_tuple->data, in_data, sizeof(OutType));
 		}
-		
+
 		this->Compact();
 
 		this->compact_ = false;
 
-		std::unordered_map<MatchType,InType> matches_ = {};
-		for (int index = 0, auto it = this->table_->HeapIterator.begin();
-		     it != this->table_->HeapIterator.end(); ++it, index++) {
+		std::unordered_map<MatchType, InType> matches_ = {};
+		for (int index = 0, auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
+		     ++it, index++) {
 
-				Delta &olders_delta = *this->table_->Scan(index).rbegin();
-				// check if it oldest if previous ts that will mean it was already emited
-				if (olders_delta.ts <= this->previous_ts_){
-					if(matches_from_queue.contains( get_match_(*it) )){
-						matches_[ get_match_(*it)] = *it;
-					}
-					else{
-						matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it); 
-					}
+			Delta &olders_delta = *this->table_->Scan(index).rbegin();
+			// check if it oldest if previous ts that will mean it was already emited
+			if (olders_delta.ts <= this->previous_ts_) {
+				if (matches_from_queue.contains(get_match_(*it))) {
+					matches_[get_match_(*it)] = *it;
+				} else {
+					matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it);
 				}
+			}
 		}
 		// emit all matches from queue with delete
-		for(const auto& [_, in_data]: matches_  ){
-				char *out_data;
-				this->out_cache_->ReserveNext(&out_data);
-				Tuple<InType> *ins_tuple = (Tuple<InType> *)(out_data);
-					ins_tuple->delta = {this->previous_ts_, 11};
-					std::memcpy(&ins_tuple->data, in_data, sizeof(OutType));
+		for (const auto &[_, in_data] : matches_) {
+			char *out_data;
+			this->out_cache_->ReserveNext(&out_data);
+			Tuple<InType> *ins_tuple = (Tuple<InType> *)(out_data);
+			ins_tuple->delta = {this->previous_ts_, 11};
+			std::memcpy(&ins_tuple->data, in_data, sizeof(OutType));
 		}
 	}
 
@@ -1270,7 +1262,6 @@ private:
 
 	std::function<InType(const InType &, const InType &)> aggr_fun_;
 	std::function<MatchType(const InType &)> get_match_;
-	
 
 	Table<Type> *table_;
 

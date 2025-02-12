@@ -256,12 +256,10 @@ private:
  *
  */
 
-struct StorageIndex{
+struct StorageIndex {
 	index page_id_;
 	index tuple_id_;
 };
-
-
 
 template <typename Key>
 class BTree {
@@ -269,10 +267,10 @@ class BTree {
 	Btree(BufferPool *bp)
 
 	    bool Insert(const Key &key, const StorageIndex &idx);
-	    
-		bool Delete(Key *key);
 
-		std::vector<StorageIndex> Search(const &Key);
+	bool Delete(Key *key);
+
+	std::vector<StorageIndex> Search(const &Key);
 
 	/** we should probably return vector of positions <page_index, tuple_index> so we will be able to access it in nice
 	 * sorted order */
@@ -291,8 +289,8 @@ private:
 template <typename Type>
 class Table {
 
-	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes,
-	      std::vector<index> &btree_indexes, BufferPool *bp, Graph *g)
+	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
+	      BufferPool *bp, Graph *g)
 	    : table_idx_ {table_idx} bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
 	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes} {
 	}
@@ -314,7 +312,8 @@ class Table {
 		// then call insert on b+tree(match one) with in_data(key), index(leaf) for matchbtreetable
 	}
 
-	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found index
+	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
+	// index
 	bool Search(const char *data, int *index);
 
 	void Delete(const char *data) {
@@ -322,8 +321,7 @@ class Table {
 
 	// return pointer to data corresponding to index, calculated using tuples per page & offset
 	// if index is larger than tuple count returns nullptr
-	Type* Get(const index &idx);
-
+	Type *Get(const index &idx);
 
 	// other will be iterate all tuples, so heap based for
 	// cross join and compact delta for distinct node
@@ -333,7 +331,6 @@ class Table {
 	class HeapIterator;
 	HeapIterator begin();
 	HeapIterator end();
-
 
 	// methods to work with deltas
 	bool InsertDelta(const index idx, const Delta &d) {

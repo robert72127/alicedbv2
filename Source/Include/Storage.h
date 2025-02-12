@@ -291,8 +291,8 @@ private:
 template <typename Type>
 class Table {
 
-	Table(std::string delta_storage_fname, std::vector<index> data_page_indexes,
-	      std::vector<index> btree_indexes, BufferPool *bp, Graph *g)
+	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes,
+	      std::vector<index> &btree_indexes, BufferPool *bp, Graph *g)
 	    : table_idx_ {table_idx} bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
 	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes} {
 	}
@@ -358,8 +358,8 @@ class Table {
 	}
 
 protected:
-	std::vector<index> data_page_indexes_;
-	std::vector<index> btree_indexes_;
+	std::vector<index> &data_page_indexes_;
+	std::vector<index> &btree_indexes_;
 	std::string ds_filename_;
 	std::unique_ptr<DeltaStorage> ds_;
 	BufferPool *bp_;

@@ -48,6 +48,7 @@ namespace AliceDB {
 
 // we need this definition to store graph pointer in node
 class Graph;
+class BufferPool;
 
 class Node {
 public:
@@ -162,14 +163,21 @@ private:
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
-	SinkNode(TypedNode<Type> *in_node, Graph *graph, index table_index)
+	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
 	    : in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()}, graph_{graph} {
 		this->ts_ = get_current_timestamp();
 
 		// init table from graph metastate based on index
-		/** @todo do this for other nodes */	
+		
+		// get reference to corresponding metastate
+		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
+		this->table_ = new Table(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+
+		// we also need to set ts for the node
+		ts_ = meta.ts_;
 	}
+
 
 	void Compute() {
 		// write in cache into out_table
@@ -224,8 +232,8 @@ private:
 	// how much time back from current time do we have to store values
 	timestamp frontier_ts_;
 
-	// what is oldest timestamp that needs to be keept by this table
-	timestamp ts_;
+	// what is oldest timestamp that needs to be keept by this Node Tables 
+	timestamp &ts_;
 
 	TypedNode<Type> *in_node_;
 	// in cache is out cache :)
@@ -243,9 +251,9 @@ private:
 template <typename Type>
 class FilterNode : public TypedNode<Type> {
 public:
-	FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition)
+	FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition, Graph *graph)
 	    : condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()}, frontier_ts_ {
-	                                                                                     in_node->GetFrontierTs()} {
+	                                                                                     in_node->GetFrontierTs()}, graph_{graph} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -303,14 +311,16 @@ private:
 	Cache *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
+
+	Graph *graph_;
 };
 // projection can be represented by single node
 template <typename InType, typename OutType>
 class ProjectionNode : public TypedNode<OutType> {
 public:
-	ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection)
+	ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection, Graph *graph)
 	    : projection_ {projection}, in_node_ {in_node}, in_cache_ {in_node->Output()}, frontier_ts_ {
-	                                                                                       in_node->GetFrontierTs()} {
+	                                                                                       in_node->GetFrontierTs()}, graph_{graph} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<OutType>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -369,6 +379,8 @@ private:
 	Cache *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
+
+	Graph *graph_
 };
 
 // we need distinct node that will:
@@ -389,11 +401,22 @@ private:
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
-	DistinctNode(TypedNode<Type> *in_node)
-	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()} {
+	DistinctNode(TypedNode<Type> *in_node, Graph *graph_, BufferPool *bp, index table_index)
+	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_{graph} {
 		this->ts_ = get_current_timestamp();
 		this->previous_ts_ = 0;
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
+
+
+		// init table from graph metastate based on index
+		
+		// get reference to corresponding metastate
+		MetaState &meta = this->graph_->tables_metadata_(table_index);
+
+		this->table_ = new Table(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+
+		// we also need to set ts for the node
+		ts_ = meta.ts_;
 	}
 
 	Cache *Output() {
@@ -527,7 +550,7 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp ts_;
+	timestamp &ts_;
 
 	timestamp previous_ts_ = 0;
 
@@ -646,12 +669,29 @@ private:
 template <typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public TypedNode<OutType> {
 public:
-	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right)
+	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
 	    : in_node_left_ {in_node_left}, in_node_right_ {in_node_right}, in_cache_left_ {in_node_left->Output()},
 	      in_cache_right_ {in_node_right->Output()}, frontier_ts_ {std::max(in_node_left->GetFrontierTs(),
 	                                                                        in_node_right->GetFrontierTs())} {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
+
+
+		// init table from graph metastate based on index
+		
+		// get reference to corresponding metastate
+		MetaState &meta_left = this->graph_->tables_metadata_(left_table_index);
+
+		this->left_table_ = new Table(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
+
+		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
+		ts_ = meta.ts_;
+
+		
+		// get reference to corresponding metastate
+		MetaState &meta_right = this->graph_->tables_metadata_(right_table_index);
+
+		this->right_table_ = new Table(meta)right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
 	}
 
 	Cache *Output() {
@@ -689,7 +729,7 @@ protected:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp ts_;
+	timestamp &ts_;
 
 	timestamp frontier_ts_;
 
@@ -716,8 +756,8 @@ protected:
 template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
 public:
-	IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right)
-	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right) {
+	IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right,Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
+	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, left_table_index, right_table_index) {
 	}
 
 	void Compute() {
@@ -808,8 +848,8 @@ template <typename InTypeLeft, typename InTypeRight, typename OutType>
 class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
 public:
 	CrossJoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
-	              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
-	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right), join_layout_ {
+	              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
+	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index, right_table_index), join_layout_ {
 	                                                                                             join_layout} {
 	}
 
@@ -909,8 +949,9 @@ public:
 	JoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
 	         std::function<MatchType(const InTypeLeft &)> get_match_left,
 	         std::function<MatchType(const InTypeRight &)> get_match_right,
-	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout)
-	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right),
+	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout,
+			 Graph *graph, BufferPool *bp,index left_table_index, index right_table_index )
+	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index, right_table_index),
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 	}
 
@@ -1064,13 +1105,24 @@ class AggregateByNode : public TypedNode<OutType> {
 public:
 	AggregateByNode(TypedNode<InType> *in_node, 
 					std::function<InType(const InType &, const InType &)> aggr_fun,
-	                std::function<MatchType(const InType &)> get_match)
+	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp, index table_index)
 	    : in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match} {
+	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_{graph} {
 		this->ts_ = get_current_timestamp();
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
 		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
+
+
+		// init table from graph metastate based on index
+		
+		// get reference to corresponding metastate
+		MetaState &meta = this->graph_->tables_metadata_(table_index);
+
+		this->table_ = new Table(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+
+		// we also need to set ts for the node
+		ts_ = meta.ts_;
 	}
 
 	Cache *Output() {
@@ -1203,7 +1255,7 @@ private:
 	size_t next_index_ = 0;
 
 	bool compact_ = false;
-	timestamp ts_;
+	timestamp &ts_;
 	timestamp previous_ts_;
 
 	timestamp frontier_ts_;
@@ -1223,6 +1275,8 @@ private:
 	Table<Type> *table_;
 
 	std::mutex node_mutex;
+
+	Graph *graph_;
 };
 
 } // namespace AliceDB

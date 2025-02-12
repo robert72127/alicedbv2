@@ -14,8 +14,16 @@
 
 
 ## Storage:
-    * Implement B+Tree [v]
-    * Add metadata loading/storing [v] 
+    * Implement B+Tree, and Storage class []
+    * Add metadata loading/storing [v]
+    * Add correct destructors [V]:
+        ok on sigkill etc 
+        * first we call destructor on worker pool,
+        this stops graphs,
+        * then we call destructor on graph,
+        this will save metadata state
+        * lastly we call destructor on bufferpool
+    * Add Signal Handler for gracefull shutdown []
 ----------------------------------------------------------------------------------------------
 
 

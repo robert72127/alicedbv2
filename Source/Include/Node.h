@@ -74,6 +74,8 @@ template <typename OutType>
 class TypedNode : public Node {
 public:
 	using value_type = OutType;
+
+	virtual ~TypedNode() {};
 };
 
 /* Source node is responsible for producing data through Compute function and
@@ -87,6 +89,10 @@ public:
 	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_ {graph} {
 		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
+	}
+
+	~SourceNode() {
+		delete produce_cache_;
 	}
 
 	void Compute() {
@@ -136,8 +142,6 @@ public:
 private:
 	int duration_us_;
 
-	size_t next_index_ = 0;
-
 	bool update_ts_ = false;
 
 	// how much time back from current time do we have to store values
@@ -173,6 +177,10 @@ public:
 
 		// we also need to set ts for the node
 		ts_ = meta.ts_;
+	}
+
+	~SinkNode() {
+		delete table_;
 	}
 
 	void Compute() {
@@ -239,9 +247,9 @@ private:
 	// we will later use some persistent storage for that mapping, maybe rocksdb
 	// or something
 
-	Table<Type> *table_
+	Table<Type> *table_;
 
-	    Graph *graph_;
+	Graph *graph_;
 };
 
 template <typename Type>
@@ -252,6 +260,10 @@ public:
 	      frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
+	}
+
+	~FilterNode() {
+		delete out_cache_;
 	}
 
 	// filters node
@@ -319,6 +331,10 @@ public:
 	      frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<OutType>));
 		this->ts_ = get_current_timestamp();
+	}
+
+	~ProjectionNode() {
+		delete out_cache_;
 	}
 
 	void Compute() {
@@ -412,6 +428,11 @@ public:
 
 		// we also need to set ts for the node
 		ts_ = meta.ts_;
+	}
+
+	~DistinctNode() {
+		delete out_cache_;
+		delete table_;
 	}
 
 	Cache *Output() {
@@ -585,6 +606,10 @@ public:
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 	}
 
+	~PlusNode() {
+		delete out_cache_;
+	}
+
 	Cache *Output() {
 		this->out_count++;
 		return this->out_cache_;
@@ -686,6 +711,12 @@ public:
 		MetaState &meta_right = this->graph_->tables_metadata_(right_table_index);
 
 		this->right_table_ = new Table(meta)right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
+	}
+
+	~StatefulBinaryNode() {
+		delete out_cache_;
+		delete left_table_;
+		delete right_table_;
 	}
 
 	Cache *Output() {
@@ -952,6 +983,8 @@ public:
 	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, left_table_index,
 	                                                           right_table_index),
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
+
+		/** @todo recomputed matches */
 	}
 
 	// this function changes
@@ -1120,6 +1153,11 @@ public:
 
 		// we also need to set ts for the node
 		ts_ = meta.ts_;
+	}
+
+	~AggregateByNode() {
+		delete out_cache_;
+		delete table_;
 	}
 
 	Cache *Output() {

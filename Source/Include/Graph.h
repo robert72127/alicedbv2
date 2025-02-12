@@ -129,6 +129,12 @@ public:
 	}
 
 	~Graph() {
+
+		/** call destructor on nodes */
+		for (const auto *Node : all_nodes_) {
+			delete Node;
+		}
+
 		// update graph metadatafile
 		// ok and what do we actually need to store there?
 		// like connections and node lists is actually stored in object itself(in code)
@@ -632,7 +638,7 @@ private:
 
 	std::string graph_filename_;
 
-	BufferPool *bp_;
+	std::shared_ptr<BufferPool> bp_;
 };
 
 } // namespace AliceDB

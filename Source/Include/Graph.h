@@ -181,7 +181,7 @@ public:
 
 	// Node creations
 	template <typename P>
-	auto Source(P* prod, timestamp frontier_ts, int duration_us = 500)-> TypedNode<typename P::value_type>* {
+	auto Source(P *prod, timestamp frontier_ts, int duration_us = 500) -> TypedNode<typename P::value_type> * {
 		this->check_running();
 		using Type = typename P::value_type;
 		auto *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us, this);

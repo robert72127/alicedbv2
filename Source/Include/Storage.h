@@ -6,7 +6,7 @@ prefix search for free
 
 <Key(Tuple) | index> - this can be done by btree
 
-<Match | Keys> - this will be recomputed on the fly when restarting the system 
+<Match | Keys> - this will be recomputed on the fly when restarting the system
 
 but before we go further let's think what are acces cases :
 
@@ -92,7 +92,6 @@ also all our storage can be single threaded since we work on single node by one 
 
 namespace AliceDB {
 
-
 /**
  * Storage for <index | delta > mappings
  * main idea is to store structure as stl container in memory and later overwrite log file on disk on compression op
@@ -133,10 +132,9 @@ public:
 		}
 	}
 
-	void Delete(const index idx){
+	void Delete(const index idx) {
 		deltas_.erase(idx);
 	}
-
 
 	/**
 	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
@@ -284,36 +282,38 @@ class BTree {
 	// else returns alse
 	bool Search(const Key &key, const StorageIndex &idx);
 
-
 private:
 	std::vector<index> btree_page_indexes_;
 };
 
-
 template <typename Type>
 class HeapIterator {
 public:
+	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page = false)
+	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {
+		this->current_page =
+		    std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->page_idx_, this->tuples_per_page_);
+	}
 
-    HeapIterator( index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page=false) :
-	 page_idx_{page_idx}, tpl_idx_{tpl_idx}, bp_{bp}, tuples_per_page_{tuples_per_page} {
-		this->current_page = std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->page_idx_, this->tuples_per_page_);
-	 }
+	Type *operator*() const {
+		return current_page_->Get(tpl_idx_);
+	}
 
-  
-   	Type* operator*() const { return current_page_->Get(tpl_idx_); }
-
-    HeapIterator& operator++() {
-		this->tpl_idx_++; 
-		if(this->tpl_idx_ == this->tuples_per_page_){
+	HeapIterator &operator++() {
+		this->tpl_idx_++;
+		if (this->tpl_idx_ == this->tuples_per_page_) {
 			this->tpl_idx_ = 0;
 			this->page_idx_++;
 		}
-		this->current_page = std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->page_idx_, this->tuples_per_page_);
+		this->current_page =
+		    std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->page_idx_, this->tuples_per_page_);
 
-	 	return *this; 
+		return *this;
 	} // Prefix increment
- 
-    bool operator!=(const HeapIterator& other) const { return page_idx_ != other.page_idx_ || tpl_idx_ != other.tpl_idx_; }
+
+	bool operator!=(const HeapIterator &other) const {
+		return page_idx_ != other.page_idx_ || tpl_idx_ != other.tpl_idx_;
+	}
 
 private:
 	index *page_idx_;
@@ -324,7 +324,6 @@ private:
 
 	std::unique_ptr<TablePageReadOnly<Type>> current_page_;
 };
-
 
 /**
  * @brief all the stuff that might be needed,
@@ -339,11 +338,9 @@ class Table {
 	    : bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
 	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes} {
 
-
-			// last page is current write page
-			this->write_page = std::make_unique<TablePage<Type>>(*data_page_indexes.rbegin());
+		// last page is current write page
+		this->write_page = std::make_unique<TablePage<Type>>(*data_page_indexes.rbegin());
 	}
-
 
 	// return index if data already present in table, doesn't insert but just return index
 	index Insert(const Type *in_data) {
@@ -351,31 +348,29 @@ class Table {
 		// this will return index,
 		// then call insert on b+tree with in_data(key), index(leaf) for btreetable
 		// then call insert on b+tree(match one) with in_data(key), index(leaf) for matchbtreetable
-		
 
 		// first check if already present
 		index idx;
-		if(this->Search(in_data,&idx)){
+		if (this->Search(in_data, &idx)) {
 			return idx;
 		}
 
 		// ok not present, write to the next write page
-		if(this->WritePage.Insert(in_data), &idx){
-			this->WritePage = new TablePage(this->bp_, this->tuple_count_); 
+		if (this->WritePage.Insert(in_data), &idx) {
+			this->WritePage = new TablePage(this->bp_, this->tuple_count_);
 			this->data_page_indexes.push_back(this->WritePage->GetDiskIndex());
 		}
-			
-		return idx + this->TuplesPerPage() * this->data_page_indexes.size(); 
 
+		return idx + this->TuplesPerPage() * this->data_page_indexes.size();
 	}
 
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
 	// index
-	bool Search(const Type *data, int *index){
+	bool Search(const Type *data, int *index) {
 
 		int idx = 0;
-		for(HeapIterator<Type> it = this->begin(); it != this->end(); ++it, idx++){
-			if (std::memcmp(data, *it, sizeof(Type))){
+		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it, idx++) {
+			if (std::memcmp(data, *it, sizeof(Type))) {
 				*index = idx;
 				return true;
 			}
@@ -385,18 +380,18 @@ class Table {
 	}
 
 	/**
-	 * @brief deletes all tuples that are older than ts, 
+	 * @brief deletes all tuples that are older than ts,
 	 * if zeros_only is set only those for which current delta count is zero are deleted
-	 *  */	
+	 *  */
 	void GarbageCollect(timestamp ts, bool zeros_only) = delete;
-
 
 	// return pointer to data corresponding to index, calculated using tuples per page & offset
 	// if index is larger than tuple count returns nullptr
-	Type Get(const index &idx){
+	Type Get(const index &idx) {
 		StorageIndex str_idx = this->IndexToStorageIndex(idx);
-	
-		auto read_page = std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->data_page_indexes_[str_idx.page_id_], this->tuples_per_page);
+
+		auto read_page = std::make_unique<TablePageReadOnly<Type>>(
+		    this->bp_, this->data_page_indexes_[str_idx.page_id_], this->tuples_per_page);
 		Type tp;
 		std::memcpy(&tp, read_page->Get(str_idx.tuple_id_), sizeof(Type));
 	}
@@ -405,12 +400,12 @@ class Table {
 	// cross join and compact delta for distinct node
 
 	/** @todo all iterators should return tuple or sth so like data - pointer | index */
-	HeapIterator<Type> begin(){
-		return HeapIterator<Type>(this->data_page_indexes_.data(),0, this->bp_, this->tuples_per_page, true );
-
+	HeapIterator<Type> begin() {
+		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page, true);
 	}
-	HeapIterator<Type> end(){
-		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size()-1, this->tuples_per_page, bp_, this->tuples_per_page, false);
+	HeapIterator<Type> end() {
+		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size() - 1,
+		                          this->tuples_per_page, bp_, this->tuples_per_page, false);
 	}
 
 	// methods to work with deltas
@@ -436,10 +431,13 @@ class Table {
 	}
 
 protected:
+	inline index StorageIndexToIndex(StorageIndex sidx) {
+		return this->tuples_per_page * sidx.page_id_ + sidx.tuple_id_;
+	}
 
-	inline index StorageIndexToIndex(StorageIndex sidx) { return this->tuples_per_page * sidx.page_id_ + sidx.tuple_id_; }
-	
-	StorageIndex IndexToStorageIndex(index idx) {return  { idx / this->tuples_per_page, idx % this->tuples_per_page}; } 
+	StorageIndex IndexToStorageIndex(index idx) {
+		return {idx / this->tuples_per_page, idx % this->tuples_per_page};
+	}
 
 	// methods for page accesing etc
 
@@ -452,7 +450,7 @@ protected:
 	// delta storage
 	std::string ds_filename_;
 	std::unique_ptr<DeltaStorage> ds_;
-	
+
 	// buffer pool pointer
 	BufferPool *bp_;
 

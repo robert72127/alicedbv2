@@ -1,9 +1,9 @@
 #ifndef ALICEDBTABLEPAGE
 #define ALICEDBTABLEPAGE
 
-#include "Tuple.h"
-#include "Common.h"
 #include "BufferPool.h"
+#include "Common.h"
+#include "Tuple.h"
 
 #include <cstddef>
 #include <stdexcept>
@@ -38,8 +38,7 @@ struct TablePage {
 		this->disk_index_ = on_disk_pid;
 	}
 
-	TablePage(BufferPool *bp,  size_t tuple_count) : bp_ {bp}, tuple_count_ {tuple_count} {
-
+	TablePage(BufferPool *bp, size_t tuple_count) : bp_ {bp}, tuple_count_ {tuple_count} {
 
 		index index = this->bp_->CreatePage();
 		this->disk_index_ = index;
@@ -75,7 +74,7 @@ struct TablePage {
 		for (; i < this->tuple_count_; i++) {
 			if (this->slots_[i] == 0) {
 				this->slots_[i] = true;
-				memcpy(this->storage_ + sizeof(Type) * i, tuple,  sizeof(Type));
+				memcpy(this->storage_ + sizeof(Type) * i, tuple, sizeof(Type));
 				*id = i;
 				return true;
 			}
@@ -91,7 +90,9 @@ struct TablePage {
 		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
 
-	inline index GetDiskIndex() {return disk_index_;} 
+	inline index GetDiskIndex() {
+		return disk_index_;
+	}
 
 	// this is set by Table that own this struct
 	BufferPool *bp_;
@@ -121,7 +122,6 @@ struct TablePageReadOnly {
 			throw std::runtime_error("Failed to get on disk page " + std::to_string(on_disk_pid) +
 			                         ", into buffer pool");
 		}
-
 
 		const char *data = this->bp_->GetDataReadonly(this->in_memory_pid_);
 		this->slots_ = reinterpret_cast<const bool *>(data);

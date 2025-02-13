@@ -1,4 +1,4 @@
-/** 
+/**
  *
  * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
  * change after start command;
@@ -486,8 +486,7 @@ public:
 
 			// use heap iterator to go through all tuples
 			index idx = 0;
-			for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
-			     ++it, idx++) {
+			for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end(); ++it, idx++) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
 				Delta cur_delta = this->table_->OldestDelta[idx];
@@ -694,8 +693,8 @@ public:
 	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph,
 	                   BufferPool *bp, index left_table_index, index right_table_index)
 	    : in_node_left_ {in_node_left}, in_node_right_ {in_node_right}, in_cache_left_ {in_node_left->Output()},
-	      in_cache_right_ {in_node_right->Output()}, frontier_ts_ {std::max(in_node_left->GetFrontierTs(),
-	                                                                        in_node_right->GetFrontierTs())}, graph_{graph} {
+	      in_cache_right_ {in_node_right->Output()},
+	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}, graph_ {graph} {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
@@ -704,7 +703,8 @@ public:
 		// get reference to corresponding metastate
 		MetaState &meta_left = this->graph_->tables_metadata_(left_table_index);
 
-		this->left_table_ = new Table<LeftType>(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
+		this->left_table_ =
+		    new Table<LeftType>(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
 		ts_ = meta_left.ts_;
@@ -712,7 +712,8 @@ public:
 		// get reference to corresponding metastate
 		MetaState &meta_right = this->graph_->tables_metadata_(right_table_index);
 
-		this->right_table_ = new Table<RightType>(meta_right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
+		this->right_table_ =
+		    new Table<RightType>(meta_right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
 	}
 
 	~StatefulBinaryNode() {
@@ -777,7 +778,7 @@ protected:
 	Table<RightType> *right_table_;
 
 	Graph *graph_;
-	
+
 	std::mutex node_mutex;
 };
 
@@ -910,8 +911,8 @@ public:
 		// compute left cache against right table
 		// right table
 		index idx = 0;
-		for (auto it = this->table_right_->HeapIterator.begin();
-		     it != this->table_right_->HeapIterator.end(); ++it, idx++) {
+		for (auto it = this->table_right_->HeapIterator.begin(); it != this->table_right_->HeapIterator.end();
+		     ++it, idx++) {
 
 			// left cache
 			while (this->in_cache_left_->GetNext(&in_data_left)) {
@@ -932,8 +933,8 @@ public:
 		// compute right cache against left table
 		// right table
 		idx = 0;
-		for (auto it = this->table_left_->HeapIterator.begin();
-		     it != this->table_left_->HeapIterator.end(); ++it, idx++) {
+		for (auto it = this->table_left_->HeapIterator.begin(); it != this->table_left_->HeapIterator.end();
+		     ++it, idx++) {
 
 			// left cache
 			while (this->in_cache_right_->GetNext(&in_data_right)) {
@@ -997,25 +998,24 @@ public:
 		     ++it, idx++) {
 
 			MatchType match = this->get_match_left_(*it);
-		
-			if(!this->match_to_index_left_table_.contains(match)){
+
+			if (!this->match_to_index_left_table_.contains(match)) {
 				this->match_to_index_left_table_[match] = {};
 			}
 			this->match_to_index_left_table_[match].insert(idx);
 		}
-		
+
 		idx = 0;
 		for (auto it = this->right_table_->HeapIterator.begin(); it != this->right_table_->HeapIterator.end();
 		     ++it, idx++) {
 
 			MatchType match = this->get_match_right_(*it);
-		
-			if(!this->match_to_index_right_table_.contains(match)){
+
+			if (!this->match_to_index_right_table_.contains(match)) {
 				this->match_to_index_right_table_[match] = {};
 			}
 			this->match_to_index_right_table_[match].insert(idx);
 		}
-
 	}
 
 	// this function changes
@@ -1046,17 +1046,17 @@ public:
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
-			for (const auto &idx : this->match_to_index_right_table_[Key<MatchType> match]) {
+			for (const auto &idx : this->match_to_index_right_table_[Key<MatchType>(match)]) {
 				InTypeRight right_data = this->right_table->Get(idx);
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->data = this->join_layout_(in_left_tuple->data, &right_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta->ts),
-					                    in_left_tuple->delta.count * right_delta->count};
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
+					                    in_left_tuple->delta.count * right_delta.count};
 				}
 			}
 		}
@@ -1065,23 +1065,23 @@ public:
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
-			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType> match]) {
+			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType>(match)]) {
 				InTypeLeft left_data = this->left_table->Get(idx);
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data =  this->join_layout_(&left_data, in_right_tuple->data;
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta->ts),
-											in_right_tuple->delta.count * left_delta->count};
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->data = this->join_layout_(&left_data, in_right_tuple->data);
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
+					                    in_right_tuple->delta.count * left_delta.count};
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
 		while (this->in_cache_->GetNext(&in_data_right)) {
-			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// and this will actually handle inserting into both match tree and normal btree
 			index idx = this->table_->Insert(in_right_tuple->data);
 
@@ -1089,22 +1089,22 @@ public:
 
 			// track match on insert
 			MatchType match = this->get_match_right_(in_data_right);
-			if (!this->match_to_index_right_table_.contains(Key<MatchType> match)) {
-				this->match_to_index_right_table_[Key<MatchType>(match)] = {}
+			if (!this->match_to_index_right_table_.contains(Key<MatchType>(match))) {
+				this->match_to_index_right_table_[Key<MatchType>(match)] = {};
 			}
 			this->match_to_index_right_table_[match].insert(idx);
 		}
 
 		while (this->in_cache_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// and this will actually handle inserting into both match tree and normal btree
 			index idx = this->table_->Insert(in_left_tuple->data);
 			this->table_->InsertDelta(idx, in_left_tuple->delta);
 
 			// track match on insert
 			MatchType match = this->get_match_left_(in_data_left);
-			if (!this->match_to_index_left_table_.contains(Key<MatchType> match)) {
-				this->match_to_index_left_table_[Key<MatchType>(match)] = {}
+			if (!this->match_to_index_left_table_.contains(Key<MatchType>(match))) {
+				this->match_to_index_left_table_[Key<MatchType>(match)] = {};
 			}
 			this->match_to_index_left_table_[match].insert(idx);
 		}
@@ -1159,7 +1159,7 @@ private:
 // doesn't matter point is we aggregate on one thing only because for
 // multiple aggregations we will be able to just chain them together
 
-template <typename InType, typename MatchType>
+template <typename InType, typename MatchType, typename OutType>
 class AggregateByNode : public TypedNode<OutType> {
 	// now output of aggr might be also dependent of count of in tuple, for
 	// example i sum inserting 5 Alice's should influence it different than one
@@ -1219,12 +1219,12 @@ public:
 		// first insert all new data from cache to table
 		const char *in_data_;
 		while (this->in_cache_->GetNext(&in_data_)) {
-			const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
+			const Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data_);
 
 			index idx = this->table_->Insert(in_tuple->data);
-			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
+			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta);
 
-			                       if (!was_present) {
+			if (!was_present) {
 				not_emited.insert(idx);
 			}
 		}
@@ -1243,13 +1243,13 @@ public:
 		// so in this node our table will be normal one and our match will be temoprar and not persistent
 
 		std::unordered_map<MatchType, InType> matches_;
-		for (int index = 0, auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
-		     ++it, index++) {
+		index idx = 0;
+		for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end(); ++it, idx++) {
 
-			Delta &olders_delta = *this->table_->Scan(index).rbegin();
+			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
 			// check if it oldest if previous ts that will mean it was already emited
 			if (olders_delta.ts <= this->previous_ts_) {
-				if (matches_from_queue.contains(get_match_(*it))) {
+				if (matches_.contains(get_match_(*it))) {
 					matches_[get_match_(*it)] = *it;
 				} else {
 					matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it);
@@ -1269,21 +1269,22 @@ public:
 
 		this->compact_ = false;
 
-		std::unordered_map<MatchType, InType> matches_ = {};
-		for (int index = 0, auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
-		     ++it, index++) {
+		matches_ = {};
+		idx = 0;
+		for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end(); ++it, idx++) {
 
-			Delta &olders_delta = *this->table_->Scan(index).rbegin();
+			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
 			// check if it oldest if previous ts that will mean it was already emited
 			if (olders_delta.ts <= this->previous_ts_) {
-				if (matches_from_queue.contains(get_match_(*it))) {
+				if (matches_.contains(get_match_(*it))) {
 					matches_[get_match_(*it)] = *it;
 				} else {
 					matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it);
 				}
 			}
 		}
-		// emit all matches from queue with delete
+
+		// emit all matches from queue with insert
 		for (const auto &[_, in_data] : matches_) {
 			char *out_data;
 			this->out_cache_->ReserveNext(&out_data);
@@ -1332,7 +1333,7 @@ private:
 	std::function<InType(const InType &, const InType &)> aggr_fun_;
 	std::function<MatchType(const InType &)> get_match_;
 
-	Table<Type> *table_;
+	Table<InType> *table_;
 
 	std::mutex node_mutex;
 

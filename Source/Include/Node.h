@@ -85,7 +85,7 @@ public:
 template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
-	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us = 500, Graph *graph)
+	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us, Graph *graph)
 	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_ {graph} {
 		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
@@ -173,7 +173,7 @@ public:
 		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
-		this->table_ = new Table(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
 		ts_ = meta.ts_;
@@ -189,7 +189,7 @@ public:
 		while (this->in_cache_->GetNext(&in_data)) {
 			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
 			index idx = this->table_->Insert(in_tuple->data);
-			this->table_->InsertDelta(idx, in_tuple->delta)
+			this->table_->InsertDelta(idx, in_tuple->delta);
 		}
 
 		// get current timestamp that can be considered
@@ -392,7 +392,7 @@ private:
 	int out_count = 0;
 	int clean_count = 0;
 
-	Graph *graph_
+	Graph *graph_;
 };
 
 // we need distinct node that will:
@@ -424,7 +424,7 @@ public:
 		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
-		this->table_ = new Table(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
 		ts_ = meta.ts_;
@@ -461,9 +461,9 @@ public:
 			const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
 
 			index idx = this->table_->Insert(in_tuple->data);
-			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta)
+			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta);
 
-			                       if (!was_present) {
+			if (!was_present) {
 				not_emited.insert(idx);
 			}
 		}
@@ -485,7 +485,8 @@ public:
 			this->compact_ = false;
 
 			// use heap iterator to go through all tuples
-			for (int index = 0, auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
+			int index = 0;
+			for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
 			     ++it, index++) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
@@ -585,6 +586,7 @@ private:
 	// or something
 
 	Table<Type> *table_;
+	Graph *graph_;
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -693,7 +695,7 @@ public:
 	                   BufferPool *bp, index left_table_index, index right_table_index)
 	    : in_node_left_ {in_node_left}, in_node_right_ {in_node_right}, in_cache_left_ {in_node_left->Output()},
 	      in_cache_right_ {in_node_right->Output()}, frontier_ts_ {std::max(in_node_left->GetFrontierTs(),
-	                                                                        in_node_right->GetFrontierTs())} {
+	                                                                        in_node_right->GetFrontierTs())}, graph_{graph} {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
@@ -702,21 +704,21 @@ public:
 		// get reference to corresponding metastate
 		MetaState &meta_left = this->graph_->tables_metadata_(left_table_index);
 
-		this->left_table_ = new Table(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
+		this->left_table_ = new Table<LeftType>(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
-		ts_ = meta.ts_;
+		ts_ = meta_left.ts_;
 
 		// get reference to corresponding metastate
 		MetaState &meta_right = this->graph_->tables_metadata_(right_table_index);
 
-		this->right_table_ = new Table(meta)right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
+		this->right_table_ = new Table<RightType>(meta_right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
 	}
 
 	~StatefulBinaryNode() {
-		delete out_cache_;
-		delete left_table_;
-		delete right_table_;
+		delete this->out_cache_;
+		delete this->left_table_;
+		delete this->right_table_;
 	}
 
 	Cache *Output() {
@@ -771,9 +773,11 @@ protected:
 	// we can treat whole tuple as a key, this will return it's index
 	// we will later use some persistent storage for that mapping, maybe rocksdb
 	// or something
-	table<LeftType> *left_table_;
-	table<RightType> *right_table_;
+	Table<LeftType> *left_table_;
+	Table<RightType> *right_table_;
 
+	Graph *graph_;
+	
 	std::mutex node_mutex;
 };
 
@@ -816,7 +820,7 @@ public:
 			// get matching on data from left and iterate it's deltas
 			index idx;
 			if (this->right_table_->Search(in_left_tuple->data, &idx)) {
-				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(index);
+				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(in_left_tuple->delta, right_delta);
@@ -831,8 +835,9 @@ public:
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 			// get matching on data from right and iterate it's deltas
+			index idx;
 			if (this->left_table_->Search(in_right_tuple->data, &idx)) {
-				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(index);
+				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(left_delta, in_right_tuple->delta);
@@ -847,12 +852,12 @@ public:
 		while (this->in_cache_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
 			index idx = this->right_table_->Insert(in_right_tuple->data);
-			this->table_->InsertDelta(idx, in_right_tuple->delta)
+			this->table_->InsertDelta(idx, in_right_tuple->delta);
 		}
 		while (this->in_cache_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
 			index idx = this->left_table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta)
+			this->table_->InsertDelta(idx, in_left_tuple->delta);
 		}
 
 		// clean in_caches
@@ -904,56 +909,58 @@ public:
 
 		// compute left cache against right table
 		// right table
-		for (int index = 0, auto it = this->table_right_->HeapIterator.begin();
-		     it != this->table_right_->HeapIterator.end(); ++it, index++) {
+		index idx = 0;
+		for (auto it = this->table_right_->HeapIterator.begin();
+		     it != this->table_right_->HeapIterator.end(); ++it, idx++) {
 
 			// left cache
 			while (this->in_cache_left_->GetNext(&in_data_left)) {
 				Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 
 				// deltas from right table
-				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(index);
+				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->data = this->join_layout_(in_left_tuple->data, *it);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta->ts),
-					                    in_left_tuple->delta.count * right_delta->count};
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
+					                    in_left_tuple->delta.count * right_delta.count};
 				}
 			}
 		}
 
 		// compute right cache against left table
 		// right table
-		for (int index = 0, auto it = this->table_left_->HeapIterator.begin();
-		     it != this->table_left_->HeapIterator.end(); ++it, index++) {
+		idx = 0;
+		for (auto it = this->table_left_->HeapIterator.begin();
+		     it != this->table_left_->HeapIterator.end(); ++it, idx++) {
 
 			// left cache
 			while (this->in_cache_right_->GetNext(&in_data_right)) {
 				Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeLeft> *)(in_data_right);
 
 				// deltas from right table
-				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(index);
+				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 					out_tuple->data = this->join_layout_(*it, in_right_tuple->data);
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta->ts),
-					                    in_right_tuple->delta.count * left_delta->count};
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
+					                    in_right_tuple->delta.count * left_delta.count};
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
 		while (this->in_cache_->GetNext(&in_data_right)) {
-			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			index idx = this->table_->Insert(in_right_tuple->data);
-			this->table_->InsertDelta(idx, in_right_tuple->delta)
+			this->table_->InsertDelta(idx, in_right_tuple->delta);
 		}
 		while (this->in_cache_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			index idx = this->table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta)
+			this->table_->InsertDelta(idx, in_left_tuple->delta);
 		}
 
 		// clean in_caches
@@ -985,26 +992,28 @@ public:
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		/** recompute matches */
-		for (int index = 0, auto it = this->left_table_->HeapIterator.begin(); it != this->left_table_->HeapIterator.end();
-		     ++it, index++) {
+		index idx = 0;
+		for (auto it = this->left_table_->HeapIterator.begin(); it != this->left_table_->HeapIterator.end();
+		     ++it, idx++) {
 
 			MatchType match = this->get_match_left_(*it);
 		
 			if(!this->match_to_index_left_table_.contains(match)){
 				this->match_to_index_left_table_[match] = {};
 			}
-			this->match_to_index_left_table_[match].insert(index);
+			this->match_to_index_left_table_[match].insert(idx);
 		}
 		
-		for (int index = 0, auto it = this->right_table_->HeapIterator.begin(); it != this->right_table_->HeapIterator.end();
-		     ++it, index++) {
+		idx = 0;
+		for (auto it = this->right_table_->HeapIterator.begin(); it != this->right_table_->HeapIterator.end();
+		     ++it, idx++) {
 
 			MatchType match = this->get_match_right_(*it);
 		
 			if(!this->match_to_index_right_table_.contains(match)){
 				this->match_to_index_right_table_[match] = {};
 			}
-			this->match_to_index_right_table_[match].insert(index);
+			this->match_to_index_right_table_[match].insert(idx);
 		}
 
 	}
@@ -1171,7 +1180,7 @@ public:
 		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->tables_metadata_(table_index);
 
-		this->table_ = new Table(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
 		ts_ = meta.ts_;

@@ -25,6 +25,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <type_traits>
 
 template <typename Type>
@@ -49,6 +50,7 @@ namespace AliceDB {
 // we need this definition to store graph pointer in node
 class Graph;
 class BufferPool;
+class MetaState;
 
 class Node {
 public:
@@ -171,7 +173,7 @@ public:
 		// init table from graph metastate based on index
 
 		// get reference to corresponding metastate
-		MetaState &meta = this->graph_->tables_metadata_(table_index);
+		MetaState &meta = this->graph_->GetTableMetadata(table_index);
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
@@ -237,7 +239,7 @@ private:
 	timestamp frontier_ts_;
 
 	// what is oldest timestamp that needs to be keept by this Node Tables
-	timestamp &ts_;
+	timestamp ts_;
 
 	TypedNode<Type> *in_node_;
 	// in cache is out cache :)
@@ -422,7 +424,7 @@ public:
 		// init table from graph metastate based on index
 
 		// get reference to corresponding metastate
-		MetaState &meta = this->graph_->tables_metadata_(table_index);
+		MetaState &meta = this->graph_->GetTableMetadata(table_index);
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
@@ -486,7 +488,7 @@ public:
 
 			// use heap iterator to go through all tuples
 			index idx = 0;
-			for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end(); ++it, idx++) {
+			for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
 				Delta cur_delta = this->table_->OldestDelta[idx];
@@ -566,7 +568,7 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp &ts_;
+	timestamp ts_;
 
 	timestamp previous_ts_ = 0;
 
@@ -701,7 +703,7 @@ public:
 		// init table from graph metastate based on index
 
 		// get reference to corresponding metastate
-		MetaState &meta_left = this->graph_->tables_metadata_(left_table_index);
+		MetaState &meta_left = this->graph_->GetTableMetadata(left_table_index);
 
 		this->left_table_ =
 		    new Table<LeftType>(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
@@ -710,7 +712,7 @@ public:
 		ts_ = meta_left.ts_;
 
 		// get reference to corresponding metastate
-		MetaState &meta_right = this->graph_->tables_metadata_(right_table_index);
+		MetaState &meta_right = this->graph_->GetTableMetadata(right_table_index);
 
 		this->right_table_ =
 		    new Table<RightType>(meta_right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
@@ -750,14 +752,14 @@ public:
 
 protected:
 	void Compact() {
-		this->left_table_->MergeDeltas(this->ts_);
-		this->right_table_->MergeDeltas(this->ts_);
+		this->left_table_->MergeDelta(this->ts_);
+		this->right_table_->MergeDelta(this->ts_);
 	}
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp &ts_;
+	timestamp ts_;
 
 	timestamp frontier_ts_;
 
@@ -911,7 +913,7 @@ public:
 		// compute left cache against right table
 		// right table
 		index idx = 0;
-		for (auto it = this->table_right_->HeapIterator.begin(); it != this->table_right_->HeapIterator.end();
+		for (auto it = this->table_right_->begin(); it != this->table_right_->end();
 		     ++it, idx++) {
 
 			// left cache
@@ -933,7 +935,7 @@ public:
 		// compute right cache against left table
 		// right table
 		idx = 0;
-		for (auto it = this->table_left_->HeapIterator.begin(); it != this->table_left_->HeapIterator.end();
+		for (auto it = this->table_left_->begin(); it != this->table_left_->end();
 		     ++it, idx++) {
 
 			// left cache
@@ -994,10 +996,10 @@ public:
 
 		/** recompute matches */
 		index idx = 0;
-		for (auto it = this->left_table_->HeapIterator.begin(); it != this->left_table_->HeapIterator.end();
+		for (auto it = this->left_table_->begin(); it != this->left_table_->end();
 		     ++it, idx++) {
 
-			MatchType match = this->get_match_left_(*it);
+			MatchType match = this->get_match_left_(**it);
 
 			if (!this->match_to_index_left_table_.contains(match)) {
 				this->match_to_index_left_table_[match] = {};
@@ -1006,10 +1008,10 @@ public:
 		}
 
 		idx = 0;
-		for (auto it = this->right_table_->HeapIterator.begin(); it != this->right_table_->HeapIterator.end();
+		for (auto it = this->right_table_->begin(); it != this->right_table_->end();
 		     ++it, idx++) {
 
-			MatchType match = this->get_match_right_(*it);
+			MatchType match = this->get_match_right_(**it);
 
 			if (!this->match_to_index_right_table_.contains(match)) {
 				this->match_to_index_right_table_[match] = {};
@@ -1054,7 +1056,7 @@ public:
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, &right_data);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
 					                    in_left_tuple->delta.count * right_delta.count};
 				}
@@ -1063,7 +1065,7 @@ public:
 
 		// compute right cache against left table
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
+			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
 			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType>(match)]) {
 				InTypeLeft left_data = this->left_table->Get(idx);
@@ -1072,7 +1074,7 @@ public:
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(&left_data, in_right_tuple->data);
+					out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
 					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
 					                    in_right_tuple->delta.count * left_delta.count};
 				}
@@ -1080,29 +1082,29 @@ public:
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_->GetNext(&in_data_right)) {
+		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			// and this will actually handle inserting into both match tree and normal btree
-			index idx = this->table_->Insert(in_right_tuple->data);
+			index idx = this->right_table_->Insert(in_right_tuple->data);
 
-			this->table_->InsertDelta(idx, in_right_tuple->delta);
+			this->right_table_->InsertDelta(idx, in_right_tuple->delta);
 
 			// track match on insert
-			MatchType match = this->get_match_right_(in_data_right);
+			MatchType match = this->get_match_right_(in_right_tuple->data);
 			if (!this->match_to_index_right_table_.contains(Key<MatchType>(match))) {
 				this->match_to_index_right_table_[Key<MatchType>(match)] = {};
 			}
 			this->match_to_index_right_table_[match].insert(idx);
 		}
 
-		while (this->in_cache_->GetNext(&in_data_left)) {
+		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			// and this will actually handle inserting into both match tree and normal btree
-			index idx = this->table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta);
+			index idx = this->left_table_->Insert(in_left_tuple->data);
+			this->left_table_->InsertDelta(idx, in_left_tuple->delta);
 
 			// track match on insert
-			MatchType match = this->get_match_left_(in_data_left);
+			MatchType match = this->get_match_left_(in_left_tuple->data);
 			if (!this->match_to_index_left_table_.contains(Key<MatchType>(match))) {
 				this->match_to_index_left_table_[Key<MatchType>(match)] = {};
 			}
@@ -1178,8 +1180,8 @@ public:
 		// init table from graph metastate based on index
 
 		// get reference to corresponding metastate
-		MetaState &meta = this->graph_->tables_metadata_(table_index);
-
+		MetaState &meta = this->graph_->GetTableMetadata(table_index);
+		
 		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
@@ -1244,7 +1246,7 @@ public:
 
 		std::unordered_map<MatchType, InType> matches_;
 		index idx = 0;
-		for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end(); ++it, idx++) {
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
 
 			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
 			// check if it oldest if previous ts that will mean it was already emited
@@ -1271,7 +1273,7 @@ public:
 
 		matches_ = {};
 		idx = 0;
-		for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end(); ++it, idx++) {
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
 
 			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
 			// check if it oldest if previous ts that will mean it was already emited
@@ -1317,7 +1319,7 @@ private:
 	size_t next_index_ = 0;
 
 	bool compact_ = false;
-	timestamp &ts_;
+	timestamp ts_;
 	timestamp previous_ts_;
 
 	timestamp frontier_ts_;

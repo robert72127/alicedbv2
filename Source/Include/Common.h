@@ -34,7 +34,7 @@ Stopping: Stop buffer pool, send all write requests, then stop DiskManager
 template <typename T>
 concept Arithmetic = std::is_arithmetic_v<T>;
 
-timestamp get_current_timestamp() {
+inline timestamp get_current_timestamp() {
 	auto now = std::chrono::system_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
 	return duration.count();

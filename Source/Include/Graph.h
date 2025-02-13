@@ -195,13 +195,13 @@ public:
 		this->check_running();
 
 		index table_index = next_table_index_;
-		if (!this->tables_metadata_.contains[table_index]) {
+		if (!this->tables_metadata_.contains(table_index)) {
 			this->tables_metadata_[table_index] = {};
 		}
 		next_table_index_++;
 
 		using InType = typename N::value_type;
-		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, table_index);
+		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, this->bp_.get(), table_index);
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(sink));
 		all_nodes_.insert(static_cast<Node *>(sink));
 		sinks_.insert(static_cast<Node *>(sink));
@@ -236,12 +236,12 @@ public:
 
 		int table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[table_index]) {
+		if (!this->tables_metadata_.contains(table_index)) {
 			this->tables_metadata_[table_index] = {};
 		}
 
 		using Type = typename N::value_type;
-		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_, table_index);
+		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_.get(), table_index);
 		all_nodes_.insert(static_cast<Node *>(distinct));
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(distinct));
 		return distinct;
@@ -275,18 +275,18 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[left_table_index]) {
+		if (!this->tables_metadata_.contains(left_table_index)) {
 			this->tables_metadata_[left_table_index] = {};
 		}
 		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[right_table_index]) {
+		if (!this->tables_metadata_.contains(right_table_index)) {
 			this->tables_metadata_[right_table_index] = {};
 		}
 
 		using Type = typename N::value_type;
 		TypedNode<Type> *intersect =
-		    new IntersectNode<Type>(in_node_left, in_node_right, this, this->bp_, left_table_index, right_table_index);
+		    new IntersectNode<Type>(in_node_left, in_node_right, this, this->bp_.get(), left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(intersect));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(intersect));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(intersect));
@@ -302,12 +302,12 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[left_table_index]) {
+		if (!this->tables_metadata_.contains(left_table_index)) {
 			this->tables_metadata_[left_table_index] = {};
 		}
 		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[right_table_index]) {
+		if (!this->tables_metadata_.contains(right_table_index)) {
 			this->tables_metadata_[right_table_index] = {};
 		}
 
@@ -316,7 +316,7 @@ public:
 		using OutType = std::invoke_result_t<F, const InTypeLeft &, const InTypeRight &>;
 
 		TypedNode<OutType> *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
-		    in_node_left, in_node_right, join_layout, this, this->bp_, left_table_index, right_table_index);
+		    in_node_left, in_node_right, join_layout, this, this->bp_.get(), left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(cross_join));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(cross_join));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(cross_join));
@@ -332,12 +332,12 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[left_table_index]) {
+		if (!this->tables_metadata_.contains(left_table_index)) {
 			this->tables_metadata_[left_table_index] = {};
 		}
 		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[right_table_index]) {
+		if (!this->tables_metadata_.contains(right_table_index)) {
 			this->tables_metadata_[right_table_index] = {};
 		}
 
@@ -349,7 +349,7 @@ public:
 		using MatchType = MatchTypeLeft;
 		using OutType = std::invoke_result_t<F_join, const InTypeLeft &, const InTypeRight &>;
 		TypedNode<OutType> *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
-		    in_node_left, in_node_right, get_match_left, get_match_right, join_layout, this, this->bp_,
+		    in_node_left, in_node_right, get_match_left, get_match_right, join_layout, this, this->bp_.get(),
 		    left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(join));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(join));
@@ -374,7 +374,7 @@ public:
 
 		int table_index = this->next_table_index_;
 		this->next_table_index_++;
-		if (!this->tables_metadata_.contains[table_index]) {
+		if (!this->tables_metadata_.contains(table_index)) {
 			this->tables_metadata_[table_index] = {};
 		}
 
@@ -391,7 +391,7 @@ public:
 		using MatchType = std::invoke_result_t<F_getmatch, const InType &>;
 
 		TypedNode<OutType> *aggr =
-		    new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match, this, this->bp_, table_index);
+		    new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match, this, this->bp_.get(), table_index);
 		this->all_nodes_.insert(static_cast<Node *>(aggr));
 		this->make_edge(static_cast<Node *>(in_node), static_cast<Node *>(aggr));
 
@@ -573,7 +573,7 @@ private:
 		this->TopoLevelList();
 	}
 
-	bool visit(Node *current, std::set<Node *> &visited, std::stack<Node *> &stack, std::set<Node *> &current_run) {
+	bool visit(Node *current, std::set<Node*> &visited, std::stack<Node*> &stack,std::set<Node*>& current_run) {
 		bool has_cycle = 0;
 		if (current_run.contains(current)) {
 			return true;

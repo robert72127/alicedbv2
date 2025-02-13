@@ -413,7 +413,7 @@ private:
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
-	DistinctNode(TypedNode<Type> *in_node, Graph *graph_, BufferPool *bp, index table_index)
+	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
 	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->ts_ = get_current_timestamp();
 		this->previous_ts_ = 0;
@@ -485,13 +485,13 @@ public:
 			this->compact_ = false;
 
 			// use heap iterator to go through all tuples
-			int index = 0;
+			index idx = 0;
 			for (auto it = this->table_->HeapIterator.begin(); it != this->table_->HeapIterator.end();
-			     ++it, index++) {
+			     ++it, idx++) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
-				Delta cur_delta = this->table_->OldestDelta[index];
-				bool previous_positive = oldest_deltas_.count > 0;
+				Delta cur_delta = this->table_->OldestDelta[idx];
+				bool previous_positive = oldest_deltas_[idx].count > 0;
 				bool current_positive = cur_delta.count > 0;
 				/*
 				        Now we can deduce what to emit based on this index value from
@@ -510,7 +510,7 @@ public:
 				char *out_data;
 
 				// but if it's first iteration of this Node we need to always emit
-				if (not_emited.contains(index)) {
+				if (not_emited.contains(idx)) {
 					if (current_positive) {
 						this->out_cache_->ReserveNext(&out_data);
 						Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);

@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "Node.h"
 
+#include <filesystem>
 #include <functional>
 #include <list>
 #include <set>
@@ -35,7 +36,7 @@ struct MetaState {
  */
 class Graph {
 public:
-	Graph(std::string graph_filename, BufferPool *bp) : graph_filename_ {graph_filename}, bp_ {bp} {
+	Graph(std::filesystem::path graph_directory, BufferPool *bp) : graph_directory_ {graph_directory}, bp_ {bp} {
 		// graph file format:
 		/*
 		INDEX <idx>
@@ -47,9 +48,11 @@ public:
 		ENDBTREEPAGES <page_idx...>
 		ENDINDEX
 		*/
-		std::ifstream input_stream(graph_filename);
+		std::string graph_metadata_file = this->graph_directory_ / "graph_metadata"; 
+
+		std::ifstream input_stream(graph_metadata_file);
 		if (!input_stream) {
-			throw std::runtime_error("Could not open file: " + graph_filename);
+			throw std::runtime_error("Could not open file: " + graph_metadata_file);
 		}
 
 		std::string token;
@@ -148,9 +151,11 @@ public:
 		// that is being created
 
 		// so we just need to write all this metadata to some files
-		std::ofstream output_stream(graph_filename_, std::ios::trunc);
+		
+		std::string graph_metadata_file = this->graph_directory_ / "graph_metadata"; 
+		std::ofstream output_stream(graph_metadata_file, std::ios::trunc);
 
-		std::string tmp_filename = this->graph_filename_ + "_tmp";
+		std::string tmp_filename = graph_metadata_file + "_tmp";
 
 		for (const auto &entry : tables_metadata_) {
 			index table_idx = entry.first;
@@ -199,7 +204,7 @@ public:
 
 		index table_index = next_table_index_;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(table_index)  ,table_index, 0};
+			this->tables_metadata_[table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,table_index, 0};
 		}
 		next_table_index_++;
 
@@ -239,7 +244,7 @@ public:
 
 		int table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(table_index)  ,table_index, 0};
+			this->tables_metadata_[table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,table_index, 0};
 		}
 		this->next_table_index_++;
 	
@@ -278,12 +283,12 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(left_table_index)  ,left_table_index, 0};
+			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(left_table_index))  ,left_table_index, 0};
 		}
 		this->next_table_index_++;
 		int right_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(right_table_index)  ,right_table_index, 0};
+			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(right_table_index))  ,right_table_index, 0};
 		}
 		this->next_table_index_++;
 		
@@ -306,12 +311,12 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(left_table_index)  ,left_table_index, 0};
+			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(left_table_index))  ,left_table_index, 0};
 		}
 		this->next_table_index_++;
 		int right_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(right_table_index)  ,right_table_index, 0};
+			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(right_table_index))  ,right_table_index, 0};
 		}
 		this->next_table_index_++;
 		
@@ -336,12 +341,12 @@ public:
 
 		int left_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(left_table_index)  ,left_table_index, 0};
+			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(left_table_index))  ,left_table_index, 0};
 		}
 		this->next_table_index_++;
 		int right_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(right_table_index)  ,right_table_index, 0};
+			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(right_table_index))  ,right_table_index, 0};
 		}
 		this->next_table_index_++;
 	
@@ -379,7 +384,7 @@ public:
 		int table_index = this->next_table_index_;
 		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(table_index)  ,table_index, 0};
+			this->tables_metadata_[table_index] = MetaState{ {}, {},  this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,table_index, 0};
 		}
 
 		using InType = typename N::value_type;
@@ -638,7 +643,7 @@ private:
 	int next_table_index_ = 0;
 	std::unordered_map<index, MetaState> tables_metadata_;
 
-	std::string graph_filename_;
+	std::filesystem::path graph_directory_;
 
 	std::shared_ptr<BufferPool> bp_;
 };

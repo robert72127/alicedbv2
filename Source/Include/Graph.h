@@ -180,12 +180,10 @@ public:
 	}
 
 	// Node creations
-
 	template <typename P>
-	auto Source(P *prod, timestamp frontier_ts, int duration_us = 500) -> TypedNode<typename P::value_type> * {
+	auto Source(P* prod, timestamp frontier_ts, int duration_us = 500)-> TypedNode<typename P::value_type>* {
 		this->check_running();
 		using Type = typename P::value_type;
-		// source has 1 table
 		auto *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us, this);
 		all_nodes_.insert(static_cast<Node *>(source_node));
 		sources_.insert(static_cast<Node *>(source_node));

@@ -846,12 +846,12 @@ public:
 		// insert new deltas from in_caches
 		while (this->in_cache_->GetNext(&in_data_right)) {
 			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-			index idx = this->table_->Insert(in_right_tuple->data);
+			index idx = this->right_table_->Insert(in_right_tuple->data);
 			this->table_->InsertDelta(idx, in_right_tuple->delta)
 		}
 		while (this->in_cache_->GetNext(&in_data_left)) {
 			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-			index idx = this->table_->Insert(in_left_tuple->data);
+			index idx = this->left_table_->Insert(in_left_tuple->data);
 			this->table_->InsertDelta(idx, in_left_tuple->delta)
 		}
 
@@ -1038,14 +1038,14 @@ public:
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
 			for (const auto &idx : this->match_to_index_right_table_[Key<MatchType> match]) {
-				InTypeRight *right_data = this->right_table->Get(idx);
+				InTypeRight right_data = this->right_table->Get(idx);
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, &right_data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta->ts),
 					                    in_left_tuple->delta.count * right_delta->count};
 				}
@@ -1053,18 +1053,18 @@ public:
 		}
 
 		// compute right cache against left table
-		while (this->in_cache_right_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
+		while (this->in_cache_right_->GetNext(&in_data_right)) {
+			Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
 			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType> match]) {
-				InTypeRight *right_data = this->left_table->Get(idx);
+				InTypeLeft left_data = this->left_table->Get(idx);
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					out_tuple->data =  this->join_layout_(left_data, in_right_tuple->data;
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_data->ts),
+					out_tuple->data =  this->join_layout_(&left_data, in_right_tuple->data;
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta->ts),
 											in_right_tuple->delta.count * left_delta->count};
 				}
 			}

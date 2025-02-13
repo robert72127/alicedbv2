@@ -81,6 +81,7 @@ also all our storage can be single threaded since we work on single node by one 
 #include "BufferPool.h"
 #include "Common.h"
 #include "Graph.h"
+#include "TablePage.h"
 
 #include <filesystem>
 #include <fstream>
@@ -132,7 +133,7 @@ public:
 		}
 	}
 
-	bool Delete(const index idx){
+	void Delete(const index idx){
 		deltas_.erase(idx);
 	}
 
@@ -142,7 +143,7 @@ public:
 	 */
 	// generic compact deltas work's for almost any kind of node (doesn't work for
 	// aggregations we will see :) )
-	bool Merge(const timestamp end_ts) {
+	void Merge(const timestamp end_ts) {
 		for (int index = 0; index < deltas_.size(); index++) {
 			auto &deltas = deltas_[index];
 			int previous_count = 0;
@@ -188,7 +189,7 @@ public:
 	}
 
 private:
-	bool UpdateLogFile() {
+	void UpdateLogFile() {
 
 		std::string tmp_filename = this->log_file_ + "_tmp";
 
@@ -217,7 +218,7 @@ private:
 		std::ifstream file_stream(this->log_file_, std::ios::in);
 		// doesn't exists
 		if (!file_stream) {
-			return;
+			return -1;
 		}
 
 		// clrear in mem stuff if there is any for some reason
@@ -249,6 +250,8 @@ private:
 			// move the collected deltas into the map
 			deltas_[idx] = std::move(ms);
 		}
+
+		return 0;
 	}
 
 	// multiset of deltas for each index
@@ -270,7 +273,7 @@ struct StorageIndex {
 template <typename Key>
 class BTree {
 
-	Btree(BufferPool *bp);
+	BTree(BufferPool *bp);
 
 	// return true if key was not present, else returns false, sets idx to corresponding index
 	bool Insert(const Key &key, const StorageIndex &idx);
@@ -279,7 +282,7 @@ class BTree {
 
 	// searches for key if it finds it sets idx to corresponding index, and returns true,
 	// else returns alse
-	bool Search(const &Key, const StorageIndex &idx);
+	bool Search(const Key &key, const StorageIndex &idx);
 
 
 private:
@@ -291,7 +294,7 @@ template <typename Type>
 class HeapIterator {
 public:
 
-    HeapIterator( index *page_idx, index tuple_idx = 0, BufferPool *bp, unsigned int tuples_per_page) :
+    HeapIterator( index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page=false) :
 	 page_idx_{page_idx}, tpl_idx_{tpl_idx}, bp_{bp}, tuples_per_page_{tuples_per_page} {
 		this->current_page = std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->page_idx_, this->tuples_per_page_);
 	 }
@@ -333,7 +336,7 @@ class Table {
 
 	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
 	      BufferPool *bp, Graph *g)
-	    : table_idx_ {table_idx} bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
+	    : bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
 	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes} {
 
 
@@ -368,7 +371,18 @@ class Table {
 
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
 	// index
-	bool Search(const Type *data, int *index);
+	bool Search(const Type *data, int *index){
+
+		int idx = 0;
+		for(HeapIterator<Type> it = this->begin(); it != this->end(); ++it, idx++){
+			if (std::memcmp(data, *it, sizeof(Type))){
+				*index = idx;
+				return true;
+			}
+		}
+
+		return false;
+	}
 
 	/**
 	 * @brief deletes all tuples that are older than ts, 
@@ -381,29 +395,29 @@ class Table {
 	// if index is larger than tuple count returns nullptr
 	Type Get(const index &idx){
 		StorageIndex str_idx = this->IndexToStorageIndex(idx);
-		auto read_page = std::make_unique<TablePageReadonly<Type>>(this->bp_, this->data_page_indexes_[str_idx.page_id_], this->tuples_per_page);
+	
+		auto read_page = std::make_unique<TablePageReadOnly<Type>>(this->bp_, this->data_page_indexes_[str_idx.page_id_], this->tuples_per_page);
 		Type tp;
-		std::memcpy(&tp, read_page->Get(str_idx.tuple_id_), sizeof(Type))
+		std::memcpy(&tp, read_page->Get(str_idx.tuple_id_), sizeof(Type));
 	}
 
 	// other will be iterate all tuples, so heap based for
 	// cross join and compact delta for distinct node
 
 	/** @todo all iterators should return tuple or sth so like data - pointer | index */
-	HeapIterator begin(){
-		return HeapIterator();
+	HeapIterator<Type> begin(){
+		return HeapIterator<Type>(this->data_page_indexes_.data(),0, this->bp_, this->tuples_per_page, true );
 
 	}
-	HeapIterator end(){
-
-
+	HeapIterator<Type> end(){
+		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size()-1, this->tuples_per_page, bp_, this->tuples_per_page, false);
 	}
 
 	// methods to work with deltas
 	bool InsertDelta(const index idx, const Delta &d) {
 		return this->ds_->Insert(idx, d);
 	}
-	bool MergeDelta(const timestamp end_ts) {
+	void MergeDelta(const timestamp end_ts) {
 		return this->ds_->Merge(end_ts);
 	}
 
@@ -423,9 +437,9 @@ class Table {
 
 protected:
 
-	inline index StorageIndexToIndex(StorageIndex sidx) { return this->tuples_per_page * sidx.page_id_ + sidx.tuple_id_ }
+	inline index StorageIndexToIndex(StorageIndex sidx) { return this->tuples_per_page * sidx.page_id_ + sidx.tuple_id_; }
 	
-	StorageIndex IndexToStorageIndex(index idx) {return  { idx / this->tuples_per_page, idx % this->tuples_per_page}; } ;
+	StorageIndex IndexToStorageIndex(index idx) {return  { idx / this->tuples_per_page, idx % this->tuples_per_page}; } 
 
 	// methods for page accesing etc
 

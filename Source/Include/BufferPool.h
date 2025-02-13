@@ -154,7 +154,7 @@ public:
   , resize disk if needed,
 	sets values of on disk page index in in_memory_page metadata
 	  of returned page
-	 * @return return index of allocated page
+	 * @return return disk index of allocated page
 	*/
 	index CreatePage();
 

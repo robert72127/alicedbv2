@@ -1,4 +1,4 @@
-/** @todo  switch to persistent storage, make sure timestamp updates make sense
+/** 
  *
  * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
  * change after start command;
@@ -984,7 +984,29 @@ public:
 	                                                           right_table_index),
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
-		/** @todo recomputed matches */
+		/** recompute matches */
+		for (int index = 0, auto it = this->left_table_->HeapIterator.begin(); it != this->left_table_->HeapIterator.end();
+		     ++it, index++) {
+
+			MatchType match = this->get_match_left_(*it);
+		
+			if(!this->match_to_index_left_table_.contains(match)){
+				this->match_to_index_left_table_[match] = {};
+			}
+			this->match_to_index_left_table_[match].insert(index);
+		}
+		
+		for (int index = 0, auto it = this->right_table_->HeapIterator.begin(); it != this->right_table_->HeapIterator.end();
+		     ++it, index++) {
+
+			MatchType match = this->get_match_right_(*it);
+		
+			if(!this->match_to_index_right_table_.contains(match)){
+				this->match_to_index_right_table_[match] = {};
+			}
+			this->match_to_index_right_table_[match].insert(index);
+		}
+
 	}
 
 	// this function changes
@@ -1103,7 +1125,7 @@ private:
 	Table<InTypeLeft> *left_table;
 	Table<InTypeRight> *right_table;
 
-	/**  @todo we will store matches as non persistent storage,
+	/**  we will store matches as non persistent storage,
 	    on system start we will recalculate matches for all tuples,
 	    then when inserting new tuples we will just compare their matches and check for indexes
 	*/

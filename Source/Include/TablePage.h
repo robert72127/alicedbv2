@@ -34,12 +34,15 @@ struct TablePage {
 		// for now each index is stored as byte, despite the fact that we only use one bit
 		data += tuple_count * sizeof(bool);
 		this->storage_ = data;
+
+		this->disk_index_ = on_disk_pid;
 	}
 
-	TablePage(BufferPool *bp, size_t tuple_size, size_t tuple_count) : bp_ {bp}, tuple_count_ {tuple_count} {
+	TablePage(BufferPool *bp,  size_t tuple_count) : bp_ {bp}, tuple_count_ {tuple_count} {
 
 
 		index index = this->bp_->CreatePage();
+		this->disk_index_ = index;
 
 		char *data = this->bp_->GetDataWriteable(index);
 		this->slots_ = reinterpret_cast<bool *>(data);
@@ -88,10 +91,13 @@ struct TablePage {
 		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
 
+	inline index GetDiskIndex() {return disk_index_;} 
+
 	// this is set by Table that own this struct
 	BufferPool *bp_;
 	size_t tuple_count_;
 	index in_memory_pid_;
+	index disk_index_;
 
 	/* this is stored in actuall BufferPool page */
 	bool *slots_;

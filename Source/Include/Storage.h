@@ -341,6 +341,7 @@ public:
 
 		// last page is current write page
 	}
+	/** @todo make sure we correctly store/create delta file */
 
 	// return index if data already present in table, doesn't insert but just return index
 	index Insert(const Type &in_data) {

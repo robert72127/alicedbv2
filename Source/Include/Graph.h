@@ -23,6 +23,7 @@ struct MetaState {
 	std::vector<index> btree_pages_;
 	std::string delta_filename_;
 	timestamp previous_ts_;
+	index table_idx_;
 };
 
 /**
@@ -65,6 +66,8 @@ public:
 			}
 
 			MetaState meta;
+
+			meta.table_idx_ = table_idx;
 
 			// EXPECT TIMESTAMP <ts>
 			input_stream >> token;
@@ -196,7 +199,7 @@ public:
 
 		index table_index = next_table_index_;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = {};
+			this->tables_metadata_[table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(table_index)  ,table_index, 0};
 		}
 		next_table_index_++;
 
@@ -235,11 +238,11 @@ public:
 		this->check_running();
 
 		int table_index = this->next_table_index_;
-		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = {};
+			this->tables_metadata_[table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(table_index)  ,table_index, 0};
 		}
-
+		this->next_table_index_++;
+	
 		using Type = typename N::value_type;
 		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_.get(), table_index);
 		all_nodes_.insert(static_cast<Node *>(distinct));
@@ -274,16 +277,17 @@ public:
 		this->check_running();
 
 		int left_table_index = this->next_table_index_;
-		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = {};
+			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(left_table_index)  ,left_table_index, 0};
 		}
-		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		int right_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = {};
+			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(right_table_index)  ,right_table_index, 0};
 		}
-
+		this->next_table_index_++;
+		
+	
 		using Type = typename N::value_type;
 		TypedNode<Type> *intersect =
 		    new IntersectNode<Type>(in_node_left, in_node_right, this, this->bp_.get(), left_table_index, right_table_index);
@@ -301,16 +305,16 @@ public:
 		this->check_running();
 
 		int left_table_index = this->next_table_index_;
-		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = {};
+			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(left_table_index)  ,left_table_index, 0};
 		}
-		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		int right_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = {};
+			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(right_table_index)  ,right_table_index, 0};
 		}
-
+		this->next_table_index_++;
+		
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using OutType = std::invoke_result_t<F, const InTypeLeft &, const InTypeRight &>;
@@ -331,16 +335,16 @@ public:
 		this->check_running();
 
 		int left_table_index = this->next_table_index_;
-		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = {};
+			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(left_table_index)  ,left_table_index, 0};
 		}
-		int right_table_index = this->next_table_index_;
 		this->next_table_index_++;
+		int right_table_index = this->next_table_index_;
 		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = {};
+			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(right_table_index)  ,right_table_index, 0};
 		}
-
+		this->next_table_index_++;
+	
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using MatchTypeLeft = std::invoke_result_t<F_left, const InTypeLeft &>;
@@ -375,7 +379,7 @@ public:
 		int table_index = this->next_table_index_;
 		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = {};
+			this->tables_metadata_[table_index] = MetaState{ {}, {}, "./delta_log_"+std::to_string(table_index)  ,table_index, 0};
 		}
 
 		using InType = typename N::value_type;

@@ -22,7 +22,7 @@ struct MetaState {
 	std::vector<index> pages_;
 	std::vector<index> btree_pages_;
 	std::string delta_filename_;
-	timestamp ts_;
+	timestamp previous_ts_;
 };
 
 /**
@@ -38,7 +38,7 @@ public:
 		// graph file format:
 		/*
 		INDEX <idx>
-		TIMESTAMP <ts>
+		PREVIOUS_TIMESTAMP <ts>
 		DELTAFILENAME <metafilename>
 		PAGES <page_idx ....>
 		ENDPAGES
@@ -68,10 +68,10 @@ public:
 
 			// EXPECT TIMESTAMP <ts>
 			input_stream >> token;
-			if (token != "TIMESTAMP") {
+			if (token != "PREVIOUS_TIMESTAMP") {
 				throw std::runtime_error("Expected TIMESTAMP, got: " + token);
 			}
-			input_stream >> meta.ts_;
+			input_stream >> meta.previous_ts_;
 
 			// EXPECT DELTAFILENAME <deltafilename>
 			input_stream >> token;
@@ -154,7 +154,7 @@ public:
 			const MetaState &meta = entry.second;
 			output_stream << "INDEX " << table_idx << "\n";
 
-			output_stream << "TIMESTAMP " << meta.ts_ << "\n";
+			output_stream << "PREVIOUS_TIMESTAMP " << meta.previous_ts_ << "\n";
 
 			output_stream << "DELTAFILENAME " << meta.delta_filename_ << "\n";
 

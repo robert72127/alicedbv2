@@ -178,7 +178,6 @@ public:
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		ts_ = meta.ts_;
 	}
 
 	~SinkNode() {
@@ -418,7 +417,6 @@ public:
 	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
 	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
 		this->ts_ = get_current_timestamp();
-		this->previous_ts_ = 0;
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 
 		// init table from graph metastate based on index
@@ -429,7 +427,7 @@ public:
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		ts_ = meta.ts_;
+		this->previous_ts_ = meta.previous_ts_;
 	}
 
 	~DistinctNode() {
@@ -570,7 +568,7 @@ private:
 	bool compact_ = false;
 	timestamp ts_;
 
-	timestamp previous_ts_ = 0;
+	timestamp &previous_ts_;
 
 	timestamp frontier_ts_;
 
@@ -709,7 +707,6 @@ public:
 		    new Table<LeftType>(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
-		ts_ = meta_left.ts_;
 
 		// get reference to corresponding metastate
 		MetaState &meta_right = this->graph_->GetTableMetadata(right_table_index);
@@ -1185,7 +1182,7 @@ public:
 		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		ts_ = meta.ts_;
+		previous_ts_ = meta.previous_ts_;
 	}
 
 	~AggregateByNode() {
@@ -1320,7 +1317,7 @@ private:
 
 	bool compact_ = false;
 	timestamp ts_;
-	timestamp previous_ts_;
+	timestamp &previous_ts_;
 
 	timestamp frontier_ts_;
 

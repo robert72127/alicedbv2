@@ -13,9 +13,12 @@
     *   add mechanism to dynamically stop and start new threads [v]
 
 
-## Storage:
+## State Persistence:
     * Implement B+Tree, and Storage class []
+        * write code working without b+tree, heap based, test whole system
+        * add b+tree indexes
     * Add metadata loading/storing [v]
+
     * Add correct destructors [V]:
         ok on sigkill etc 
         * first we call destructor on worker pool,
@@ -23,7 +26,13 @@
         * then we call destructor on graph,
         this will save metadata state
         * lastly we call destructor on bufferpool
+
+
+
+    * Correctly identify structure of files that needs to be stored []
     * Add Signal Handler for gracefull shutdown []
+    
+    * Wrap everything yet another time []
 ----------------------------------------------------------------------------------------------
 
 

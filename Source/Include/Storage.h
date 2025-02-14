@@ -291,12 +291,14 @@ template <typename Type>
 class HeapIterator {
 public:
 	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page = false)
-	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {
-		this->current_page_ =
-		    std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
-	}
+	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {}
 
 	const Type *operator*() const {
+		// load page lazily
+		if(!this->current_page_){
+			this->current_page_ =
+				std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
+		}	
 		return current_page_->Get(tpl_idx_);
 	}
 
@@ -306,8 +308,6 @@ public:
 			this->tpl_idx_ = 0;
 			this->page_idx_++;
 		}
-		this->current_page_ =
-		    std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
 
 		return *this;
 	} // Prefix increment
@@ -321,9 +321,9 @@ private:
 	index tpl_idx_;
 
 	BufferPool *bp_;
-	unsigned int tuples_per_page_;
+	size_t tuples_per_page_;
 
-	std::unique_ptr<TablePageReadOnly<Type>> current_page_;
+	mutable std::unique_ptr<TablePageReadOnly<Type>> current_page_;
 };
 
 /**
@@ -336,12 +336,9 @@ class Table {
 public:
 	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
 	      BufferPool *bp, Graph *g)
-	    : bp_ {bp}, g_ {g}, ds_filename_ {delta_storage_fname},
-	      ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes}, btree_indexes_{btree_indexes} {
-
-		// last page is current write page
+	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes}, btree_indexes_{btree_indexes},
+		tuples_per_page_{PageSize / (sizeof(bool) + sizeof(Type))} {
 	}
-	/** @todo make sure we correctly store/create delta file */
 
 	// return index if data already present in table, doesn't insert but just return index
 	index Insert(const Type &in_data) {
@@ -357,9 +354,17 @@ public:
 		}
 
 		// ok not present, write to the next write page
-		auto write_page = new TablePage<Type>(this->bp_, *this->data_page_indexes_.rbegin(), this->tuples_per_page_);
+		std::unique_ptr<TablePage<Type>> write_page;
+		if(this->data_page_indexes_.empty()){
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
+			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+		}else{
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, *this->data_page_indexes_.rbegin(), this->tuples_per_page_);
+		}
+
+		// if there is no place left in current write page
 		if (write_page->Insert(in_data, &idx)) {
-			write_page = new TablePage<Type>(this->bp_, this->tuples_per_page_);
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 		}
 
@@ -405,9 +410,10 @@ public:
 	HeapIterator<Type> begin() {
 		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_, true);
 	}
+
 	HeapIterator<Type> end() {
-		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size() - 1,
-		                          this->tuples_per_page_, bp_, this->tuples_per_page_, false);
+		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size(),
+		                          0, bp_, this->tuples_per_page_, false);
 	}
 
 	// methods to work with deltas
@@ -450,7 +456,6 @@ private:
 	std::vector<index> &btree_indexes_;
 
 	// delta storage
-	std::string ds_filename_;
 	std::unique_ptr<DeltaStorage> ds_;
 
 	// buffer pool pointer

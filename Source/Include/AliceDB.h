@@ -40,6 +40,11 @@ public:
         
         // Initialize disk manager and WorkerPool
         this->dm_ = new DiskManager(bp_, db_path.string());
+        // set disk manager for buffer pool
+        if(!this->bp_->SetDisk(dm_)){
+            throw std::runtime_error("Error while setting disk manager for buffer pool\n");
+        }
+
         this->pool_ = new WorkerPool(worker_threads_count);
 
         // Register signal handler

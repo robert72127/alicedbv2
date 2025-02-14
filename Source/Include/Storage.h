@@ -124,10 +124,10 @@ public:
 		// get correct index
 		if (!this->deltas_.contains(idx)) {
 			this->deltas_[idx] = {d};
-			// index wasn't present return true
-			return faccessat;
+			// index wasn't present return false 
+			return false;
 		} else {
-			// index was preset return false
+			// index was preset return true
 			deltas_[idx].insert(d);
 			return true;
 		}
@@ -143,8 +143,7 @@ public:
 	// generic compact deltas work's for almost any kind of node (doesn't work for
 	// aggregations we will see :) )
 	void Merge(const timestamp end_ts) {
-		for (int index = 0; index < deltas_.size(); index++) {
-			auto &deltas = deltas_[index];
+		for(auto &[idx, deltas] : deltas_){
 			int previous_count = 0;
 			timestamp ts = 0;
 
@@ -197,11 +196,11 @@ private:
 
 		for (auto &[idx, mst] : deltas_) {
 			// write the index and the size of the multiset
-			file_stream << idx << " " << mst.size();
+			file_stream << idx << " " << mst.size() << "\n";
 
 			// write out each Delta as "count ts"
 			for (auto &dlt : mst) {
-				file_stream << " " << dlt.count << " " << dlt.ts;
+				file_stream  << dlt.count << " " << dlt.ts;
 			}
 			file_stream << "\n";
 		}
@@ -358,15 +357,15 @@ public:
 		if(this->data_page_indexes_.empty()){
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+			write_page->Insert(in_data, &idx);
 		}else{
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, *this->data_page_indexes_.rbegin(), this->tuples_per_page_);
-		}
-
-		// if there is no place left in current write page
-		if (!write_page->Insert(in_data, &idx)) {
-			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
-			write_page->Insert(in_data, &idx);
-			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+			// if there is no place left in current write page
+			if (!write_page->Insert(in_data, &idx)) {
+				write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
+				this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+				write_page->Insert(in_data, &idx);
+			}
 		}
 
 		return idx + this->tuples_per_page_ * this->data_page_indexes_.size();

@@ -72,11 +72,10 @@ struct TablePage {
 	 * @return true on succesful insert, false if there is no space left,
 	 */
 	bool Insert(const Type &tuple, index *id) {
-		int i = 0;
-		for (; i < this->tuple_count_; i++) {
+		for (int i = 0; i < this->tuple_count_; i++) {
 			if (this->slots_[i] == 0) {
 				this->slots_[i] = true;
-				memcpy(this->storage_ + sizeof(Type) * i, &tuple, sizeof(Type));
+				memcpy(this->storage_ + sizeof(Type) * i , &tuple, sizeof(Type));
 				*id = i;
 				return true;
 			}
@@ -145,7 +144,7 @@ struct TablePageReadOnly {
 			throw std::runtime_error("Index doesn't exists");
 		}
 
-		return (const Type *)(this->storage_ + id);
+		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
 
 	BufferPool *bp_;

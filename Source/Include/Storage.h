@@ -363,8 +363,9 @@ public:
 		}
 
 		// if there is no place left in current write page
-		if (write_page->Insert(in_data, &idx)) {
+		if (!write_page->Insert(in_data, &idx)) {
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
+			write_page->Insert(in_data, &idx);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 		}
 
@@ -377,7 +378,7 @@ public:
 
 		int cur_idx = 0;
 		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it, idx++) {
-			if (std::memcmp(&data, *it, sizeof(Type))) {
+			if (std::memcmp(&data, *it, sizeof(Type)) == 0) {
 				*idx = cur_idx;
 				return true;
 			}

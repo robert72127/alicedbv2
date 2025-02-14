@@ -1064,7 +1064,7 @@ public:
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
 			for (const auto &idx : this->match_to_index_right_table_[Key<MatchType>(match)]) {
-				InTypeRight right_data = this->right_table->Get(idx);
+				InTypeRight right_data = this->right_table_->Get(idx);
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				// iterate all deltas of this tuple
@@ -1083,7 +1083,7 @@ public:
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
 			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType>(match)]) {
-				InTypeLeft left_data = this->left_table->Get(idx);
+				InTypeLeft left_data = this->left_table_->Get(idx);
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				// iterate all deltas of this tuple
 				for (auto &left_delta : left_deltas) {
@@ -1147,9 +1147,6 @@ private:
 	std::function<MatchType(const InTypeLeft &)> get_match_left_;
 	std::function<MatchType(const InTypeRight &)> get_match_right_;
 	std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
-
-	Table<InTypeLeft> *left_table;
-	Table<InTypeRight> *right_table;
 
 	/**  we will store matches as non persistent storage,
 	    on system start we will recalculate matches for all tuples,

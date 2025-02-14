@@ -1,12 +1,18 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
-#include <memory>
 
 #include "gtest/gtest.h"
 
+#include "Node.h"
+#include "Graph.h"
+#include "Producer.h"
+#include "Common.h"
+#include "Tuple.h"
+#include "WorkerPool.h"
+#include "BufferPool.h"
+#include "DiskManager.h"
 
-#include "AliceDB.h"
 // some dummy data
 
 std::array<std::string, 100> surnames = {
@@ -178,8 +184,7 @@ bool parsePerson(std::istringstream &iss, Person *p) {
             std::strncpy(p->name.data(), name, sizeof(p->name));
             std::strncpy(p->surname.data(), surname, sizeof(p->surname));
             std::strncpy(p->favourite_dog_race.data(), favourite_dog_race, sizeof(p->favourite_dog_race));
-
-//            std::cout << (char*)p << std::endl; 
+            
             return true;
 }
 
@@ -201,29 +206,22 @@ TEST(MULTINODE_TEST, multinode_test){
     std::string people_fname = "people.txt";
     prepare_test_data_files(people_fname, dogs_fname);
 
-    std::filesystem::path db_path = "./database";
-    unsigned int worker_threads_cnt = 2;
 
-    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
-
+    auto *bp = new AliceDB::BufferPool();
+    auto *dm = new AliceDB::DiskManager(bp, "file1.db");
+    
     // define new graph instance
-    auto *g = db->CreateGraph();
+    AliceDB::Graph *g = new AliceDB::Graph("graph.txt", bp);
 
 
     // define 2 data producers
     AliceDB::Producer<Person> *prod_people = new AliceDB::FileProducer<Person>(people_fname,parsePerson);
     AliceDB::Producer<Dog> *prod_dogs = new AliceDB::FileProducer<Dog>(dogs_fname,parseDog);
 
+    // create worker pool with single worker thread
+    AliceDB::WorkerPool *pool = new AliceDB::WorkerPool(2);
+
     // define processing graph
-    /*
-    auto *view = 
-        g->View(
-            g->Filter(
-                [](const Person &p) -> bool {return p.age > 18;},
-                g->Source(prod_people,0)
-            )
-        );
-    */
     auto *view = 
         g->View(
             g->Projection(
@@ -259,18 +257,15 @@ TEST(MULTINODE_TEST, multinode_test){
             )
         );
     // start processing data
-    db->StartGraph(g);
-
+    pool->Start(g);
     int i = 0;
-    for(; i < 50000000; i++);
+    for(; i < 100000000; i++);
     std::cout<<i<<std::endl;
-    db->StopGraph(g);
+
 
     AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
 
-    real_sink->Print(AliceDB::get_current_timestamp()*2, print_canafforddog);
-
-    db->Shutdown();
+    //real_sink->Print(AliceDB::get_current_timestamp(), print_canafforddog);
 
 }
 

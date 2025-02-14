@@ -50,13 +50,11 @@ class WorkerPool {
 public:
 	explicit WorkerPool(int max_thread_cnt = 1)
 	    : max_thread_cnt_ {max_thread_cnt > 0 ? max_thread_cnt : 1}, threads_cnt_ {0} {
-		this->next_index_ = 0;
-		for (int i = 0; i < this->threads_cnt_; i++) {
-		}
 	}
 
 	~WorkerPool() {
 		this->StopAll();
+		std::lock_guard<std::mutex> lock(threads_lock_);
 		for (auto &t : this->threads_) {
 			if (t.joinable()) {
 				t.join();
@@ -71,17 +69,22 @@ public:
 	// remove graph g from being processed by worker poll
 	/** @todo if after stop there will be more workers than threads stop some worker */
 	void Stop(Graph *g) {
-		this->lock_.lock();
+		this->graphs_lock_.lock();
 		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
 			if ((*it)->g_ == g) {
 				(*it)->shared_lock_.lock();
-				std::shared_ptr<GraphState> state = *it;
+				auto state = *it;
 				this->graphs_.erase(it);
 				state->shared_lock_.unlock();
+				/** @todo maybe not delete but just stop processing it and still make accesible? */
+				state.reset();
+
 				break;
 			}
 		}
+		this->graphs_lock_.unlock();
 
+		this->threads_lock_.lock();
 		if (this->threads_cnt_ > this->graphs_.size()) {
 			int i = this->threads_cnt_ - 1;
 			this->threads_cnt_--;
@@ -92,19 +95,25 @@ public:
 			this->threads_.pop_back();
 			this->stop_.pop_back();
 		}
-		this->lock_.unlock();
+		this->threads_lock_.unlock();
 	}
 
 	void Start(Graph *g) {
 		g->Start();
-		this->lock_.lock();
+		this->graphs_lock_.lock();
 		graphs_.push_back(std::make_shared<GraphState>(g));
+		this->graphs_lock_.unlock();
+		
+		this->threads_lock_.lock();
 		if (this->threads_cnt_ < this->graphs_.size() && this->threads_cnt_ < this->max_thread_cnt_) {
+			
 			this->threads_.emplace_back(&WorkerPool::WorkerThread, this, threads_cnt_);
 			this->stop_.emplace_back(false);
 			this->threads_cnt_++;
+	
 		}
-		this->lock_.unlock();
+		this->threads_lock_.unlock();
+		
 	}
 
 	void WorkerThread(int index) {
@@ -118,6 +127,7 @@ public:
 				Node *n;
 				if (!task->g_->GetNext(&n)) {
 					// no work to be done for this graph, continue
+					task->shared_lock_.unlock_shared();
 					continue;
 				}
 				// process this node
@@ -139,16 +149,18 @@ private:
 	 * @return function that needs to be performed
 	 */
 	std::shared_ptr<GraphState> GetWork() {
-		this->lock_.lock();
+		this->graphs_lock_.lock();
 		// should neven happen
-		if (this->graphs_.size() == 0) [[unlikely]] {
-			this->lock_.unlock();
+		size_t g_size = this->graphs_.size();
+		int index = this->next_index_;
+		next_index_ = next_index_ + 1 < g_size ? next_index_ + 1 : 0;
+
+		if (g_size == 0) [[unlikely]] {
+			this->graphs_lock_.unlock();
 			return nullptr;
 		}
-		int index = this->next_index_;
-		next_index_ = next_index_ + 1 < this->graphs_.size() ? next_index_ + 1 : 0;
 		this->graphs_[index]->shared_lock_.lock_shared();
-		this->lock_.unlock();
+		this->graphs_lock_.unlock();
 		return this->graphs_[index];
 	}
 
@@ -157,11 +169,14 @@ private:
 	// we want to prevent situation where worker acquired graph node to be processed, and before
 	// calling compute on it, graph get's removed
 	// index next graph to be processed
-	int next_index_;
-	std::mutex lock_;
+	int next_index_ = 0;
+	std::mutex graphs_lock_;
 
 	std::vector<std::thread> threads_;
+	std::mutex threads_lock_;
+	
 	std::vector<bool> stop_;
+
 	bool stop_all_ = false;
 
 	int threads_cnt_;

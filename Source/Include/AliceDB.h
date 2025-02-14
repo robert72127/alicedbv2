@@ -85,8 +85,16 @@ public:
 
     /** @brief, creates new graph instance */
     Graph *CreateGraph(){
-        //create graph directory if it doesn't exists
         std::filesystem::path graph_directory = this->database_directory_ / ("graph_" + std::to_string(graph_count_));
+
+        //create graph directory if it doesn't exists
+        if (!std::filesystem::exists(graph_directory)) {
+            try {
+                std::filesystem::create_directory(graph_directory);
+            } catch (const std::filesystem::filesystem_error& e) {
+                std::cerr << "Error creating directory: " << e.what() << '\n';
+            }
+        }
 
         // create new graph and return it
         Graph *g = new Graph(graph_directory.string(), bp_);

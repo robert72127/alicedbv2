@@ -41,7 +41,9 @@ struct TablePage {
 	TablePage(BufferPool *bp, size_t tuple_count) : bp_ {bp}, tuple_count_ {tuple_count} {
 
 		index index = this->bp_->CreatePage();
-		this->disk_index_ = index;
+		this->in_memory_pid_ = index;
+		this->disk_index_ = this->bp_->GetDiskIndex(this->in_memory_pid_);
+
 
 		char *data = this->bp_->GetDataWriteable(index);
 		this->slots_ = reinterpret_cast<bool *>(data);

@@ -401,6 +401,7 @@ public:
 		    this->bp_, this->data_page_indexes_[str_idx.page_id_], this->tuples_per_page_);
 		Type tp;
 		std::memcpy(&tp, read_page->Get(str_idx.tuple_id_), sizeof(Type));
+		return tp;
 	}
 
 	// other will be iterate all tuples, so heap based for

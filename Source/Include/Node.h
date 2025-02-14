@@ -203,6 +203,24 @@ public:
 		this->in_node_->CleanCache();
 	}
 
+	// print state of table at this moment, used for debugging only
+	void Print(timestamp ts, std::function<void(const char *)> print) {
+		index idx = 0;
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
+			int total = 0;
+			const Type *current_data = *it;
+			for(auto dit: this->table_->Scan(idx)){
+				if(dit.ts > ts){
+					break;
+				}else{
+					total += dit.count;
+				}
+			}
+			std::cout << "COUNT : " << total << " |\t ";
+			print((char *)current_data);
+		}		
+	}
+	
 	// since all sink does is store state we can treat incache as out cache when we use sink(view)
 	// as source
 	Cache *Output() {

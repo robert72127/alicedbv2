@@ -1,136 +1,131 @@
 #ifndef ALICEDBALICEDB
 #define ALICEDBALICEDB
 
-
-#include "Graph.h"
-#include "WorkerPool.h"
 #include "BufferPool.h"
 #include "DiskManager.h"
+#include "Graph.h"
+#include "WorkerPool.h"
 
-#include <csignal>
 #include <atomic>
-#include <mutex>
 #include <condition_variable>
+#include <csignal>
 #include <filesystem>
-#include <stdexcept>
 #include <memory>
+#include <mutex>
+#include <stdexcept>
 
-namespace AliceDB{
+namespace AliceDB {
 
-class DataBase{
+class DataBase {
 public:
+	/** @brief Initialize shared graphs state, such as common directory, worker pool , buffer pool, disk manager */
+	DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 2)
+	    : database_directory_(database_directory), graph_count_ {0} {
 
-    /** @brief Initialize shared graphs state, such as common directory, worker pool , buffer pool, disk manager */
-    DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 2)
-        : database_directory_(database_directory), graph_count_{0} {
+		// check if directory exists
+		//  if not create it,
+		if (!std::filesystem::exists(database_directory)) {
+			if (!std::filesystem::create_directories(database_directory)) {
+				throw std::runtime_error("Failed to create directory: " + database_directory.string());
+			}
+		}
 
-        //check if directory exists
-        // if not create it,
-        if (!std::filesystem::exists(database_directory)) {
-            if (!std::filesystem::create_directories(database_directory)) {
-                throw std::runtime_error("Failed to create directory: " + database_directory.string());
-            }
-        }
+		// Create BufferPool
+		this->bp_ = new BufferPool();
 
-        // Create BufferPool
-        this->bp_ = new BufferPool();
+		// Build the full path for the database file.
+		std::filesystem::path db_path = database_directory / "database.db";
 
-        // Build the full path for the database file.
-        std::filesystem::path db_path = database_directory / "database.db";
-        
-        // Initialize disk manager and WorkerPool
-        this->dm_ = new DiskManager(bp_, db_path.string());
-        // set disk manager for buffer pool
-        if(!this->bp_->SetDisk(dm_)){
-            throw std::runtime_error("Error while setting disk manager for buffer pool\n");
-        }
+		// Initialize disk manager and WorkerPool
+		this->dm_ = new DiskManager(bp_, db_path.string());
+		// set disk manager for buffer pool
+		if (!this->bp_->SetDisk(dm_)) {
+			throw std::runtime_error("Error while setting disk manager for buffer pool\n");
+		}
 
-        this->pool_ = new WorkerPool(worker_threads_count);
+		this->pool_ = new WorkerPool(worker_threads_count);
 
-        // Register signal handler
-        /** @todo */
-    }
+		// Register signal handler
+		/** @todo */
+	}
 
-    void Shutdown() {
-        if (!shutdown_) {
-            // 1 stop workerpool
-            if (pool_) {
-                this->pool_->StopAll();
-                delete this->pool_;
-                this->pool_ = nullptr;
-            }
+	void Shutdown() {
+		if (!shutdown_) {
+			// 1 stop workerpool
+			if (pool_) {
+				this->pool_->StopAll();
+				delete this->pool_;
+				this->pool_ = nullptr;
+			}
 
-            // 2 call destructors on the graph this will save metadata state
-            for (auto g : this->graphs_) {
-                delete g;
-            }
-            this->graphs_.clear();
+			// 2 call destructors on the graph this will save metadata state
+			for (auto g : this->graphs_) {
+				delete g;
+			}
+			this->graphs_.clear();
 
-            // 3 call destructor on database file and buffer pool
-            delete this->dm_;
-            this->dm_ = nullptr;
-            delete this->bp_;
-            this->bp_ = nullptr;
+			// 3 call destructor on database file and buffer pool
+			delete this->dm_;
+			this->dm_ = nullptr;
+			delete this->bp_;
+			this->bp_ = nullptr;
 
-            shutdown_ = true;
-        }
-    }
+			shutdown_ = true;
+		}
+	}
 
-    ~DataBase(){
-        if(!this->shutdown_){
-            this->Shutdown();
-        }
-    }
+	~DataBase() {
+		if (!this->shutdown_) {
+			this->Shutdown();
+		}
+	}
 
+	/** @brief, creates new graph instance */
+	Graph *CreateGraph() {
+		std::filesystem::path graph_directory = this->database_directory_ / ("graph_" + std::to_string(graph_count_));
 
-    /** @brief, creates new graph instance */
-    Graph *CreateGraph(){
-        std::filesystem::path graph_directory = this->database_directory_ / ("graph_" + std::to_string(graph_count_));
+		// create graph directory if it doesn't exists
+		if (!std::filesystem::exists(graph_directory)) {
+			try {
+				std::filesystem::create_directory(graph_directory);
+			} catch (const std::filesystem::filesystem_error &e) {
+				std::cerr << "Error creating directory: " << e.what() << '\n';
+			}
+		}
 
-        //create graph directory if it doesn't exists
-        if (!std::filesystem::exists(graph_directory)) {
-            try {
-                std::filesystem::create_directory(graph_directory);
-            } catch (const std::filesystem::filesystem_error& e) {
-                std::cerr << "Error creating directory: " << e.what() << '\n';
-            }
-        }
+		// create new graph and return it
+		Graph *g = new Graph(graph_directory.string(), bp_);
 
-        // create new graph and return it
-        Graph *g = new Graph(graph_directory.string(), bp_);
-        
-        this->graphs_.emplace_back(g);
-        graph_count_++;
+		this->graphs_.emplace_back(g);
+		graph_count_++;
 
-        return g;
-    }
+		return g;
+	}
 
-    void StartGraph(Graph *g){
-        if (pool_) {
-            pool_->Start(g);
-        }
-    }
+	void StartGraph(Graph *g) {
+		if (pool_) {
+			pool_->Start(g);
+		}
+	}
 
-    void StopGraph(Graph *g){
-        if (pool_) {
-            pool_->Stop(g);
-        }
-    }
-
+	void StopGraph(Graph *g) {
+		if (pool_) {
+			pool_->Stop(g);
+		}
+	}
 
 private:
-    std::filesystem::path database_directory_;
-    // Shared resources:
-    BufferPool *bp_;
-    DiskManager *dm_;
-    WorkerPool *pool_;
+	std::filesystem::path database_directory_;
+	// Shared resources:
+	BufferPool *bp_;
+	DiskManager *dm_;
+	WorkerPool *pool_;
 
-    std::vector<Graph *> graphs_;
-    unsigned int graph_count_;
+	std::vector<Graph *> graphs_;
+	unsigned int graph_count_;
 
-    bool shutdown_ = false;
-
+	bool shutdown_ = false;
 };
-}
+} // namespace AliceDB
 
 #endif

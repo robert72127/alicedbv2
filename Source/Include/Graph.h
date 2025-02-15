@@ -48,11 +48,12 @@ public:
 		ENDBTREEPAGES <page_idx...>
 		ENDINDEX
 		*/
-		std::string graph_metadata_file = this->graph_directory_ / "graph_metadata"; 
+		std::string graph_metadata_file = this->graph_directory_ / "graph_metadata";
 
 		std::ifstream input_stream(graph_metadata_file);
 		if (!input_stream) {
-			// ok file doesn't exists yet, but it will after our first processing, so we can early return from constructor here
+			// ok file doesn't exists yet, but it will after our first processing, so we can early return from
+			// constructor here
 			return;
 		}
 
@@ -152,8 +153,8 @@ public:
 		// that is being created
 
 		// so we just need to write all this metadata to some files
-		
-		std::string graph_metadata_file = this->graph_directory_ / "graph_metadata"; 
+
+		std::string graph_metadata_file = this->graph_directory_ / "graph_metadata";
 		std::ofstream output_stream(graph_metadata_file, std::ios::trunc);
 
 		std::string tmp_filename = graph_metadata_file + "_tmp";
@@ -191,24 +192,22 @@ public:
 	// Node creations
 	template <typename Type>
 	auto Source(ProducerType prod_type, const std::string &prod_source,
-				std::function<bool(std::istringstream &, Type*)> parse,
-				timestamp frontier_ts, int duration_us = 500)
-		-> TypedNode<Type>* {
+	            std::function<bool(std::istringstream &, Type *)> parse, timestamp frontier_ts, int duration_us = 500)
+	    -> TypedNode<Type> * {
 		this->check_running();
-		TypedNode<Type> *Source = new SourceNode<Type>(prod_type, prod_source, parse, frontier_ts, duration_us=500, this);
+		TypedNode<Type> *Source =
+		    new SourceNode<Type>(prod_type, prod_source, parse, frontier_ts, duration_us = 500, this);
 		all_nodes_.insert(static_cast<Node *>(Source));
 		sources_.insert(static_cast<Node *>(Source));
 		return Source;
 	}
-
-
 
 	template <typename N>
 	auto View(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 
 		index table_index = this->maybe_create_table();
-		
+
 		using InType = typename N::value_type;
 		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, this->bp_, table_index);
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(sink));
@@ -244,7 +243,7 @@ public:
 		this->check_running();
 
 		index table_index = this->maybe_create_table();
-	
+
 		using Type = typename N::value_type;
 		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_, table_index);
 		all_nodes_.insert(static_cast<Node *>(distinct));
@@ -280,7 +279,7 @@ public:
 
 		index left_table_index = this->maybe_create_table();
 		index right_table_index = this->maybe_create_table();
-	
+
 		using Type = typename N::value_type;
 		TypedNode<Type> *intersect =
 		    new IntersectNode<Type>(in_node_left, in_node_right, this, this->bp_, left_table_index, right_table_index);
@@ -299,7 +298,7 @@ public:
 
 		index left_table_index = this->maybe_create_table();
 		index right_table_index = this->maybe_create_table();
-		
+
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using OutType = std::invoke_result_t<F, const InTypeLeft &, const InTypeRight &>;
@@ -321,7 +320,7 @@ public:
 
 		index left_table_index = this->maybe_create_table();
 		index right_table_index = this->maybe_create_table();
-		
+
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using MatchTypeLeft = std::invoke_result_t<F_left, const InTypeLeft &>;
@@ -550,7 +549,7 @@ private:
 		this->TopoLevelList();
 	}
 
-	bool visit(Node *current, std::set<Node*> &visited, std::stack<Node*> &stack,std::set<Node*>& current_run) {
+	bool visit(Node *current, std::set<Node *> &visited, std::stack<Node *> &stack, std::set<Node *> &current_run) {
 		bool has_cycle = 0;
 		if (current_run.contains(current)) {
 			return true;
@@ -585,11 +584,12 @@ private:
 	}
 
 	/** @brief it this table state wasn't stored in metadatafile, create new table metadata */
-	index maybe_create_table(){
+	index maybe_create_table() {
 		index table_index = this->next_table_index_;
 		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {},  this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,0,table_index};
+			this->tables_metadata_[table_index] = MetaState {
+			    {}, {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index)), 0, table_index};
 		}
 		return table_index;
 	}
@@ -601,7 +601,6 @@ private:
 	std::set<Node *> sinks_;
 
 	std::set<Node *> sources_;
-
 
 	// List of nodes representing topological orders
 	std::list<Node *> topo_graph_;

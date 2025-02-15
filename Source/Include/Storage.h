@@ -124,7 +124,7 @@ public:
 		// get correct index
 		if (!this->deltas_.contains(idx)) {
 			this->deltas_[idx] = {d};
-			// index wasn't present return false 
+			// index wasn't present return false
 			return false;
 		} else {
 			// index was preset return true
@@ -143,7 +143,7 @@ public:
 	// generic compact deltas work's for almost any kind of node (doesn't work for
 	// aggregations we will see :) )
 	void Merge(const timestamp end_ts) {
-		for(auto &[idx, deltas] : deltas_){
+		for (auto &[idx, deltas] : deltas_) {
 			int previous_count = 0;
 			timestamp ts = 0;
 
@@ -200,7 +200,7 @@ private:
 
 			// write out each Delta as "count ts"
 			for (auto &dlt : mst) {
-				file_stream  << dlt.count << " " << dlt.ts;
+				file_stream << dlt.count << " " << dlt.ts;
 			}
 			file_stream << "\n";
 		}
@@ -290,14 +290,15 @@ template <typename Type>
 class HeapIterator {
 public:
 	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page = false)
-	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {}
+	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {
+	}
 
 	const Type *operator*() const {
 		// load page lazily
-		if(!this->current_page_ || this->current_page_->disk_index_ != *this->page_idx_){
+		if (!this->current_page_ || this->current_page_->disk_index_ != *this->page_idx_) {
 			this->current_page_ =
-				std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
-		}	
+			    std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
+		}
 		return current_page_->Get(tpl_idx_);
 	}
 
@@ -335,8 +336,9 @@ class Table {
 public:
 	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
 	      BufferPool *bp, Graph *g)
-	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes}, btree_indexes_{btree_indexes},
-		tuples_per_page_{PageSize / (sizeof(bool) + sizeof(Type))} {
+	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)},
+	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
+	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))} {
 	}
 
 	// return index if data already present in table, doesn't insert but just return index
@@ -354,12 +356,13 @@ public:
 
 		// ok not present, write to the next write page
 		std::unique_ptr<TablePage<Type>> write_page;
-		if(this->data_page_indexes_.empty()){
+		if (this->data_page_indexes_.empty()) {
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
-		}else{
-			write_page = std::make_unique<TablePage<Type>>(this->bp_, *this->data_page_indexes_.rbegin(), this->tuples_per_page_);
+		} else {
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, *this->data_page_indexes_.rbegin(),
+			                                               this->tuples_per_page_);
 			// if there is no place left in current write page
 			if (!write_page->Insert(in_data, &idx)) {
 				write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
@@ -413,8 +416,8 @@ public:
 	}
 
 	HeapIterator<Type> end() {
-		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size(),
-		                          0, bp_, this->tuples_per_page_, false);
+		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size(), 0, bp_,
+		                          this->tuples_per_page_, false);
 	}
 
 	// methods to work with deltas
@@ -452,7 +455,7 @@ private:
 
 	// heap data pages
 	unsigned int tuples_per_page_;
-	
+
 	std::vector<index> &data_page_indexes_;
 
 	std::vector<index> &btree_indexes_;

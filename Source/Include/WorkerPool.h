@@ -46,7 +46,7 @@ struct GraphState {
 	std::shared_mutex shared_lock_;
 };
 
-struct WorkerState{
+struct WorkerState {
 	std::thread worker_thread_;
 	bool stop_;
 };
@@ -88,7 +88,7 @@ public:
 			}
 		}
 		this->graphs_lock_.unlock();
-		
+
 		this->threads_lock_.lock();
 		if (this->workers_cnt_ > this->graphs_.size()) {
 			int i = this->workers_cnt_ - 1;
@@ -107,15 +107,13 @@ public:
 		this->graphs_lock_.lock();
 		graphs_.push_back(std::make_shared<GraphState>(g));
 		this->graphs_lock_.unlock();
-		
+
 		this->threads_lock_.lock();
 		if (this->workers_cnt_ < this->graphs_.size() && this->workers_cnt_ < this->max_workers_cnt_) {
-			this->workers_.emplace_back( std::thread(&WorkerPool::WorkerThread, this, workers_cnt_), false);	
+			this->workers_.emplace_back(std::thread(&WorkerPool::WorkerThread, this, workers_cnt_), false);
 			this->workers_cnt_++;
-	
 		}
 		this->threads_lock_.unlock();
-		
 	}
 
 	void WorkerThread(int index) {
@@ -173,7 +171,6 @@ private:
 	// calling compute on it, graph get's removed
 	// index next graph to be processed
 	int next_index_ = 0;
-
 
 	std::vector<WorkerState> workers_;
 	std::mutex threads_lock_;

@@ -8,12 +8,12 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <liburing.h>
 #include <mutex>
 #include <thread>
 #include <unistd.h>
-#include <fstream>
 
 namespace AliceDB {
 
@@ -31,7 +31,7 @@ DiskManager::DiskManager(BufferPool *bp, const std::filesystem::path &file_path)
 	if (std::filesystem::exists(metadata_path)) {
 		this->ReadMetadata(metadata_path);
 	}
-	
+
 	if (std::filesystem::exists(this->file_path_)) {
 		this->page_count_ = std::filesystem::file_size(this->file_path_) / PageSize;
 	} else {
@@ -135,9 +135,7 @@ DiskManager::~DiskManager() {
 	std::filesystem::path metadata_path = this->file_path_;
 	metadata_path.replace_extension(".metadata");
 	this->WriteMetadata(metadata_path);
-
 }
-
 
 std::future<bool> DiskManager::WritePage(const index &in_memory_pid) {
 	if (in_memory_pid >= this->bp_->GetPageCount()) {
@@ -354,78 +352,75 @@ int DiskManager::SubmitDiskRequest() {
 	return 0;
 }
 
-
 /** Metadata format:
-	* PAGE_COUNT page_count_
-	 * MAX_USED_INDEX max_used_index
-	 * HOLE_COUNT holes_count_
-	 * holes_
-*/
+ * PAGE_COUNT page_count_
+ * MAX_USED_INDEX max_used_index
+ * HOLE_COUNT holes_count_
+ * holes_
+ */
 void DiskManager::ReadMetadata(std::filesystem::path metadata_path) {
-    std::ifstream file(metadata_path);
-    if (!file.is_open()) {
-        std::cerr << "Error opening metadata file: " << metadata_path << std::endl;
-        return;
-    }
+	std::ifstream file(metadata_path);
+	if (!file.is_open()) {
+		std::cerr << "Error opening metadata file: " << metadata_path << std::endl;
+		return;
+	}
 
-    std::string key;
+	std::string key;
 
-    // Read PAGE_COUNT.
+	// Read PAGE_COUNT.
 	size_t page_count;
-    file >> key >> page_count;
-    if (key != "PAGE_COUNT") {
-        std::cerr << "Expected 'PAGE_COUNT' but found '" << key << "'" << std::endl;
-        return;
-    }
+	file >> key >> page_count;
+	if (key != "PAGE_COUNT") {
+		std::cerr << "Expected 'PAGE_COUNT' but found '" << key << "'" << std::endl;
+		return;
+	}
 	this->page_count_.store(page_count);
 
-    // Read MAX_USED_INDEX.
+	// Read MAX_USED_INDEX.
 	size_t max_used_index;
-    file >> key >> max_used_index;
-    if (key != "MAX_USED_INDEX") {
-        std::cerr << "Expected 'MAX_USED_INDEX' but found '" << key << "'" << std::endl;
-        return;
-    }
+	file >> key >> max_used_index;
+	if (key != "MAX_USED_INDEX") {
+		std::cerr << "Expected 'MAX_USED_INDEX' but found '" << key << "'" << std::endl;
+		return;
+	}
 	this->max_used_index_.store(max_used_index);
 
-    // Read HOLE_COUNT.
+	// Read HOLE_COUNT.
 	unsigned int holes_count;
-    file >> key >> holes_count;
-    if (key != "HOLE_COUNT") {
-        std::cerr << "Expected 'HOLE_COUNT' but found '" << key << "'" << std::endl;
-        return;
-    }
+	file >> key >> holes_count;
+	if (key != "HOLE_COUNT") {
+		std::cerr << "Expected 'HOLE_COUNT' but found '" << key << "'" << std::endl;
+		return;
+	}
 	this->holes_count_ = holes_count;
 
-    // Read the list of holes.
-    this->holes_.resize(holes_count);
-    for (int i = 0; i < holes_count; ++i) {
+	// Read the list of holes.
+	this->holes_.resize(holes_count);
+	for (int i = 0; i < holes_count; ++i) {
 		index hole_index;
-        if (!(file >> hole_index )) {
-            std::cerr << "Error reading hole value at index " << i << std::endl;
-            return;
-        }
+		if (!(file >> hole_index)) {
+			std::cerr << "Error reading hole value at index " << i << std::endl;
+			return;
+		}
 		this->holes_.push_back(hole_index);
-    
 	}
 }
 void DiskManager::WriteMetadata(std::filesystem::path metadata_path) {
-    std::ofstream file(metadata_path);
-    if (!file.is_open()) {
-        std::cerr << "Error opening metadata file for writing: " << metadata_path << std::endl;
-        return;
-    }
+	std::ofstream file(metadata_path);
+	if (!file.is_open()) {
+		std::cerr << "Error opening metadata file for writing: " << metadata_path << std::endl;
+		return;
+	}
 
-    // Write out the metadata.
-    file << "PAGE_COUNT " << this->page_count_ << "\n";
-    file << "MAX_USED_INDEX " << this->max_used_index_ << "\n";
-    file << "HOLE_COUNT " << this->holes_count_ << "\n";
-    for (const auto &hole : holes_) {
-        file << hole << " ";
-    }
-    file << "\n";
+	// Write out the metadata.
+	file << "PAGE_COUNT " << this->page_count_ << "\n";
+	file << "MAX_USED_INDEX " << this->max_used_index_ << "\n";
+	file << "HOLE_COUNT " << this->holes_count_ << "\n";
+	for (const auto &hole : holes_) {
+		file << hole << " ";
+	}
+	file << "\n";
 }
-
 
 /** @todo implement later when we will have tables and buffer pool*/
 int DiskManager::Compact() {

@@ -22,7 +22,7 @@ struct Tuple {
 	Delta delta;
 	Type data;
 };
-	
+
 // for automatically sorting by delta
 struct DeltaComparator {
 	bool operator()(const Delta &a, const Delta &b) const {

@@ -25,8 +25,8 @@
 #include <map>
 #include <mutex>
 #include <set>
-#include <unordered_set>
 #include <type_traits>
+#include <unordered_set>
 
 template <typename Type>
 std::array<char, sizeof(Type)> Key(const Type &type) {
@@ -86,25 +86,26 @@ public:
  */
 
 // add new producers here
-enum class ProducerType { FILE, TCPCLIENT};
+enum class ProducerType { FILE, TCPCLIENT };
 
 template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
-	SourceNode(ProducerType prod_type, const std::string &producer_source, std::function<bool(std::istringstream &, Type *)> parse_input, timestamp frontier_ts, int duration_us, Graph *graph)
-	    : frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_ {graph} {
+	SourceNode(ProducerType prod_type, const std::string &producer_source,
+	           std::function<bool(std::istringstream &, Type *)> parse_input, timestamp frontier_ts, int duration_us,
+	           Graph *graph)
+	    :graph_{graph},  frontier_ts_ {frontier_ts}, duration_us_ {duration_us} {
 
 		// init producer from args
-		switch (prod_type)
-		{
-		case ProducerType::FILE :
+		switch (prod_type) {
+		case ProducerType::FILE:
 			this->produce_ = std::make_unique<FileProducer<Type>>(producer_source, parse_input);
 			break;
-		case ProducerType::TCPCLIENT :
+		case ProducerType::TCPCLIENT:
 			this->produce_ = std::make_unique<TCPClientProducer<Type>>(producer_source, parse_input);
 			break;
 		}
-	
+
 		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -157,8 +158,17 @@ public:
 		return this->frontier_ts_;
 	}
 
-
 private:
+	std::unique_ptr<Producer<Type>> produce_;
+	
+	Graph *graph_;
+	
+	// data from producer is put into this cache from it it's written into both
+	// table and passed to output nodes
+	Cache *produce_cache_;
+	int out_count = 0;
+	int clean_count = 0;
+
 	int duration_us_;
 
 	bool update_ts_ = false;
@@ -168,33 +178,20 @@ private:
 
 	// what is oldest timestamp that needs to be keept by this table
 	timestamp ts_;
-
-	std::unique_ptr<Producer<Type>> produce_;
-
-	Graph *graph_;
-
-	// data from producer is put into this cache from it it's written into both
-	// table and passed to output nodes
-	Cache *produce_cache_;
-	int out_count = 0;
-	int clean_count = 0;
 };
 
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
 	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
-	    : in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
+	    : graph_{graph}, in_node_(in_node), in_cache_ {in_node->Output()}, frontier_ts_ {in_node->GetFrontierTs()} {
+
 		this->ts_ = get_current_timestamp();
 
 		// init table from graph metastate based on index
-
-		// get reference to corresponding metastate
 		MetaState &meta = this->graph_->GetTableMetadata(table_index);
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
-
-		// we also need to set ts for the node
 	}
 
 	~SinkNode() {
@@ -226,18 +223,18 @@ public:
 		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
 			int total = 0;
 			const Type *current_data = *it;
-			for(auto dit: this->table_->Scan(idx)){
-				if(dit.ts > ts){
+			for (auto dit : this->table_->Scan(idx)) {
+				if (dit.ts > ts) {
 					break;
-				}else{
+				} else {
 					total += dit.count;
 				}
 			}
 			std::cout << "COUNT : " << total << " |\t ";
 			print((char *)current_data);
-		}		
+		}
 	}
-	
+
 	// since all sink does is store state we can treat incache as out cache when we use sink(view)
 	// as source
 	Cache *Output() {
@@ -263,37 +260,32 @@ private:
 	void Compact() {
 		this->table_->MergeDelta(this->ts_);
 	}
+	
+	Graph *graph_;
 
-	size_t next_index_ = 0;
+	TypedNode<Type> *in_node_;
+	
+	Table<Type> *table_;
+	
+	// in cache only, since sink isn't processing getting output from this node will also return output from this cache
+	Cache *in_cache_;
+	
 	bool compact_;
-
 	bool update_ts_ = false;
 
 	// how much time back from current time do we have to store values
 	timestamp frontier_ts_;
-
 	// what is oldest timestamp that needs to be keept by this Node Tables
 	timestamp ts_;
 
-	TypedNode<Type> *in_node_;
-	// in cache is out cache :)
-	Cache *in_cache_;
-
-	// we can treat whole tuple as a key, this will return it's index
-	// we will later use some persistent storage for that mapping, maybe rocksdb
-	// or something
-
-	Table<Type> *table_;
-
-	Graph *graph_;
 };
 
 template <typename Type>
 class FilterNode : public TypedNode<Type> {
 public:
 	FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition, Graph *graph)
-	    : condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
+	    : graph_{graph}, condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()},
+	      frontier_ts_ {in_node->GetFrontierTs()} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -342,29 +334,32 @@ public:
 	}
 
 private:
-	std::function<bool(const Type &)> condition_;
-
-	// acquired from in node, this will be passed to output node
-	timestamp frontier_ts_;
-
-	// track this for global timestamp state update
+	Graph *graph_;
+	
 	TypedNode<Type> *in_node_;
-	timestamp ts_;
-
+	
+	std::function<bool(const Type &)> condition_;
+	
 	Cache *in_cache_;
 	Cache *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
-	Graph *graph_;
+	// acquired from in node, this will be passed to output node
+	timestamp frontier_ts_;
+
+	// track this for global timestamp state update
+	timestamp ts_;
+
+	
 };
 // projection can be represented by single node
 template <typename InType, typename OutType>
 class ProjectionNode : public TypedNode<OutType> {
 public:
 	ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection, Graph *graph)
-	    : projection_ {projection}, in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
+	    :  projection_ {projection}, graph_{graph}, in_node_ {in_node}, in_cache_ {in_node->Output()},
+	      frontier_ts_ {in_node->GetFrontierTs()} {
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<OutType>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -415,20 +410,21 @@ public:
 
 private:
 	std::function<OutType(const InType &)> projection_;
+	
+	Graph *graph_;
 
 	// track this for global timestamp state update
 	TypedNode<InType> *in_node_;
-	timestamp ts_;
-
-	// acquired from in node, this will be passed to output node
-	timestamp frontier_ts_;
 
 	Cache *in_cache_;
 	Cache *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
-	Graph *graph_;
+	// current timestamp
+	timestamp ts_;
+	// acquired from in node, this will be passed to output node
+	timestamp frontier_ts_;
 };
 
 // we need distinct node that will:
@@ -450,21 +446,24 @@ template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
 	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
-	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph}, meta_(graph->GetTableMetadata(table_index)) {
+	    : graph_{graph}, in_cache_ {in_node->Output()}, in_node_ {in_node}, table_index_(table_index), frontier_ts_ {in_node->GetFrontierTs()} {
+
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 
 		// init table from graph metastate based on index
+		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
 
-		this->table_ = new Table<Type>(meta_.delta_filename_, meta_.pages_, meta_.btree_pages_, bp, graph_);
+		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		this->previous_ts_ = meta_.previous_ts_;
+		this->previous_ts_ = meta.previous_ts_;
 	}
 
 	~DistinctNode() {
 		// update meta ts
-		this->meta_.previous_ts_ = this->previous_ts_;
+		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
+		meta.previous_ts_ = this->previous_ts_;
 
 		delete out_cache_;
 		delete table_;
@@ -502,7 +501,6 @@ public:
 			if (!was_present) {
 				not_emited.insert(idx);
 			}
-
 		}
 
 		// then if compact_
@@ -599,6 +597,18 @@ private:
 		// leave previous_ts version as oldest one
 		this->table_->MergeDelta(this->previous_ts_);
 	}
+	
+	Graph *graph_;
+	
+	TypedNode<Type> *in_node_;
+	
+	Table<Type> *table_;
+	index table_index_;
+
+	Cache *in_cache_;
+	Cache *out_cache_;
+	int out_count = 0;
+	int clean_count = 0;
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
@@ -608,22 +618,6 @@ private:
 	timestamp previous_ts_;
 
 	timestamp frontier_ts_;
-
-	TypedNode<Type> *in_node_;
-
-	Cache *in_cache_;
-
-	Cache *out_cache_;
-	int out_count = 0;
-	int clean_count = 0;
-
-	// we can treat whole tuple as a key, this will return it's index
-	// we will later use some persistent storage for that mapping, maybe rocksdb
-	// or something
-
-	Table<Type> *table_;
-	Graph *graph_;
-	MetaState &meta_;
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -638,9 +632,9 @@ public:
 	// we can make it subtractor by setting neg left to true, then left deltas are
 	// reversed
 	PlusNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, bool negate_left, Graph *graph)
-	    : negate_left_(negate_left), in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
+	    :graph_{graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
-	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}, graph_{graph} {
+	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}, negate_left_(negate_left) {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 	}
@@ -704,13 +698,11 @@ public:
 	}
 
 private:
-	timestamp ts_;
-
-	timestamp frontier_ts_;
-
+	Graph *graph_;
+	
 	TypedNode<Type> *in_node_left_;
 	TypedNode<Type> *in_node_right_;
-
+	
 	Cache *in_cache_left_;
 	Cache *in_cache_right_;
 
@@ -718,9 +710,11 @@ private:
 	int out_count = 0;
 	int clean_count = 0;
 
-	bool negate_left_;
+	timestamp ts_;
 
-	Graph * graph_;
+	timestamp frontier_ts_;
+
+	bool negate_left_;
 };
 
 /**
@@ -732,15 +726,14 @@ class StatefulBinaryNode : public TypedNode<OutType> {
 public:
 	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph,
 	                   BufferPool *bp, index left_table_index, index right_table_index)
-	    : in_node_left_ {in_node_left}, in_node_right_ {in_node_right}, in_cache_left_ {in_node_left->Output()},
-	      in_cache_right_ {in_node_right->Output()},
-	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}, graph_ {graph} {
+	    : graph_{graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right}, in_cache_left_ {in_node_left->Output()}, 
+		  in_cache_right_ {in_node_right->Output()},
+	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
+
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
-
-		// get reference to corresponding metastate
 		MetaState &meta_left = this->graph_->GetTableMetadata(left_table_index);
 
 		this->left_table_ =
@@ -793,16 +786,14 @@ protected:
 		this->right_table_->MergeDelta(this->ts_);
 	}
 
-	// timestamp will be used to track valid tuples
-	// after update propagate it to input nodes
-	bool compact_ = false;
-	timestamp ts_;
-
-	timestamp frontier_ts_;
-
+	Graph *graph_;
+	
 	TypedNode<LeftType> *in_node_left_;
 	TypedNode<RightType> *in_node_right_;
-
+	
+	Table<LeftType> *left_table_;
+	Table<RightType> *right_table_;
+	
 	Cache *in_cache_left_;
 	Cache *in_cache_right_;
 
@@ -810,15 +801,13 @@ protected:
 	int out_count = 0;
 	int clean_count = 0;
 
-	// we can treat whole tuple as a key, this will return it's index
-	// we will later use some persistent storage for that mapping, maybe rocksdb
-	// or something
-	Table<LeftType> *left_table_;
-	Table<RightType> *right_table_;
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+	
+	timestamp frontier_ts_;
 
-	Graph *graph_;
-
-	std::mutex node_mutex;
 };
 
 // this is node behind Intersect
@@ -950,8 +939,7 @@ public:
 		// compute left cache against right table
 		// right table
 		index idx = 0;
-		for (auto it = this->table_right_->begin(); it != this->table_right_->end();
-		     ++it, idx++) {
+		for (auto it = this->table_right_->begin(); it != this->table_right_->end(); ++it, idx++) {
 
 			// left cache
 			while (this->in_cache_left_->GetNext(&in_data_left)) {
@@ -972,8 +960,7 @@ public:
 		// compute right cache against left table
 		// right table
 		idx = 0;
-		for (auto it = this->table_left_->begin(); it != this->table_left_->end();
-		     ++it, idx++) {
+		for (auto it = this->table_left_->begin(); it != this->table_left_->end(); ++it, idx++) {
 
 			// left cache
 			while (this->in_cache_right_->GetNext(&in_data_right)) {
@@ -1033,8 +1020,7 @@ public:
 
 		/** recompute matches */
 		index idx = 0;
-		for (auto it = this->left_table_->begin(); it != this->left_table_->end();
-		     ++it, idx++) {
+		for (auto it = this->left_table_->begin(); it != this->left_table_->end(); ++it, idx++) {
 
 			MatchType match = this->get_match_left_(**it);
 
@@ -1045,8 +1031,7 @@ public:
 		}
 
 		idx = 0;
-		for (auto it = this->right_table_->begin(); it != this->right_table_->end();
-		     ++it, idx++) {
+		for (auto it = this->right_table_->begin(); it != this->right_table_->end(); ++it, idx++) {
 
 			MatchType match = this->get_match_right_(**it);
 
@@ -1155,7 +1140,6 @@ public:
 		if (this->compact_) {
 			this->Compact();
 		}
-
 	}
 
 private:
@@ -1205,8 +1189,9 @@ class AggregateByNode : public TypedNode<OutType> {
 public:
 	AggregateByNode(TypedNode<InType> *in_node, std::function<InType(const InType &, const InType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp, index table_index)
-	    : in_node_ {in_node}, in_cache_ {in_node->Output()}, 
-	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, meta_{graph->GetTableMetadata(table_index)}{
+	    :  aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_{graph},  in_node_ {in_node}, in_cache_ {in_node->Output()},
+		table_index_{table_index}, frontier_ts_ {in_node->GetFrontierTs()} {
+
 		this->ts_ = get_current_timestamp();
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
@@ -1215,17 +1200,20 @@ public:
 		// init table from graph metastate based on index
 
 		// get reference to corresponding metastate
-		
-		this->table_ = new Table<InType>(meta_.delta_filename_, meta_.pages_, meta_.btree_pages_, bp, graph_);
+
+		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
+
+		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		previous_ts_ = this->meta_.previous_ts_;
+		this->previous_ts_ = meta.previous_ts_;
 	}
 
 	~AggregateByNode() {
 		// update meta ts
-		this->meta_.previous_ts_ = this->previous_ts_;
-		
+		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
+		meta.previous_ts_ = this->previous_ts_;
+
 		delete out_cache_;
 		delete table_;
 	}
@@ -1349,34 +1337,29 @@ private:
 		// compact all the way to previous version, we need it to to emit delete later
 		this->table_->MergeDelta(this->previous_ts_);
 	}
+	
+	std::function<InType(const InType &, const InType &)> aggr_fun_;
+	std::function<MatchType(const InType &)> get_match_;
 
+	Graph *graph_;
+	
+	TypedNode<InType> *in_node_;
+	
+	Table<InType> *table_;
+	index table_index_;
+
+	Cache *in_cache_;
+	Cache *out_cache_;
+	int out_count = 0;
+	int clean_count = 0;
+	
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
-
 	bool compact_ = false;
 	timestamp ts_;
 	timestamp previous_ts_;
 
 	timestamp frontier_ts_;
-
-	TypedNode<InType> *in_node_;
-
-	Cache *in_cache_;
-
-	Cache *out_cache_;
-	int out_count = 0;
-	int clean_count = 0;
-
-	std::function<InType(const InType &, const InType &)> aggr_fun_;
-	std::function<MatchType(const InType &)> get_match_;
-
-	Table<InType> *table_;
-
-	std::mutex node_mutex;
-
-	Graph *graph_;
-
-	MetaState &meta_;
 };
 
 } // namespace AliceDB

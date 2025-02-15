@@ -10,9 +10,6 @@
 namespace AliceDB {
 
 /**  Per Table wrapper for BufferPool page
- *
- * there is single such structure per Table,
- * to get content of other page, just switch underlying using UpdateTable
  */
 
 template <typename Type>
@@ -42,7 +39,6 @@ struct TablePage {
 		index index = this->bp_->CreatePage();
 		this->in_memory_pid_ = index;
 		this->disk_index_ = this->bp_->GetDiskIndex(this->in_memory_pid_);
-
 
 		char *data = this->bp_->GetDataWriteable(index);
 		this->slots_ = reinterpret_cast<bool *>(data);
@@ -74,7 +70,7 @@ struct TablePage {
 		for (int i = 0; i < this->tuple_count_; i++) {
 			if (this->slots_[i] == 0) {
 				this->slots_[i] = true;
-				memcpy(this->storage_ + sizeof(Type) * i , &tuple, sizeof(Type));
+				memcpy(this->storage_ + sizeof(Type) * i, &tuple, sizeof(Type));
 				*id = i;
 				return true;
 			}
@@ -146,12 +142,10 @@ struct TablePageReadOnly {
 
 		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
-	
+
 	inline index GetDiskIndex() {
 		return disk_index_;
 	}
-
-
 
 	BufferPool *bp_;
 	size_t tuple_count_;

@@ -39,7 +39,6 @@ public:
 	 */
 	~DiskManager();
 
-	
 	size_t GetSize() const;
 
 	size_t GetPageCount() const {
@@ -87,7 +86,7 @@ private:
 	// reads and write database meta variables to file
 	void ReadMetadata(std::filesystem::path metadata_path);
 	void WriteMetadata(std::filesystem::path metadata_path);
-	
+
 	/**
 	 * @brief Perform all requested operations to disk,
 	 * without waiting for DiskManager to do so by itself

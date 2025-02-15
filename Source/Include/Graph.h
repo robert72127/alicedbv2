@@ -189,15 +189,19 @@ public:
 	}
 
 	// Node creations
-	template <typename P>
-	auto Source(P *prod, timestamp frontier_ts, int duration_us = 500) -> TypedNode<typename P::value_type> * {
+	template <typename Type>
+	auto Source(ProducerType prod_type, const std::string &prod_source,
+				std::function<bool(std::istringstream &, Type*)> parse,
+				timestamp frontier_ts, int duration_us = 500)
+		-> TypedNode<Type>* {
 		this->check_running();
-		using Type = typename P::value_type;
-		auto *source_node = new SourceNode<Type>(prod, frontier_ts, duration_us, this);
-		all_nodes_.insert(static_cast<Node *>(source_node));
-		sources_.insert(static_cast<Node *>(source_node));
-		return source_node;
+		TypedNode<Type> *Source = new SourceNode<Type>(prod_type, prod_source, parse, frontier_ts, duration_us=500, this);
+		all_nodes_.insert(static_cast<Node *>(Source));
+		sources_.insert(static_cast<Node *>(Source));
+		return Source;
 	}
+
+
 
 	template <typename N>
 	auto View(N *in_node) -> TypedNode<typename N::value_type> * {
@@ -622,7 +626,9 @@ private:
 	std::unordered_set<Node *> all_nodes_;
 
 	std::set<Node *> sinks_;
+
 	std::set<Node *> sources_;
+
 
 	// List of nodes representing topological orders
 	std::list<Node *> topo_graph_;

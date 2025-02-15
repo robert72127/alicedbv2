@@ -214,12 +214,6 @@ TEST(MULTINODE_TEST, multinode_test){
     // define new graph instance
     auto *g = db->CreateGraph();
 
-
-    // define 2 data producers
-    AliceDB::Producer<Person> *prod_people = new AliceDB::FileProducer<Person>(people_fname,parsePerson);
-    AliceDB::Producer<Person> *prod_people_2 = new AliceDB::FileProducer<Person>(people_fname,parsePerson);
-    AliceDB::Producer<Dog> *prod_dogs = new AliceDB::FileProducer<Dog>(dogs_fname,parseDog);
-
     // define processing graph
     /*
     auto *view = 
@@ -228,7 +222,7 @@ TEST(MULTINODE_TEST, multinode_test){
                 g->Source(prod_people_2,0),
                 g->Filter(
                     [](const Person &p) -> bool {return p.age > 18;},
-                    g->Source(prod_people,0)
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
                 )
             )
         );
@@ -259,9 +253,9 @@ TEST(MULTINODE_TEST, multinode_test){
                         },
                         g->Filter(
                             [](const Person &p) -> bool {return p.age > 18;},
-                            g->Source(prod_people,0)
+                            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
                         ),
-                        g->Source(prod_dogs,0)
+                        g->Source<Dog>(AliceDB::ProducerType::FILE, dogs_fname, parseDog,0)
                     )
                     
                 )

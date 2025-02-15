@@ -84,11 +84,27 @@ public:
  * then writing output to both out_cache, and persistent table creator of this
  * node needs to specify how long delayed data might arrive
  */
+
+// add new producers here
+enum class ProducerType { FILE, TCPCLIENT};
+
 template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
-	SourceNode(Producer<Type> *prod, timestamp frontier_ts, int duration_us, Graph *graph)
-	    : produce_ {prod}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_ {graph} {
+	SourceNode(ProducerType prod_type, const std::string &producer_source, std::function<bool(std::istringstream &, Type *)> parse_input, timestamp frontier_ts, int duration_us, Graph *graph)
+	    : frontier_ts_ {frontier_ts}, duration_us_ {duration_us}, graph_ {graph} {
+
+		// init producer from args
+		switch (prod_type)
+		{
+		case ProducerType::FILE :
+			this->produce_ = std::make_unique<FileProducer<Type>>(producer_source, parse_input);
+			break;
+		case ProducerType::TCPCLIENT :
+			this->produce_ = std::make_unique<TCPClientProducer<Type>>(producer_source, parse_input);
+			break;
+		}
+	
 		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 		this->ts_ = get_current_timestamp();
 	}
@@ -141,6 +157,7 @@ public:
 		return this->frontier_ts_;
 	}
 
+
 private:
 	int duration_us_;
 
@@ -152,7 +169,7 @@ private:
 	// what is oldest timestamp that needs to be keept by this table
 	timestamp ts_;
 
-	Producer<Type> *produce_;
+	std::unique_ptr<Producer<Type>> produce_;
 
 	Graph *graph_;
 

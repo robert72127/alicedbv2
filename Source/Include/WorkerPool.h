@@ -46,18 +46,23 @@ struct GraphState {
 	std::shared_mutex shared_lock_;
 };
 
+struct WorkerState{
+	std::thread worker_thread_;
+	bool stop_;
+};
+
 class WorkerPool {
 public:
-	explicit WorkerPool(int max_thread_cnt = 1)
-	    : max_thread_cnt_ {max_thread_cnt > 0 ? max_thread_cnt : 1}, threads_cnt_ {0} {
+	explicit WorkerPool(int max_workers_cnt = 1)
+	    : max_workers_cnt_ {max_workers_cnt > 0 ? max_workers_cnt : 1}, workers_cnt_ {0} {
 	}
 
 	~WorkerPool() {
 		this->StopAll();
 		std::lock_guard<std::mutex> lock(threads_lock_);
-		for (auto &t : this->threads_) {
-			if (t.joinable()) {
-				t.join();
+		for (auto &w : this->workers_) {
+			if (w.worker_thread_.joinable()) {
+				w.worker_thread_.join();
 			};
 		}
 	}
@@ -84,20 +89,17 @@ public:
 		}
 		this->graphs_lock_.unlock();
 		
-		/*
 		this->threads_lock_.lock();
-		if (this->threads_cnt_ > this->graphs_.size()) {
-			int i = this->threads_cnt_ - 1;
-			this->threads_cnt_--;
-			this->stop_[i] = true;
-			if (this->threads_[i].joinable()) {
-				this->threads_[i].join();
+		if (this->workers_cnt_ > this->graphs_.size()) {
+			int i = this->workers_cnt_ - 1;
+			this->workers_cnt_--;
+			this->workers_[i].stop_ = true;
+			if (this->workers_[i].worker_thread_.joinable()) {
+				this->workers_[i].worker_thread_.join();
 			}
-			this->threads_.pop_back();
-			this->stop_.pop_back();
+			this->workers_.pop_back();
 		}
 		this->threads_lock_.unlock();
-		*/
 	}
 
 	void Start(Graph *g) {
@@ -107,11 +109,9 @@ public:
 		this->graphs_lock_.unlock();
 		
 		this->threads_lock_.lock();
-		if (this->threads_cnt_ < this->graphs_.size() && this->threads_cnt_ < this->max_thread_cnt_) {
-			
-			this->stop_.emplace_back(false);
-			this->threads_.emplace_back(&WorkerPool::WorkerThread, this, threads_cnt_);
-			this->threads_cnt_++;
+		if (this->workers_cnt_ < this->graphs_.size() && this->workers_cnt_ < this->max_workers_cnt_) {
+			this->workers_.emplace_back( std::thread(&WorkerPool::WorkerThread, this, workers_cnt_), false);	
+			this->workers_cnt_++;
 	
 		}
 		this->threads_lock_.unlock();
@@ -121,7 +121,7 @@ public:
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
-			while (!this->stop_[index] && !this->stop_all_) {
+			while (!this->workers_[index].stop_ && !this->stop_all_) {
 				auto task = this->GetWork();
 				if (!task) {
 					return;
@@ -168,22 +168,19 @@ private:
 
 	// all graphs that we are processing
 	std::vector<std::shared_ptr<GraphState>> graphs_;
+	std::mutex graphs_lock_;
 	// we want to prevent situation where worker acquired graph node to be processed, and before
 	// calling compute on it, graph get's removed
 	// index next graph to be processed
 	int next_index_ = 0;
-	std::mutex graphs_lock_;
 
-	std::vector<std::thread> threads_;
-	std::vector<bool> stop_;
-	
+
+	std::vector<WorkerState> workers_;
 	std::mutex threads_lock_;
-	
-
 	bool stop_all_ = false;
 
-	int threads_cnt_;
-	const int max_thread_cnt_;
+	int workers_cnt_;
+	const int max_workers_cnt_;
 };
 
 } // namespace AliceDB

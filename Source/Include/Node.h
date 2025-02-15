@@ -1,14 +1,3 @@
-/**
- *
- * ok we allow for 1 but without allowing for dynamically resizing graph, instead it cannot
- * change after start command;
- *
- * for nodes that needs match fields store in rocks db <Key: match_fields| data
- *><Value Index> for normal ones <Key: data ><Value: Index>
- *
- * we also store <index, ts> <count> in separate storage to calculate deltas
- */
-
 #ifndef ALICEDBNODE
 #define ALICEDBNODE
 
@@ -203,6 +192,7 @@ public:
 		 frontier_ts_ {in_node->GetFrontierTs()} {
 
 		this->ts_ = get_current_timestamp();
+		this->next_clean_ts_ = ts_;
 
 		// init table from graph metastate based on index
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
@@ -229,6 +219,13 @@ public:
 			this->update_ts_ = false;
 		}
 		this->in_node_->CleanCache();
+
+		// periodically call garbage collector
+		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+		}
+
 	}
 
 	// print state of table at this moment, used for debugging only
@@ -285,6 +282,7 @@ private:
 	Cache *in_cache_;
 
 	GarbageCollectSettings &gb_settings_;
+	timestamp next_clean_ts_;
 
 	MetaState &meta_;
 
@@ -467,6 +465,7 @@ public:
 		{
 
 		this->ts_ = get_current_timestamp();
+		this->next_clean_ts_ = ts_;
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 
 		// init table from graph metastate based on index
@@ -594,6 +593,12 @@ public:
 				}
 			}
 		}
+
+		// periodically call garbage collector
+		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+		}
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -624,7 +629,8 @@ private:
 	int clean_count = 0;
 
 	GarbageCollectSettings &gb_settings_;
-	
+	timestamp next_clean_ts_;
+
 	MetaState &meta_;
 	
 	// timestamp will be used to track valid tuples
@@ -751,6 +757,8 @@ public:
 	                                      std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
+		this->next_clean_ts_ = ts_;
+		
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
@@ -820,6 +828,8 @@ protected:
 	int clean_count = 0;
 
 	GarbageCollectSettings &gb_settings_;
+	timestamp next_clean_ts_;
+
 
 	MetaState &left_meta_;
 	MetaState &right_meta_;
@@ -917,6 +927,14 @@ public:
 
 		if (this->compact_) {
 			this->Compact();
+		}
+
+
+		// periodically call garbage collector
+		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 	}
 
@@ -1019,6 +1037,14 @@ public:
 
 		if (this->compact_) {
 			this->Compact();
+		}
+
+
+		// periodically call garbage collector
+		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 	}
 
@@ -1165,6 +1191,13 @@ public:
 		if (this->compact_) {
 			this->Compact();
 		}
+
+		// periodically call garbage collector
+		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+		}
 	}
 
 private:
@@ -1220,6 +1253,7 @@ public:
 	      gb_settings_ {gb_settings}, meta_{meta}, table_index_ {table_index}, frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_{meta.previous_ts_} {
 
 		this->ts_ = get_current_timestamp();
+		this->next_clean_ts_ = ts_;
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
 		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
@@ -1336,6 +1370,13 @@ public:
 			ins_tuple->delta = {this->previous_ts_, 11};
 			std::memcpy(&ins_tuple->data, in_data, sizeof(OutType));
 		}
+		
+		// periodically call garbage collector
+		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+		}
+
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -1371,6 +1412,7 @@ private:
 	int clean_count = 0;
 
 	GarbageCollectSettings &gb_settings_;
+	timestamp next_clean_ts_;
 
 	MetaState &meta_;
 

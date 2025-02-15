@@ -393,7 +393,9 @@ public:
 	 * @brief deletes all tuples that are older than ts,
 	 * if zeros_only is set only those for which current delta count is zero are deleted
 	 *  */
-	void GarbageCollect(timestamp ts, bool zeros_only) = delete;
+	void GarbageCollect(timestamp ts, bool zeros_only){
+		return;
+	}
 
 	// return pointer to data corresponding to index, calculated using tuples per page & offset
 	// if index is larger than tuple count returns nullptr

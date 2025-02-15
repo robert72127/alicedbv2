@@ -433,22 +433,22 @@ template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
 	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, index table_index)
-	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph} {
+	    : in_cache_ {in_node->Output()}, in_node_ {in_node}, frontier_ts_ {in_node->GetFrontierTs()}, graph_ {graph}, meta_(graph->GetTableMetadata(table_index)) {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 
 		// init table from graph metastate based on index
 
-		// get reference to corresponding metastate
-		MetaState &meta = this->graph_->GetTableMetadata(table_index);
-
-		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->table_ = new Table<Type>(meta_.delta_filename_, meta_.pages_, meta_.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		this->previous_ts_ = meta.previous_ts_;
+		this->previous_ts_ = meta_.previous_ts_;
 	}
 
 	~DistinctNode() {
+		// update meta ts
+		this->meta_.previous_ts_ = this->previous_ts_;
+
 		delete out_cache_;
 		delete table_;
 	}
@@ -475,8 +475,9 @@ public:
 
 		// first insert all new data from cache to table
 		const char *in_data_;
+		int test = 0;
 		while (this->in_cache_->GetNext(&in_data_)) {
-			const Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data_);
+			const Tuple<Type> *in_tuple = (const Tuple<Type> *)(in_data_);
 
 			index idx = this->table_->Insert(in_tuple->data);
 			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta);
@@ -484,6 +485,7 @@ public:
 			if (!was_present) {
 				not_emited.insert(idx);
 			}
+
 		}
 
 		// then if compact_
@@ -507,7 +509,7 @@ public:
 			for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
-				Delta cur_delta = this->table_->OldestDelta[idx];
+				Delta cur_delta = this->table_->OldestDelta(idx);
 				bool previous_positive = oldest_deltas_[idx].count > 0;
 				bool current_positive = cur_delta.count > 0;
 				/*
@@ -586,7 +588,7 @@ private:
 	bool compact_ = false;
 	timestamp ts_;
 
-	timestamp &previous_ts_;
+	timestamp previous_ts_;
 
 	timestamp frontier_ts_;
 
@@ -604,6 +606,7 @@ private:
 
 	Table<Type> *table_;
 	Graph *graph_;
+	MetaState &meta_;
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -617,10 +620,10 @@ class PlusNode : public TypedNode<Type> {
 public:
 	// we can make it subtractor by setting neg left to true, then left deltas are
 	// reversed
-	PlusNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, bool negate_left)
+	PlusNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, bool negate_left, Graph *graph)
 	    : negate_left_(negate_left), in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
-	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
+	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())}, graph_{graph} {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 	}
@@ -699,6 +702,8 @@ private:
 	int clean_count = 0;
 
 	bool negate_left_;
+
+	Graph * graph_;
 };
 
 /**
@@ -1109,7 +1114,7 @@ public:
 			if (!this->match_to_index_right_table_.contains(Key<MatchType>(match))) {
 				this->match_to_index_right_table_[Key<MatchType>(match)] = {};
 			}
-			this->match_to_index_right_table_[match].insert(idx);
+			this->match_to_index_right_table_[Key<MatchType>(match)].insert(idx);
 		}
 
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
@@ -1123,7 +1128,7 @@ public:
 			if (!this->match_to_index_left_table_.contains(Key<MatchType>(match))) {
 				this->match_to_index_left_table_[Key<MatchType>(match)] = {};
 			}
-			this->match_to_index_left_table_[match].insert(idx);
+			this->match_to_index_left_table_[Key<MatchType>(match)].insert(idx);
 		}
 
 		// clean in_caches
@@ -1133,6 +1138,7 @@ public:
 		if (this->compact_) {
 			this->Compact();
 		}
+
 	}
 
 private:
@@ -1182,8 +1188,8 @@ class AggregateByNode : public TypedNode<OutType> {
 public:
 	AggregateByNode(TypedNode<InType> *in_node, std::function<InType(const InType &, const InType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp, index table_index)
-	    : in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph} {
+	    : in_node_ {in_node}, in_cache_ {in_node->Output()}, 
+	      frontier_ts_ {in_node->GetFrontierTs()}, aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, meta_{graph->GetTableMetadata(table_index)}{
 		this->ts_ = get_current_timestamp();
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
@@ -1192,15 +1198,17 @@ public:
 		// init table from graph metastate based on index
 
 		// get reference to corresponding metastate
-		MetaState &meta = this->graph_->GetTableMetadata(table_index);
 		
-		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->table_ = new Table<InType>(meta_.delta_filename_, meta_.pages_, meta_.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node
-		previous_ts_ = meta.previous_ts_;
+		previous_ts_ = this->meta_.previous_ts_;
 	}
 
 	~AggregateByNode() {
+		// update meta ts
+		this->meta_.previous_ts_ = this->previous_ts_;
+		
 		delete out_cache_;
 		delete table_;
 	}
@@ -1328,11 +1336,9 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 
-	size_t next_index_ = 0;
-
 	bool compact_ = false;
 	timestamp ts_;
-	timestamp &previous_ts_;
+	timestamp previous_ts_;
 
 	timestamp frontier_ts_;
 
@@ -1352,6 +1358,8 @@ private:
 	std::mutex node_mutex;
 
 	Graph *graph_;
+
+	MetaState &meta_;
 };
 
 } // namespace AliceDB

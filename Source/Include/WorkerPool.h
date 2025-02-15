@@ -83,7 +83,8 @@ public:
 			}
 		}
 		this->graphs_lock_.unlock();
-
+		
+		/*
 		this->threads_lock_.lock();
 		if (this->threads_cnt_ > this->graphs_.size()) {
 			int i = this->threads_cnt_ - 1;
@@ -96,6 +97,7 @@ public:
 			this->stop_.pop_back();
 		}
 		this->threads_lock_.unlock();
+		*/
 	}
 
 	void Start(Graph *g) {
@@ -107,8 +109,8 @@ public:
 		this->threads_lock_.lock();
 		if (this->threads_cnt_ < this->graphs_.size() && this->threads_cnt_ < this->max_thread_cnt_) {
 			
-			this->threads_.emplace_back(&WorkerPool::WorkerThread, this, threads_cnt_);
 			this->stop_.emplace_back(false);
+			this->threads_.emplace_back(&WorkerPool::WorkerThread, this, threads_cnt_);
 			this->threads_cnt_++;
 	
 		}
@@ -173,9 +175,10 @@ private:
 	std::mutex graphs_lock_;
 
 	std::vector<std::thread> threads_;
+	std::vector<bool> stop_;
+	
 	std::mutex threads_lock_;
 	
-	std::vector<bool> stop_;
 
 	bool stop_all_ = false;
 

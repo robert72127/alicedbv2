@@ -19,7 +19,8 @@ namespace AliceDB {
 class DataBase {
 public:
 	/** @brief Initialize shared graphs state, such as common directory, worker pool , buffer pool, disk manager */
-	DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 2)
+	DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 2,
+	         GarbageCollectSettings *gb_settings = nullptr)
 	    : database_directory_(database_directory), graph_count_ {0} {
 
 		// check if directory exists
@@ -45,8 +46,12 @@ public:
 
 		this->pool_ = new WorkerPool(worker_threads_count);
 
-		// Register signal handler
-		/** @todo */
+		/** @todo decide on default garbage collector policy */
+		if (!gb_settings) {
+			gb_settings = new GarbageCollectSettings {
+			    .clean_freq_ = 5000, .use_garbage_collector = true, .remove_zeros_only = true};
+		}
+		this->gb_settings_ = gb_settings;
 	}
 
 	void Shutdown() {
@@ -69,7 +74,8 @@ public:
 			this->dm_ = nullptr;
 			delete this->bp_;
 			this->bp_ = nullptr;
-
+			delete gb_settings_;
+			this->gb_settings_ = nullptr;
 			shutdown_ = true;
 		}
 	}
@@ -94,7 +100,7 @@ public:
 		}
 
 		// create new graph and return it
-		Graph *g = new Graph(graph_directory.string(), bp_);
+		Graph *g = new Graph(graph_directory.string(), bp_, *this->gb_settings_);
 
 		this->graphs_.emplace_back(g);
 		graph_count_++;
@@ -120,6 +126,7 @@ private:
 	BufferPool *bp_;
 	DiskManager *dm_;
 	WorkerPool *pool_;
+	GarbageCollectSettings *gb_settings_;
 
 	std::vector<Graph *> graphs_;
 	unsigned int graph_count_;

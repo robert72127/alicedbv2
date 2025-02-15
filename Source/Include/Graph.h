@@ -36,7 +36,8 @@ struct MetaState {
  */
 class Graph {
 public:
-	Graph(std::filesystem::path graph_directory, BufferPool *bp) : graph_directory_ {graph_directory}, bp_ {bp} {
+	Graph(std::filesystem::path graph_directory, BufferPool *bp, GarbageCollectSettings &gb_settings)
+	    : graph_directory_ {graph_directory}, bp_ {bp}, gb_settings_ {gb_settings} {
 		// graph file format:
 		/*
 		INDEX <idx>
@@ -209,7 +210,7 @@ public:
 		index table_index = this->maybe_create_table();
 
 		using InType = typename N::value_type;
-		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, this->bp_, table_index);
+		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, this->bp_, this->gb_settings_, table_index);
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(sink));
 		all_nodes_.insert(static_cast<Node *>(sink));
 		sinks_.insert(static_cast<Node *>(sink));
@@ -245,7 +246,7 @@ public:
 		index table_index = this->maybe_create_table();
 
 		using Type = typename N::value_type;
-		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_, table_index);
+		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_, this->gb_settings_, table_index);
 		all_nodes_.insert(static_cast<Node *>(distinct));
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(distinct));
 		return distinct;
@@ -281,8 +282,8 @@ public:
 		index right_table_index = this->maybe_create_table();
 
 		using Type = typename N::value_type;
-		TypedNode<Type> *intersect =
-		    new IntersectNode<Type>(in_node_left, in_node_right, this, this->bp_, left_table_index, right_table_index);
+		TypedNode<Type> *intersect = new IntersectNode<Type>(in_node_left, in_node_right, this, this->bp_,
+		                                                     this->gb_settings_, left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(intersect));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(intersect));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(intersect));
@@ -304,7 +305,8 @@ public:
 		using OutType = std::invoke_result_t<F, const InTypeLeft &, const InTypeRight &>;
 
 		TypedNode<OutType> *cross_join = new CrossJoinNode<InTypeLeft, InTypeRight, OutType>(
-		    in_node_left, in_node_right, join_layout, this, this->bp_, left_table_index, right_table_index);
+		    in_node_left, in_node_right, join_layout, this, this->bp_, this->gb_settings_, left_table_index,
+		    right_table_index);
 		all_nodes_.insert(static_cast<Node *>(cross_join));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(cross_join));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(cross_join));
@@ -330,7 +332,7 @@ public:
 		using OutType = std::invoke_result_t<F_join, const InTypeLeft &, const InTypeRight &>;
 		TypedNode<OutType> *join = new JoinNode<InTypeLeft, InTypeRight, MatchType, OutType>(
 		    in_node_left, in_node_right, get_match_left, get_match_right, join_layout, this, this->bp_,
-		    left_table_index, right_table_index);
+		    this->gb_settings_, left_table_index, right_table_index);
 		all_nodes_.insert(static_cast<Node *>(join));
 		make_edge(static_cast<Node *>(in_node_left), static_cast<Node *>(join));
 		make_edge(static_cast<Node *>(in_node_right), static_cast<Node *>(join));
@@ -366,8 +368,8 @@ public:
 		using OutType = std::remove_reference_t<SecondAggrArg>;
 		using MatchType = std::invoke_result_t<F_getmatch, const InType &>;
 
-		TypedNode<OutType> *aggr =
-		    new AggregateByNode<InType, MatchType, OutType>(in_node, aggr_fun, get_match, this, this->bp_, table_index);
+		TypedNode<OutType> *aggr = new AggregateByNode<InType, MatchType, OutType>(
+		    in_node, aggr_fun, get_match, this, this->bp_, this->gb_settings_, table_index);
 		this->all_nodes_.insert(static_cast<Node *>(aggr));
 		this->make_edge(static_cast<Node *>(in_node), static_cast<Node *>(aggr));
 
@@ -619,12 +621,14 @@ private:
 	int current_index_ = 0;
 
 	// for persisten storage, each node might store from 0 to 2 tables
-	int next_table_index_ = 0;
 	std::unordered_map<index, MetaState> tables_metadata_;
+	int next_table_index_ = 0;
 
 	std::filesystem::path graph_directory_;
 
 	BufferPool *bp_;
+
+	GarbageCollectSettings &gb_settings_;
 };
 
 } // namespace AliceDB

@@ -16,6 +16,13 @@ struct Delta {
 	int count;
 };
 
+// this will be used by cache to transfer data
+template <typename Type>
+struct Tuple {
+	Delta delta;
+	Type data;
+};
+	
 // for automatically sorting by delta
 struct DeltaComparator {
 	bool operator()(const Delta &a, const Delta &b) const {

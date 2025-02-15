@@ -2,7 +2,6 @@
 #define ALICEDBCACHE
 
 #include "Common.h"
-#include "Tuple.h"
 
 #include <cstdlib>
 #include <cstring>

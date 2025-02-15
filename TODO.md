@@ -6,7 +6,7 @@
 
 ## DataLoaders [v]:
     *   Implement dataloaders for other sources such as network [V]
-    *   Make it part of graph source node for easier definitions, provide some unified interface of file or something []
+    *   Make it part of graph source node for easier definitions, provide some unified interface of file or something [v]
 
 ## WorkerPool: [v]
     *   implement proper graph scheduling [v]
@@ -16,7 +16,7 @@
 
 ## State Persistence:
     * Implement B+Tree, and Storage class []
-        * write code working without b+tree, heap based, test whole system
+        * write code working without b+tree, heap based, test whole system [v]
         * add b+tree indexes []
         * add garbage collection [] 
     * Add metadata loading/storing [v]

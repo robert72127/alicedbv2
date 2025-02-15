@@ -129,6 +129,7 @@ struct TablePageReadOnly {
 		// for now each index is stored as char, despie fact we only use one bit
 		data += tuple_count;
 		this->storage_ = data;
+		this->disk_index_ = on_disk_pid;
 	}
 
 	// unpin, this will also release held lock
@@ -146,10 +147,17 @@ struct TablePageReadOnly {
 
 		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
+	
+	inline index GetDiskIndex() {
+		return disk_index_;
+	}
+
+
 
 	BufferPool *bp_;
 	size_t tuple_count_;
 	index in_memory_pid_;
+	index disk_index_;
 
 	/* this is stored in actuall BufferPool page */
 	const bool *slots_;

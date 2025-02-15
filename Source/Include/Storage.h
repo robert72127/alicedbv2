@@ -294,7 +294,7 @@ public:
 
 	const Type *operator*() const {
 		// load page lazily
-		if(!this->current_page_){
+		if(!this->current_page_ || this->current_page_->disk_index_ != *this->page_idx_){
 			this->current_page_ =
 				std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
 		}	

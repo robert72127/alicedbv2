@@ -207,12 +207,8 @@ public:
 	auto View(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 
-		index table_index = next_table_index_;
-		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,table_index, 0};
-		}
-		next_table_index_++;
-
+		index table_index = this->maybe_create_table();
+		
 		using InType = typename N::value_type;
 		TypedNode<InType> *sink = new SinkNode<InType>(in_node, this, this->bp_, table_index);
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(sink));
@@ -247,11 +243,7 @@ public:
 	auto Distinct(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 
-		int table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,table_index, 0};
-		}
-		this->next_table_index_++;
+		index table_index = this->maybe_create_table();
 	
 		using Type = typename N::value_type;
 		auto *distinct = new DistinctNode<Type>(in_node, this, this->bp_, table_index);
@@ -286,17 +278,8 @@ public:
 	auto Intersect(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
 
-		int left_table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(left_table_index))  ,left_table_index, 0};
-		}
-		this->next_table_index_++;
-		int right_table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(right_table_index))  ,right_table_index, 0};
-		}
-		this->next_table_index_++;
-		
+		index left_table_index = this->maybe_create_table();
+		index right_table_index = this->maybe_create_table();
 	
 		using Type = typename N::value_type;
 		TypedNode<Type> *intersect =
@@ -314,16 +297,8 @@ public:
 	    -> TypedNode<std::invoke_result_t<F, const typename NL::value_type &, const typename NR::value_type &>> * {
 		this->check_running();
 
-		int left_table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(left_table_index))  ,left_table_index, 0};
-		}
-		this->next_table_index_++;
-		int right_table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(right_table_index))  ,right_table_index, 0};
-		}
-		this->next_table_index_++;
+		index left_table_index = this->maybe_create_table();
+		index right_table_index = this->maybe_create_table();
 		
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
@@ -344,17 +319,9 @@ public:
 	    -> TypedNode<std::invoke_result_t<F_join, const typename NL::value_type &, const typename NR::value_type &>> * {
 		this->check_running();
 
-		int left_table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(left_table_index)) {
-			this->tables_metadata_[left_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(left_table_index))  ,left_table_index, 0};
-		}
-		this->next_table_index_++;
-		int right_table_index = this->next_table_index_;
-		if (!this->tables_metadata_.contains(right_table_index)) {
-			this->tables_metadata_[right_table_index] = MetaState{ {}, {}, this->graph_directory_ / ("delta_log_"+std::to_string(right_table_index))  ,right_table_index, 0};
-		}
-		this->next_table_index_++;
-	
+		index left_table_index = this->maybe_create_table();
+		index right_table_index = this->maybe_create_table();
+		
 		using InTypeLeft = typename NL::value_type;
 		using InTypeRight = typename NR::value_type;
 		using MatchTypeLeft = std::invoke_result_t<F_left, const InTypeLeft &>;
@@ -386,11 +353,7 @@ public:
 	    std::remove_reference_t<std::tuple_element_t<1, typename function_traits<F_aggr>::arguments_tuple>>> * {
 		this->check_running();
 
-		int table_index = this->next_table_index_;
-		this->next_table_index_++;
-		if (!this->tables_metadata_.contains(table_index)) {
-			this->tables_metadata_[table_index] = MetaState{ {}, {},  this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,table_index, 0};
-		}
+		index table_index = this->maybe_create_table();
 
 		using InType = typename N::value_type;
 
@@ -619,6 +582,16 @@ private:
 		if (this->is_graph_running_) {
 			throw std::runtime_error("Graph is already running, can't add new nodes to it\n");
 		}
+	}
+
+	/** @brief it this table state wasn't stored in metadatafile, create new table metadata */
+	index maybe_create_table(){
+		index table_index = this->next_table_index_;
+		this->next_table_index_++;
+		if (!this->tables_metadata_.contains(table_index)) {
+			this->tables_metadata_[table_index] = MetaState{ {}, {},  this->graph_directory_ / ("delta_log_"+std::to_string(table_index))  ,0,table_index};
+		}
+		return table_index;
 	}
 
 	std::unordered_map<Node *, std::list<Node *>> out_edges_;

@@ -376,7 +376,7 @@ public:
 	bool Search(const Type &data, index *idx) {
 
 		int cur_idx = 0;
-		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it, idx++) {
+		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it, cur_idx++) {
 			if (std::memcmp(&data, *it, sizeof(Type)) == 0) {
 				*idx = cur_idx;
 				return true;
@@ -432,7 +432,7 @@ public:
 
 	// return oldest delta for index
 	inline Delta OldestDelta(index idx) {
-		return this->ds->Oldest(idx);
+		return this->ds_->Oldest(idx);
 	}
 
 	inline size_t DeltasSize() {
@@ -452,6 +452,7 @@ private:
 
 	// heap data pages
 	unsigned int tuples_per_page_;
+	
 	std::vector<index> &data_page_indexes_;
 
 	std::vector<index> &btree_indexes_;

@@ -53,10 +53,19 @@ struct GarbageCollectSettings {
 	bool remove_zeros_only;
 };
 
+struct MetaState {
+	std::vector<index> pages_;
+	std::vector<index> btree_pages_;
+	std::string delta_filename_;
+	timestamp previous_ts_;
+	index table_idx_;
+};
+
+
 // we need this definition to store graph pointer in node
 class Graph;
 class BufferPool;
-class MetaState;
+
 
 class Node {
 public:
@@ -189,17 +198,13 @@ private:
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
-	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
-	         index table_index)
-	    : graph_ {graph},
-	      in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, frontier_ts_ {
-	                                                                                        in_node->GetFrontierTs()} {
+	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
+	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_{meta},
+		 frontier_ts_ {in_node->GetFrontierTs()} {
 
 		this->ts_ = get_current_timestamp();
 
 		// init table from graph metastate based on index
-		MetaState &meta = this->graph_->GetTableMetadata(table_index);
-
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 	}
 
@@ -280,6 +285,8 @@ private:
 	Cache *in_cache_;
 
 	GarbageCollectSettings &gb_settings_;
+
+	MetaState &meta_;
 
 	bool compact_;
 	bool update_ts_ = false;
@@ -453,27 +460,23 @@ private:
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
-	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
+	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &meta,
 	             index table_index)
 	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node},
-	      table_index_(table_index), gb_settings_ {gb_settings}, frontier_ts_ {in_node->GetFrontierTs()} {
+	      table_index_(table_index), gb_settings_ {gb_settings}, meta_{meta},  frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_{meta.previous_ts_} 
+		{
 
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
 
 		// init table from graph metastate based on index
-		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
-		// we also need to set ts for the node
-		this->previous_ts_ = meta.previous_ts_;
 	}
 
 	~DistinctNode() {
 		// update meta ts
-		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
-		meta.previous_ts_ = this->previous_ts_;
 
 		delete out_cache_;
 		delete table_;
@@ -621,13 +624,15 @@ private:
 	int clean_count = 0;
 
 	GarbageCollectSettings &gb_settings_;
-
+	
+	MetaState &meta_;
+	
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
 	timestamp ts_;
 
-	timestamp previous_ts_;
+	timestamp &previous_ts_;
 
 	timestamp frontier_ts_;
 };
@@ -738,29 +743,27 @@ template <typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public TypedNode<OutType> {
 public:
 	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph,
-	                   BufferPool *bp, GarbageCollectSettings &gb_settings, index left_table_index,
-	                   index right_table_index)
+	                   BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, 
+					   index left_table_index, index right_table_index)
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
-	      gb_settings_ {gb_settings}, frontier_ts_ {
+	      gb_settings_ {gb_settings}, left_meta_{left_meta}, right_meta_{right_meta},  frontier_ts_ {
 	                                      std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
-		MetaState &meta_left = this->graph_->GetTableMetadata(left_table_index);
 
 		this->left_table_ =
-		    new Table<LeftType>(meta_left.delta_filename_, meta_left.pages_, meta_left.btree_pages_, bp, graph_);
+		    new Table<LeftType>(left_meta.delta_filename_, left_meta.pages_, left_meta.btree_pages_, bp, graph_);
 
 		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
 
 		// get reference to corresponding metastate
-		MetaState &meta_right = this->graph_->GetTableMetadata(right_table_index);
 
 		this->right_table_ =
-		    new Table<RightType>(meta_right.delta_filename_, meta_right.pages_, meta_right.btree_pages_, bp, graph_);
+		    new Table<RightType>(left_meta.delta_filename_, left_meta.pages_, left_meta.btree_pages_, bp, graph_);
 	}
 
 	~StatefulBinaryNode() {
@@ -818,6 +821,9 @@ protected:
 
 	GarbageCollectSettings &gb_settings_;
 
+	MetaState &left_meta_;
+	MetaState &right_meta_;
+
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
@@ -831,8 +837,8 @@ template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
 public:
 	IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, Graph *graph, BufferPool *bp,
-	              GarbageCollectSettings &gb_settings, index left_table_index, index right_table_index)
-	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, gb_settings, left_table_index,
+	              GarbageCollectSettings &gb_settings, MetaState &left_meta,MetaState &right_meta, index left_table_index, index right_table_index)
+	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, gb_settings, left_meta, right_meta, left_table_index,
 	                                           right_table_index) {
 	}
 
@@ -926,9 +932,10 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
 public:
 	CrossJoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
 	              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph,
-	              BufferPool *bp, GarbageCollectSettings &gb_settings, index left_table_index, index right_table_index)
+	              BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, index left_table_index, index right_table_index)
 	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, gb_settings,
-	                                                           left_table_index, right_table_index),
+	                 										   left_meta, right_meta,                                          
+															   left_table_index, right_table_index),
 	      join_layout_ {join_layout} {
 	}
 
@@ -1029,8 +1036,10 @@ public:
 	         std::function<MatchType(const InTypeLeft &)> get_match_left,
 	         std::function<MatchType(const InTypeRight &)> get_match_right,
 	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph, BufferPool *bp,
-	         GarbageCollectSettings &gb_settings, index left_table_index, index right_table_index)
+	         GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, 
+			 index left_table_index, index right_table_index)
 	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, gb_settings,
+															   left_meta, right_meta,
 	                                                           left_table_index, right_table_index),
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
@@ -1205,10 +1214,10 @@ class AggregateByNode : public TypedNode<OutType> {
 public:
 	AggregateByNode(TypedNode<InType> *in_node, std::function<InType(const InType &, const InType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp,
-	                GarbageCollectSettings &gb_settings, index table_index)
+	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
 	    : aggr_fun_ {aggr_fun},
 	      get_match_ {get_match}, graph_ {graph}, in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      gb_settings_ {gb_settings}, table_index_ {table_index}, frontier_ts_ {in_node->GetFrontierTs()} {
+	      gb_settings_ {gb_settings}, meta_{meta}, table_index_ {table_index}, frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_{meta.previous_ts_} {
 
 		this->ts_ = get_current_timestamp();
 		// there will be single tuple emited at once probably, if not it will get
@@ -1216,21 +1225,11 @@ public:
 		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
-
-		// get reference to corresponding metastate
-
-		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
-
 		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
 
-		// we also need to set ts for the node
-		this->previous_ts_ = meta.previous_ts_;
 	}
 
 	~AggregateByNode() {
-		// update meta ts
-		MetaState &meta = this->graph_->GetTableMetadata(this->table_index_);
-		meta.previous_ts_ = this->previous_ts_;
 
 		delete out_cache_;
 		delete table_;
@@ -1372,6 +1371,8 @@ private:
 	int clean_count = 0;
 
 	GarbageCollectSettings &gb_settings_;
+
+	MetaState &meta_;
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes

@@ -136,8 +136,13 @@ struct JoinDogPerson {
     float dog_cost;
     float account_balace;
     int age;
-
 };
+
+void print_person(const char *data){
+    const Person *p = reinterpret_cast<const Person*>(data);
+    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " " << p->age << " " << p->account_balance  << std::endl; 
+} 
+
 
 void print_joindogperson(const char *data){
     const JoinDogPerson *p = reinterpret_cast<const JoinDogPerson*>(data);
@@ -212,18 +217,22 @@ TEST(MULTINODE_TEST, multinode_test){
 
     // define 2 data producers
     AliceDB::Producer<Person> *prod_people = new AliceDB::FileProducer<Person>(people_fname,parsePerson);
+    AliceDB::Producer<Person> *prod_people_2 = new AliceDB::FileProducer<Person>(people_fname,parsePerson);
     AliceDB::Producer<Dog> *prod_dogs = new AliceDB::FileProducer<Dog>(dogs_fname,parseDog);
 
     // define processing graph
     /*
     auto *view = 
         g->View(
-            g->Filter(
-                [](const Person &p) -> bool {return p.age > 18;},
-                g->Source(prod_people,0)
+            g->Except(
+                g->Source(prod_people_2,0),
+                g->Filter(
+                    [](const Person &p) -> bool {return p.age > 18;},
+                    g->Source(prod_people,0)
+                )
             )
         );
-    */
+        */
     auto *view = 
         g->View(
             g->Projection(
@@ -258,6 +267,31 @@ TEST(MULTINODE_TEST, multinode_test){
                 )
             )
         );
+   /*
+    auto *view = g->View(
+                    g->Join(
+                        [](const Person &p)  { return p.favourite_dog_race;},
+                        [](const Dog &d)  { return d.name;},
+                        [](const Person &p, const Dog &d) { 
+                            return  JoinDogPerson{
+                                .name=p.name,
+                                .surname=p.surname,
+                                .favourite_dog_race=d.name,
+                                .dog_cost=d.cost,
+                                .account_balace=p.account_balance,
+                                .age=p.age
+                            };
+                        },
+                        g->Filter(
+                            [](const Person &p) -> bool {return p.age > 18;},
+                            g->Source(prod_people,0)
+                        ),
+                        g->Source(prod_dogs,0)
+                    )
+                    
+                );
+    */
+
     // start processing data
     db->StartGraph(g);
 
@@ -267,8 +301,10 @@ TEST(MULTINODE_TEST, multinode_test){
     db->StopGraph(g);
 
     AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
+    //AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
     real_sink->Print(AliceDB::get_current_timestamp()*2, print_canafforddog);
+    //real_sink->Print(AliceDB::get_current_timestamp()*2, print_person);
 
     db->Shutdown();
 

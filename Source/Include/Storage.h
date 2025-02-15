@@ -368,7 +368,7 @@ public:
 			}
 		}
 
-		return idx + this->tuples_per_page_ * this->data_page_indexes_.size();
+		return idx + this->tuples_per_page_ * this->data_page_indexes_.size() - 1;
 	}
 
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found

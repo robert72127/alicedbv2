@@ -6,7 +6,7 @@
 
 ## DataLoaders [v]:
     *   Implement dataloaders for other sources such as network [V]
-    *   Make it part of graph source node for easier definitions, provide some unified interface of file or something [] 14.02.2025
+    *   Make it part of graph source node for easier definitions, provide some unified interface of file or something []
 
 ## WorkerPool: [v]
     *   implement proper graph scheduling [v]
@@ -32,7 +32,7 @@
     * Wrap everything yet another time [V]
 
 
-## Write tests and make the system actually works [] 14.02.2025
+## Write tests and make the system actually works [v]:
 ----------------------------------------------------------------------------------------------
 
 ## Write PDF with description

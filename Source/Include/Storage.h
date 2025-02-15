@@ -1,197 +1,471 @@
 /*
 We need to store three things:
 
-< Index | Timestamp > -> Count
+< Index | Timestamp > -> Count - this can either be done entirely in memory or also using btree, cause it gives us
+prefix search for free
 
-we will:
+<Key(Tuple) | index> - this can be done by btree
 
-insert new counts for given index and timestamp
-search for all <index|timestamp , count> tuples up to some timestamp
+<Match | Keys> - this will be recomputed on the fly when restarting the system
 
-*********************************************************
-seems like something akin to lsm tree will work best here, like rocksdb, deffinetely we need
-sorted approach tho
+but before we go further let's think what are acces cases :
 
-and as a bonus we can actually store single global rockdb table for all tables, we will just
-prefix with table name
-----------------------------------------------------------------------
 
-<Key (large), index>
-we will:
+<index | timestamp  ||| count > - acces:
 
-insert new tuple
-for given key retrieve index associated with it
+searching all indexes up to given timestamp for merge.
 
-this could be just b+tree or hash table with straighforward lookups
 
------------------------------------------------------------------------
+searching all indexes up to given timestamp for insert new item.
 
-Match | Key mapping
+inserting new timestamps
 
-used when:
+delete old timestamp
 
-we have two tables, first uses f1 for match and second uses f2, and we want to do things such as
-join
+so read is always sequential
 
-then for new tuples from table 1 we compute f1(tuple) = match1 and then compute f2(tuple) for
-each tuple in table 2 and perform join on matching from both
+hmm we can use in  memory only  structure, and log new timestamps to per table file,
+then during compaction update file to new one
 
-how to store: as secondary index?
-    by multiple fields?
-    by new match field?
+so if crash read log, and update persistent on save
 
-as separate table?
-    with mapping <match | key> -> this feels better cause it allows us to store even more
-interesting structures, and potentiall treat key as single field instead of splitting it into
-separate columns
 
-so it also will be b+tree / hash_table
+<Key(Tuple) ||| Index> -> acces:
+
+search : when we get tuple we can check whether it already has index by searching b+tree
+insert : assign new index
+search: find all matching tuples in other table
+
+
+<Match ||| Key(Tuple)> -> acces:
+
+search find all matching tuples in other table
+insert, create new entry that will point to right tuple
+
+
+------------------------------------------------------------------
+
+all in all we could simpy store
+
+
+<tuple ||| index ||| count > as persistent data.
+
++ log file for deltas
+
++ in memory <index| timestamp -> count > data structure for deltas
+
+and build b+tree indexed by:
+
+
+tuple for getting correct index'es
+
+match field for gettign correct tuples for joins
+
+Now there is also matter of indexes:
+
+cause in theory we could also build third b+tree that uses indexes this should be light since indexes are just ints so
+small data. However is it really needed? we could load it into memory once at the beginning and then once to persistent
+storage at the end
+
+
+So now we can implement api and then see if we can replace our storage with this design
+
+
+also all our storage can be single threaded since we work on single node by one thread at once
 
 */
 
 #ifndef ALICEDBSTORAGE
 #define ALICEDBSTORAGE
 
-#include <map>
+#include "BufferPool.h"
+#include "Common.h"
+#include "TablePage.h"
+
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
-
-#include "Common.h"
 
 namespace AliceDB {
 
+class Graph;
+
 /**
- * @brief for now this is just wrapper around stl structures, but putting this into separate
- * class will make implementing real storage easier
+ * Storage for <index | delta > mappings
+ * main idea is to store structure as stl container in memory and later overwrite log file on disk on compression op
  *
- * later we will switch to using single table rockdb with table_name_prefix to separate deltas
- * from different tables
  */
 class DeltaStorage {
- public:
-  /**
-   * @brief insert new delta into the table
-   */
-  bool Insert(std::string table_name, index idx, const Delta &d) {
-    // get correct table, and if it doesn't exists, create it
-    if (!this->tables_.contains(table_name)) {
-      this->tables_[table_name] = std::vector<std::multiset<Delta, DeltaComparator>>();
-    }
-    std::vector<std::multiset<Delta, DeltaComparator>> &index_to_deltas_ref =
-        this->tables_[table_name];
+public:
+	template <typename Type>
+	friend class Table;
 
-    // get correct index
-    size_t itd_size = index_to_deltas_ref.size();
-    while (idx >= itd_size) {
-      index_to_deltas_ref.push_back({});
-    }
+	/*initialize delta storage from log file*/
+	DeltaStorage(std::string log_file) : log_file_ {log_file} {
+		if (this->ReadLogFile()) {
+			// corrupted data, clean in memory stuff
+			deltas_.clear();
+		}
+	}
 
-    std::multiset<Delta, DeltaComparator> &deltas_ref = index_to_deltas_ref[idx];
-    deltas_ref.insert(d);
-  }
+	~DeltaStorage() {
+		this->UpdateLogFile();
+	}
 
-  /**
-   * @brief merge tuples by summing values, by index for given table up to end_timestamp
-   */
-  bool Merge(std::string table_name, timestamp end_ts) {
-    if (!this->tables_.contains(table_name)) {
-      return false;
-    }
-    std::vector<std::multiset<Delta, DeltaComparator>> &table = this->tables_[table_name];
+	/**
+	 * @brief insert new delta into the table
+	 * @return true if index wasn't present
+	 * false otherwise
+	 */
+	bool Insert(const index idx, const Delta &d) {
+		// get correct index
+		if (!this->deltas_.contains(idx)) {
+			this->deltas_[idx] = {d};
+			// index wasn't present return false 
+			return false;
+		} else {
+			// index was preset return true
+			deltas_[idx].insert(d);
+			return true;
+		}
+	}
 
-    for (int index = 0; index < table.size(); index++) {
-      auto &deltas = table[index];
-      int previous_count = 0;
-      timestamp ts = 0;
+	void Delete(const index idx) {
+		deltas_.erase(idx);
+	}
 
-      for (auto it = deltas.rbegin(); it != deltas.rend();) {
-        previous_count += it->count;
-        ts = it->ts;
-        auto base_it = std::next(it).base();
-        base_it = deltas.erase(base_it);
-        it = std::reverse_iterator<decltype(base_it)>(base_it);
+	/**
+	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
+	 */
+	// generic compact deltas work's for almost any kind of node (doesn't work for
+	// aggregations we will see :) )
+	void Merge(const timestamp end_ts) {
+		for(auto &[idx, deltas] : deltas_){
+			int previous_count = 0;
+			timestamp ts = 0;
 
-        // Check the condition: ts < ts_ - frontier_ts_
+			for (auto it = deltas.rbegin(); it != deltas.rend();) {
+				previous_count += it->count;
+				ts = it->ts;
+				auto base_it = std::next(it).base();
+				base_it = deltas.erase(base_it);
+				it = std::reverse_iterator<decltype(base_it)>(base_it);
 
-        // if current delta has bigger tiemstamp than one we are setting, or we
-        // iterated all deltas insert accumulated delta and break loop
-        if (it == deltas.rend() || it->ts > end_ts) {
-          deltas.insert(Delta{ts, previous_count});
-          break;
-        } else {
-          continue;
-        }
-      }
-    }
-  }
+				// Check the condition: ts < ts_ - frontier_ts_
 
-  /**
-   * @brief returns multiset of all the deltas for given key up to timestamp : up_to_ts
-   */
-  std::multiset<Delta, DeltaComparator> Scan(std::string table_name, index idx) {
-    if (!this->tables_.contains(table_name)) {
-      return {};
-    }
+				// if current delta has bigger tiemstamp than one we are setting, or we
+				// iterated all deltas insert accumulated delta and break loop
+				if (it == deltas.rend() || it->ts > end_ts) {
+					deltas.insert(Delta {ts, previous_count});
+					break;
+				} else {
+					continue;
+				}
+			}
+		}
 
-    std::vector<std::multiset<Delta, DeltaComparator>> &table = this->tables_[table_name];
-    if (table.size() <= idx) {
-      return {};
-    }
+		UpdateLogFile();
+	}
 
-    return table[idx];
-  }
+	/**
+	 * @brief returns multiset of all the deltas for given key
+	 */
+	inline std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
+		return this->deltas_[idx];
+	}
 
-  /**
-   * @brief remove all key|value pairs associated with given table
-   */
-  bool DeleteTable(std::string table_name) { this->tables_.erase(table_name); }
+	// return oldest delta for index
+	inline Delta Oldest(index idx) {
+		return *deltas_[idx].rbegin();
+	}
 
- private:
-  /** @brief table is accesed by string(name) and it holds vector of multisets of deltast
-   *
-   * string -> return vector of multisets of deltas
-   * int -> return multiset of deltas for given index
-   * multiset of deltas -> deltas sorted by timestamp
-   */
-  std::map<std::string, std::vector<std::multiset<Delta, DeltaComparator>>> tables_;
+	inline size_t Size() {
+		return this->deltas_.size();
+	}
+
+private:
+	void UpdateLogFile() {
+
+		std::string tmp_filename = this->log_file_ + "_tmp";
+
+		// open the temporary file for writing
+		std::ofstream file_stream(tmp_filename, std::ios::out);
+
+		for (auto &[idx, mst] : deltas_) {
+			// write the index and the size of the multiset
+			file_stream << idx << " " << mst.size() << "\n";
+
+			// write out each Delta as "count ts"
+			for (auto &dlt : mst) {
+				file_stream  << dlt.count << " " << dlt.ts;
+			}
+			file_stream << "\n";
+		}
+
+		// flush
+		file_stream.close();
+
+		// atomically replace old file
+		std::filesystem::rename(tmp_filename, this->log_file_);
+	}
+
+	int ReadLogFile() {
+		std::ifstream file_stream(this->log_file_, std::ios::in);
+		// doesn't exists
+		if (!file_stream) {
+			return -1;
+		}
+
+		// clrear in mem stuff if there is any for some reason
+		deltas_.clear();
+
+		while (true) {
+			index idx;
+			std::size_t num_deltas;
+
+			// Try to read <index> and <numDeltas>
+			if (!(file_stream >> idx >> num_deltas)) {
+				// eof
+				return 0;
+				break;
+			}
+
+			std::multiset<Delta, DeltaComparator> ms;
+
+			// Read <count, ts> pairs 'numDeltas' times
+			for (std::size_t i = 0; i < num_deltas; i++) {
+				Delta d;
+				// corrupted
+				if (!(file_stream >> d.count >> d.ts)) {
+					return 1;
+				}
+				ms.insert(d);
+			}
+
+			// move the collected deltas into the map
+			deltas_[idx] = std::move(ms);
+		}
+
+		return 0;
+	}
+
+	// multiset of deltas for each index
+	std::unordered_map<index, std::multiset<Delta, DeltaComparator>> deltas_;
+
+	std::string log_file_;
 };
-
-}  // namespace AliceDB
 
 /**
- * @brief
- * Storage for normal: Key|Value mappings, that is for:
- *  Key|index mapping -> this is always one to one
- *  and for
- *  MatchField | Key -> this is many to one
+ *  @brief persistent storage
  *
- *  best way would be to use some standard storage technology with buffer pool and b-tree |
- * hashtable.
- *
- *  What api do we need?
- *  We might want to switch to iterator api, but for now let's use this simple one.
- *  We will use normal bufferpool with disk backed storage
- *
- *
- *
- *  What api do we need for
- *
- *  for match-> tuple -> we need b-tree based search, and normal insertion with possible
- * duplicated match keys
- *
- *  for tuple -> index we need b-tree based search,heap search and normal insertion
- *  */
+ */
 
-template <typename K, typename V>
-class Table {
-  KVStorage(std::string table_name);
-
-  /** @brief returns vector of values associated with given key */
-  std::vector<V> Get(K key);
-
-  /** @brief inserts new key value pair into the table */
-  bool Put(K key, V value);
+struct StorageIndex {
+	index page_id_;
+	index tuple_id_;
 };
 
+template <typename Key>
+class BTree {
+
+	BTree(BufferPool *bp);
+
+	// return true if key was not present, else returns false, sets idx to corresponding index
+	bool Insert(const Key &key, const StorageIndex &idx);
+
+	bool Delete(Key *key);
+
+	// searches for key if it finds it sets idx to corresponding index, and returns true,
+	// else returns alse
+	bool Search(const Key &key, const StorageIndex &idx);
+
+private:
+	std::vector<index> btree_page_indexes_;
+};
+
+template <typename Type>
+class HeapIterator {
+public:
+	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page = false)
+	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {}
+
+	const Type *operator*() const {
+		// load page lazily
+		if(!this->current_page_ || this->current_page_->disk_index_ != *this->page_idx_){
+			this->current_page_ =
+				std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
+		}	
+		return current_page_->Get(tpl_idx_);
+	}
+
+	HeapIterator &operator++() {
+		this->tpl_idx_++;
+		if (this->tpl_idx_ == this->tuples_per_page_) {
+			this->tpl_idx_ = 0;
+			this->page_idx_++;
+		}
+
+		return *this;
+	} // Prefix increment
+
+	bool operator!=(const HeapIterator &other) const {
+		return page_idx_ != other.page_idx_ || tpl_idx_ != other.tpl_idx_;
+	}
+
+private:
+	index *page_idx_;
+	index tpl_idx_;
+
+	BufferPool *bp_;
+	size_t tuples_per_page_;
+
+	mutable std::unique_ptr<TablePageReadOnly<Type>> current_page_;
+};
+
+/**
+ * @brief all the stuff that might be needed,
+ * B+tree's? we got em,
+ * Delta's with persistent storage? you guessed it we got em too
+ */
+template <typename Type>
+class Table {
+public:
+	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
+	      BufferPool *bp, Graph *g)
+	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)}, data_page_indexes_ {data_page_indexes}, btree_indexes_{btree_indexes},
+		tuples_per_page_{PageSize / (sizeof(bool) + sizeof(Type))} {
+	}
+
+	// return index if data already present in table, doesn't insert but just return index
+	index Insert(const Type &in_data) {
+		// firt insert into page, if already contains doesn't need to insert
+		// this will return index,
+		// then call insert on b+tree with in_data(key), index(leaf) for btreetable
+		// then call insert on b+tree(match one) with in_data(key), index(leaf) for matchbtreetable
+
+		// first check if already present
+		index idx;
+		if (this->Search(in_data, &idx)) {
+			return idx;
+		}
+
+		// ok not present, write to the next write page
+		std::unique_ptr<TablePage<Type>> write_page;
+		if(this->data_page_indexes_.empty()){
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
+			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+			write_page->Insert(in_data, &idx);
+		}else{
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, *this->data_page_indexes_.rbegin(), this->tuples_per_page_);
+			// if there is no place left in current write page
+			if (!write_page->Insert(in_data, &idx)) {
+				write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
+				this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+				write_page->Insert(in_data, &idx);
+			}
+		}
+
+		return idx + this->tuples_per_page_ * this->data_page_indexes_.size() - 1;
+	}
+
+	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
+	// index
+	bool Search(const Type &data, index *idx) {
+
+		int cur_idx = 0;
+		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it, cur_idx++) {
+			if (std::memcmp(&data, *it, sizeof(Type)) == 0) {
+				*idx = cur_idx;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * @brief deletes all tuples that are older than ts,
+	 * if zeros_only is set only those for which current delta count is zero are deleted
+	 *  */
+	void GarbageCollect(timestamp ts, bool zeros_only) = delete;
+
+	// return pointer to data corresponding to index, calculated using tuples per page & offset
+	// if index is larger than tuple count returns nullptr
+	Type Get(const index &idx) {
+		StorageIndex str_idx = this->IndexToStorageIndex(idx);
+
+		auto read_page = std::make_unique<TablePageReadOnly<Type>>(
+		    this->bp_, this->data_page_indexes_[str_idx.page_id_], this->tuples_per_page_);
+		Type tp;
+		std::memcpy(&tp, read_page->Get(str_idx.tuple_id_), sizeof(Type));
+		return tp;
+	}
+
+	// other will be iterate all tuples, so heap based for
+	// cross join and compact delta for distinct node
+
+	/** @todo all iterators should return tuple or sth so like data - pointer | index */
+	HeapIterator<Type> begin() {
+		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_, true);
+	}
+
+	HeapIterator<Type> end() {
+		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size(),
+		                          0, bp_, this->tuples_per_page_, false);
+	}
+
+	// methods to work with deltas
+	bool InsertDelta(const index idx, const Delta &d) {
+		return this->ds_->Insert(idx, d);
+	}
+	void MergeDelta(const timestamp end_ts) {
+		return this->ds_->Merge(end_ts);
+	}
+
+	// returns all deltas for given index
+	std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
+		return this->ds_->deltas_[idx];
+	}
+
+	// return oldest delta for index
+	inline Delta OldestDelta(index idx) {
+		return this->ds_->Oldest(idx);
+	}
+
+	inline size_t DeltasSize() {
+		return this->ds_->Size();
+	}
+
+private:
+	inline index StorageIndexToIndex(StorageIndex sidx) {
+		return this->tuples_per_page * sidx.page_id_ + sidx.tuple_id_;
+	}
+
+	StorageIndex IndexToStorageIndex(index idx) {
+		return {idx / this->tuples_per_page_, idx % this->tuples_per_page_};
+	}
+
+	// methods for page accesing etc
+
+	// heap data pages
+	unsigned int tuples_per_page_;
+	
+	std::vector<index> &data_page_indexes_;
+
+	std::vector<index> &btree_indexes_;
+
+	// delta storage
+	std::unique_ptr<DeltaStorage> ds_;
+
+	// buffer pool pointer
+	BufferPool *bp_;
+
+	// graph pointer
+	Graph *g_;
+};
+
+} // namespace AliceDB
 #endif

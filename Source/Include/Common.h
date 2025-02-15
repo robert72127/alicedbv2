@@ -12,15 +12,15 @@ using index = long long;
 using timestamp = unsigned long long;
 
 struct Delta {
-  timestamp ts;
-  int count;
+	timestamp ts;
+	int count;
 };
 
 // for automatically sorting by delta
 struct DeltaComparator {
-  bool operator()(const Delta &a, const Delta &b) const {
-    return a.ts < b.ts;  // Sort based on the timestamp
-  }
+	bool operator()(const Delta &a, const Delta &b) const {
+		return a.ts < b.ts; // Sort based on the timestamp
+	}
 };
 
 /* use buffer pool and memory arena for cache as two separate memory pools
@@ -34,30 +34,17 @@ Stopping: Stop buffer pool, send all write requests, then stop DiskManager
 template <typename T>
 concept Arithmetic = std::is_arithmetic_v<T>;
 
-timestamp get_current_timestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-  return duration.count();
+inline timestamp get_current_timestamp() {
+	auto now = std::chrono::system_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+	return duration.count();
 }
 
-class SpinLock {
- public:
-  SpinLock() : flag(ATOMIC_FLAG_INIT) {}
-
-  void lock() {
-    // Keep trying to set the flag until it was previously false
-    while (flag.test_and_set(std::memory_order_acquire)) {
-      // Optionally, add a pause to reduce CPU usage
-      std::this_thread::yield();
-    }
-  }
-
-  void unlock() { flag.clear(std::memory_order_release); }
-
- private:
-  std::atomic_flag flag;
+struct TablePosition {
+	uint32_t page_index;
+	uint32_t tuple_index;
 };
 
-}  // namespace AliceDB
+} // namespace AliceDB
 
 #endif

@@ -1,19 +1,19 @@
+#include "Graph.h"
+
 #include <iostream>
 #include <string>
 
-#include "Graph.h"
-
 int main() {
-  std::string alicedb_intro = R"(
+	std::string alicedb_intro = R"(
     AliceDB is library, which let's you define relational algebra mappings on your online data,
     and provide You with internaly and eventualy consistent view of results.
     )";
 
-  std::cout << alicedb_intro << std::endl;
+	std::cout << alicedb_intro << std::endl;
 
-  std::cout << "This is example demo app explaining how to use library\n";
+	std::cout << "This is example demo app explaining how to use library\n";
 
-  std::string alicedb_usage_summary = R"(
+	std::string alicedb_usage_summary = R"(
     AliceDB operates on Cpp structs as data format. 
     It's user responsilibity to define right struct's that will correctly map his data. 
 

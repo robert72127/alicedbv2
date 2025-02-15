@@ -1,11 +1,12 @@
-## Nodes:
+## Nodes [v]:
     *   make sure algorithm is correct - fix joins [V]
 
-## Cache:
+## Cache [v]:
     * Think again whether it's implementation is good, maybe change it a bit, for example maybe keep track of size and resize it down [V]
 
-## DataLoaders:
+## DataLoaders [v]:
     *   Implement dataloaders for other sources such as network [V]
+    *   Make it part of graph source node for easier definitions, provide some unified interface of file or something []
 
 ## WorkerPool: [v]
     *   implement proper graph scheduling [v]
@@ -13,16 +14,25 @@
     *   add mechanism to dynamically stop and start new threads [v]
 
 
+## State Persistence:
+    * Implement B+Tree, and Storage class []
+        * write code working without b+tree, heap based, test whole system
+        * add b+tree indexes []
+        * add garbage collection [] 
+    * Add metadata loading/storing [v]
 
-------------------------------------------- Zrobić ten etap do końca tygodnia 
+    * Add correct destructors [V]:
+        * first we call destructor on worker pool,
+        this stops graphs,
+        * then we call destructor on graph,
+        this will save metadata state
+        * lastly we call destructor on bufferpool
 
-## Storage:
-    *   Either find good ready to use or implement persistent storage primitive
-    *   Use alicedbV1 with added B+Tree for key|value mapping
-    *   Use rocksdb for delta storage for also standard storage with b+ tree since it also grants prefix search for free
-    *   allow for exporting view to some format & dropping database graph
+    * Correctly identify structure of files that needs to be stored [V]
+    * Wrap everything yet another time [V]
 
 
-## Use some proper metafile to store metadata for all the classes
+## Write tests and make the system actually works [v]:
+----------------------------------------------------------------------------------------------
 
 ## Write PDF with description

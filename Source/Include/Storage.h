@@ -149,18 +149,15 @@ public:
 			int previous_count = 0;
 			timestamp ts = 0;
 
-			for (auto it = deltas.rbegin(); it != deltas.rend();) {
+			for (auto it = deltas.begin(); it != deltas.end();) {
 				previous_count += it->count;
 				ts = it->ts;
-				auto base_it = std::next(it).base();
-				base_it = deltas.erase(base_it);
-				it = std::reverse_iterator<decltype(base_it)>(base_it);
+				it = deltas.erase(it);
 
 				// Check the condition: ts < ts_ - frontier_ts_
-
 				// if current delta has bigger tiemstamp than one we are setting, or we
 				// iterated all deltas insert accumulated delta and break loop
-				if (it == deltas.rend() || it->ts > end_ts) {
+				if (it == deltas.end() || it->ts > end_ts) {
 					deltas.push_back(Delta {ts, previous_count});
 					break;
 				} else {
@@ -189,68 +186,64 @@ public:
 	}
 
 private:
+	// Write the entire delta storage as a binary file.
 	void UpdateLogFile() {
+		std::string tmp_filename = log_file_ + "_tmp";
+		std::ofstream file_stream(tmp_filename, std::ios::binary | std::ios::out | std::ios::trunc);
+		if (!file_stream)
+			throw std::runtime_error("Failed to open temporary log file for writing");
 
-		std::string tmp_filename = this->log_file_ + "_tmp";
-
-		// open the temporary file for writing
-		std::ofstream file_stream(tmp_filename, std::ios::out);
-
-		for (auto &[idx, mst] : deltas_) {
-			// write the index and the size of the multiset
-			file_stream << idx << " " << mst.size() << "\n";
-
-			// write out each Delta as "count ts"
-			for (auto &dlt : mst) {
-				file_stream << dlt.count << " " << dlt.ts;
+		// for each Delta
+		for (auto &[idx, deltas] : deltas_) {
+			// write key
+			file_stream.write(reinterpret_cast<const char *>(&idx), sizeof(idx));
+			// write number of deltas
+			std::size_t vecSize = deltas.size();
+			file_stream.write(reinterpret_cast<const char *>(&vecSize), sizeof(vecSize));
+			// Write each deltas's fields.
+			for (const auto &d : deltas) {
+				file_stream.write(reinterpret_cast<const char *>(&d.count), sizeof(d.count));
+				file_stream.write(reinterpret_cast<const char *>(&d.ts), sizeof(d.ts));
 			}
-			file_stream << "\n";
 		}
-
-		// flush
 		file_stream.close();
-
-		// atomically replace old file
-		std::filesystem::rename(tmp_filename, this->log_file_);
+		std::filesystem::rename(tmp_filename, log_file_);
 	}
 
+	// read the binary log file and reconstruct the in-memory storage.
 	int ReadLogFile() {
-		std::ifstream file_stream(this->log_file_, std::ios::in);
-		// doesn't exists
+		std::ifstream file_stream(log_file_, std::ios::binary | std::ios::in);
+		// no log, ok it's first time
 		if (!file_stream) {
-			return -1;
+			return 0;
 		}
 
-		// clrear in mem stuff if there is any for some reason
 		deltas_.clear();
-
-		while (true) {
+		while (file_stream.peek() != EOF) {
 			index idx;
 			std::size_t num_deltas;
 
-			// Try to read <index> and <numDeltas>
-			if (!(file_stream >> idx >> num_deltas)) {
-				// eof
-				return 0;
+			// read idx
+			file_stream.read(reinterpret_cast<char *>(&idx), sizeof(idx));
+			if (!file_stream)
 				break;
+			// deltas cnt
+			file_stream.read(reinterpret_cast<char *>(&num_deltas), sizeof(num_deltas));
+			if (!file_stream) {
+				return 1;
 			}
 
-			std::vector<Delta> ms;
-
-			// Read <count, ts> pairs 'numDeltas' times
+			std::vector<Delta> deltas;
+			deltas.resize(num_deltas);
 			for (std::size_t i = 0; i < num_deltas; i++) {
-				Delta d;
-				// corrupted
-				if (!(file_stream >> d.count >> d.ts)) {
+				file_stream.read(reinterpret_cast<char *>(&deltas[i].count), sizeof(deltas[i].count));
+				file_stream.read(reinterpret_cast<char *>(&deltas[i].ts), sizeof(deltas[i].ts));
+				if (!file_stream) {
 					return 1;
 				}
-				ms.push_back(d);
 			}
-
-			// move the collected deltas into the map
-			deltas_[idx] = ms; // std::move(ms);
+			deltas_[idx] = std::move(deltas);
 		}
-
 		return 0;
 	}
 

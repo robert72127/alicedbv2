@@ -589,7 +589,7 @@ private:
 		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
 			this->tables_metadata_[table_index] = MetaState {
-			    {}, {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index)), 0, table_index};
+			    {}, {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index) + ".bin"), 0, table_index};
 		}
 		return table_index;
 	}

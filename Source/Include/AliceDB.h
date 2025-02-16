@@ -49,7 +49,7 @@ public:
 		/** @todo decide on default garbage collector policy */
 		if (!gb_settings) {
 			gb_settings = new GarbageCollectSettings {
-			    .clean_freq_ = 5000, .use_garbage_collector = true, .remove_zeros_only = true};
+			    .clean_freq_ = 5000, .use_garbage_collector = false, .remove_zeros_only = true};
 		}
 		this->gb_settings_ = gb_settings;
 	}

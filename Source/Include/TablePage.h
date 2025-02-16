@@ -86,6 +86,15 @@ struct TablePage {
 		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
 
+	bool Full() {
+		for (int i = 0; i < this->tuple_count_; i++) {
+			if (this->slots_[i] == 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	inline index GetDiskIndex() {
 		return disk_index_;
 	}
@@ -114,6 +123,7 @@ struct TablePageReadOnly {
 	 */
 	TablePageReadOnly(BufferPool *bp, const index &on_disk_pid, size_t tuple_count)
 	    : bp_ {bp}, tuple_count_ {tuple_count} {
+		// std::cout<<on_disk_pid<<std::endl;
 		if (!this->bp_->GetPageReadonly(&in_memory_pid_, on_disk_pid)) {
 			throw std::runtime_error("Failed to get on disk page " + std::to_string(on_disk_pid) +
 			                         ", into buffer pool");
@@ -141,6 +151,14 @@ struct TablePageReadOnly {
 		}
 
 		return (Type *)(this->storage_ + id * sizeof(Type));
+	}
+
+	// returns true if given index contains data
+	bool Contains(const index &id) {
+		if (id >= this->tuple_count_) {
+			return false;
+		}
+		return this->slots_[id];
 	}
 
 	inline index GetDiskIndex() {

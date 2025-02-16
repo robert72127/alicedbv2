@@ -287,30 +287,58 @@ private:
 };
 
 template <typename Type>
+struct HeapState {
+	const Type *data_;
+	index idx_;
+};
+
+template <typename Type>
 class HeapIterator {
 public:
-	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, bool alloc_page = false)
-	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page} {
+	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, size_t pages_count)
+	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page},
+	      pages_count_ {pages_count}, start_page_idx_ {page_idx} {
 	}
 
-	const Type *operator*() const {
-		// load page lazily
+	HeapState<Type> Get() {
+		this->LoadPage();
+		// when returning heap state we want to return page index corresponding to position in vector of pages, not
+		// actual on disk page id
+		index logical_page_index = (page_idx_ - start_page_idx_);
+		return HeapState<Type>(current_page_->Get(tpl_idx_), this->tuples_per_page_ * logical_page_index + tpl_idx_);
+	}
+
+	HeapIterator &operator++() {
+
+		this->LoadPage();
+
+		this->tpl_idx_++;
+
+		while (!this->current_page_->Contains(tpl_idx_)) {
+			/** @todo  we need to make sure we didn't reach end of pages, and if so return heapiterator end or sth */
+
+			if (this->tpl_idx_ == this->tuples_per_page_) {
+				this->tpl_idx_ = 0;
+				this->page_idx_++;
+				// we reached end, thus we won't find tuple and must return
+				if (this->page_idx_ == this->start_page_idx_ + this->pages_count_) {
+					return *this;
+				}
+			} else {
+				this->tpl_idx_++;
+			}
+		}
+
+		return *this;
+
+	} // Prefix increment
+
+	void LoadPage() {
 		if (!this->current_page_ || this->current_page_->disk_index_ != *this->page_idx_) {
 			this->current_page_ =
 			    std::make_unique<TablePageReadOnly<Type>>(this->bp_, *this->page_idx_, this->tuples_per_page_);
 		}
-		return current_page_->Get(tpl_idx_);
 	}
-
-	HeapIterator &operator++() {
-		this->tpl_idx_++;
-		if (this->tpl_idx_ == this->tuples_per_page_) {
-			this->tpl_idx_ = 0;
-			this->page_idx_++;
-		}
-
-		return *this;
-	} // Prefix increment
 
 	bool operator!=(const HeapIterator &other) const {
 		return page_idx_ != other.page_idx_ || tpl_idx_ != other.tpl_idx_;
@@ -323,7 +351,10 @@ private:
 	BufferPool *bp_;
 	size_t tuples_per_page_;
 
-	mutable std::unique_ptr<TablePageReadOnly<Type>> current_page_;
+	size_t pages_count_;
+	index *start_page_idx_;
+
+	std::unique_ptr<TablePageReadOnly<Type>> current_page_;
 };
 
 /**
@@ -360,28 +391,40 @@ public:
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
-		} else {
-			write_page = std::make_unique<TablePage<Type>>(this->bp_, *this->data_page_indexes_.rbegin(),
-			                                               this->tuples_per_page_);
-			// if there is no place left in current write page
-			if (!write_page->Insert(in_data, &idx)) {
-				write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
-				this->data_page_indexes_.push_back(write_page->GetDiskIndex());
-				write_page->Insert(in_data, &idx);
-			}
+			return idx + this->tuples_per_page_ * this->current_page_idx_;
 		}
 
-		return idx + this->tuples_per_page_ * this->data_page_indexes_.size() - 1;
+		write_page = std::make_unique<TablePage<Type>>(this->bp_, this->data_page_indexes_[this->current_page_idx_],
+		                                               this->tuples_per_page_);
+
+		// iterate to next pages to check if they have free space
+		while (!write_page->Insert(in_data, &idx)) {
+			this->current_page_idx_++;
+			if (this->current_page_idx_ >= this->data_page_indexes_.size()) {
+				break;
+			}
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->data_page_indexes_[this->current_page_idx_],
+			                                               this->tuples_per_page_);
+		}
+
+		if (this->current_page_idx_ == this->data_page_indexes_.size()) {
+			// if there is no place left in current write page, allocate new one
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
+			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
+			write_page->Insert(in_data, &idx);
+		}
+
+		return idx + this->tuples_per_page_ * this->current_page_idx_;
 	}
 
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
 	// index
 	bool Search(const Type &data, index *idx) {
 
-		int cur_idx = 0;
-		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it, cur_idx++) {
-			if (std::memcmp(&data, *it, sizeof(Type)) == 0) {
-				*idx = cur_idx;
+		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it) {
+			HeapState<Type> state = it.Get();
+			if (std::memcmp(&data, state.data_, sizeof(Type)) == 0) {
+				*idx = state.idx_;
 				return true;
 			}
 		}
@@ -392,9 +435,64 @@ public:
 	/**
 	 * @brief deletes all tuples that are older than ts,
 	 * if zeros_only is set only those for which current delta count is zero are deleted
-	 *  */
-	void GarbageCollect(timestamp ts, bool zeros_only){
-		return;
+	 *
+	 * @return list of deleted tuple indexes
+	 * */
+	std::vector<index> GarbageCollect(timestamp ts, bool zeros_only) {
+		// first we got to iterate delta storage to get vector of all the indexes we wish to delete
+		std::vector<index> delete_indexes;
+
+		for (auto it = this->ds_->deltas_.begin(); it != this->ds_->deltas_.end(); it++) {
+
+			if (it->second.rbegin()->ts < ts) {
+
+				if (zeros_only) {
+					// calculate count and check if it's zero, then we can delete
+					int sum = 0;
+					for (const auto &dlt : it->second) {
+						sum += dlt.count;
+					}
+					if (sum != 0) {
+						continue;
+					}
+				}
+				// ok since we are here we don't care about count, or cout is actually zero, so we can delete
+				delete_indexes.emplace_back(it->first);
+				it = this->ds_->deltas_.erase(it);
+			}
+		}
+
+		// then when we get the indexes we should iterate pages and mark those tuples as deleted
+
+		std::sort(delete_indexes.begin(), delete_indexes.end());
+		std::unique_ptr<TablePage<Type>> wip_page_;
+		for (const auto &idx : delete_indexes) {
+			auto [page_idx, tpl_idx] = this->IndexToStorageIndex(idx);
+			if (!wip_page_ || wip_page_->GetDiskIndex() != page_idx) {
+				wip_page_ = std::make_unique<TablePage<Type>>(this->bp_, page_idx, this->tuples_per_page_);
+			}
+			wip_page_->Remove(tpl_idx);
+		}
+
+		// update new insert page
+		if (delete_indexes.size() > 0) {
+			auto [page_idx, _] = this->IndexToStorageIndex(delete_indexes[0]);
+			this->current_page_idx_ = page_idx;
+		}
+
+		// then we can return list of deleted indexes, then we set current write page to first one that has holes
+		return delete_indexes;
+
+		// and also when we will insert new pages we will now consider this page, and then next ones.. till we reach
+		// end, only then we will alloc new page
+
+		//  alternative
+
+		// move tuples from newest pages, such that those holes are instantly filled, then we need to return not only
+		// list of deletes, but also list of updates, so it seems like more work, but i guess less fragmentation? but
+		// wait is it really bad? eventually those holes will get filled
+
+		// ok first option makes more sense for now so we will use it :)
 	}
 
 	// return pointer to data corresponding to index, calculated using tuples per page & offset
@@ -414,12 +512,13 @@ public:
 
 	/** @todo all iterators should return tuple or sth so like data - pointer | index */
 	HeapIterator<Type> begin() {
-		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_, true);
+		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_,
+		                          this->data_page_indexes_.size());
 	}
 
 	HeapIterator<Type> end() {
 		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size(), 0, bp_,
-		                          this->tuples_per_page_, false);
+		                          this->tuples_per_page_, this->data_page_indexes_.size());
 	}
 
 	// methods to work with deltas
@@ -459,6 +558,7 @@ private:
 	unsigned int tuples_per_page_;
 
 	std::vector<index> &data_page_indexes_;
+	index current_page_idx_ = 0;
 
 	std::vector<index> &btree_indexes_;
 

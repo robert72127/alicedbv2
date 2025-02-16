@@ -230,10 +230,9 @@ public:
 
 	// print state of table at this moment, used for debugging only
 	void Print(timestamp ts, std::function<void(const char *)> print) {
-		index idx = 0;
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+			auto [data, idx] = it.Get();
 			int total = 0;
-			const Type *current_data = *it;
 			for (auto dit : this->table_->Scan(idx)) {
 				if (dit.ts > ts) {
 					break;
@@ -242,7 +241,7 @@ public:
 				}
 			}
 			std::cout << "COUNT : " << total << " |\t ";
-			print((char *)current_data);
+			print((char *)data);
 		}
 	}
 
@@ -532,10 +531,10 @@ public:
 			this->compact_ = false;
 
 			// use heap iterator to go through all tuples
-			index idx = 0;
-			for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
+			for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
+				auto [data, idx] = it.Get();
 				Delta cur_delta = this->table_->OldestDelta(idx);
 				bool previous_positive = oldest_deltas_[idx].count > 0;
 				bool current_positive = cur_delta.count > 0;
@@ -563,7 +562,7 @@ public:
 						update_tpl->delta.ts = cur_delta.ts;
 						update_tpl->delta.count = 1;
 						// finally copy data
-						std::memcpy(&update_tpl->data, *it, sizeof(Type));
+						std::memcpy(&update_tpl->data, data, sizeof(Type));
 					}
 
 				} else {
@@ -576,7 +575,7 @@ public:
 							update_tpl->delta.ts = cur_delta.ts;
 							update_tpl->delta.count = -1;
 							// finally copy data
-							std::memcpy(&update_tpl->data, *it, sizeof(Type));
+							std::memcpy(&update_tpl->data, data, sizeof(Type));
 						}
 					} else {
 						if (current_positive) {
@@ -585,7 +584,7 @@ public:
 							update_tpl->delta.ts = cur_delta.ts;
 							update_tpl->delta.count = 1;
 							// finally copy data
-							std::memcpy(&update_tpl->data, *it, sizeof(Type));
+							std::memcpy(&update_tpl->data, data, sizeof(Type));
 						} else {
 							continue;
 						}
@@ -979,9 +978,8 @@ public:
 
 		// compute left cache against right table
 		// right table
-		index idx = 0;
-		for (auto it = this->table_right_->begin(); it != this->table_right_->end(); ++it, idx++) {
-
+		for (auto it = this->table_right_->begin(); it != this->table_right_->end(); ++it) {
+			auto [data, idx] = it.Get();
 			// left cache
 			while (this->in_cache_left_->GetNext(&in_data_left)) {
 				Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
@@ -991,7 +989,7 @@ public:
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, *it);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, data);
 					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
 					                    in_left_tuple->delta.count * right_delta.count};
 				}
@@ -1000,9 +998,8 @@ public:
 
 		// compute right cache against left table
 		// right table
-		idx = 0;
-		for (auto it = this->table_left_->begin(); it != this->table_left_->end(); ++it, idx++) {
-
+		for (auto it = this->table_left_->begin(); it != this->table_left_->end(); ++it) {
+			auto [data, idx] = it.Get();
 			// left cache
 			while (this->in_cache_right_->GetNext(&in_data_right)) {
 				Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeLeft> *)(in_data_right);
@@ -1012,7 +1009,7 @@ public:
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(*it, in_right_tuple->data);
+					out_tuple->data = this->join_layout_(data, in_right_tuple->data);
 					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
 					                    in_right_tuple->delta.count * left_delta.count};
 				}
@@ -1070,10 +1067,10 @@ public:
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		/** recompute matches */
-		index idx = 0;
-		for (auto it = this->left_table_->begin(); it != this->left_table_->end(); ++it, idx++) {
-
-			MatchType match = this->get_match_left_(**it);
+		for (auto it = this->left_table_->begin(); it != this->left_table_->end(); ++it) {
+			auto [data, idx] = it.Get();
+			
+			MatchType match = this->get_match_left_(*data);
 
 			if (!this->match_to_index_left_table_.contains(match)) {
 				this->match_to_index_left_table_[match] = {};
@@ -1081,10 +1078,10 @@ public:
 			this->match_to_index_left_table_[match].insert(idx);
 		}
 
-		idx = 0;
-		for (auto it = this->right_table_->begin(); it != this->right_table_->end(); ++it, idx++) {
+		for (auto it = this->right_table_->begin(); it != this->right_table_->end(); ++it) {
+			auto [data, idx] = it.Get();
 
-			MatchType match = this->get_match_right_(**it);
+			MatchType match = this->get_match_right_(*data);
 
 			if (!this->match_to_index_right_table_.contains(match)) {
 				this->match_to_index_right_table_[match] = {};
@@ -1121,17 +1118,26 @@ public:
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
-			for (const auto &idx : this->match_to_index_right_table_[Key<MatchType>(match)]) {
-				InTypeRight right_data = this->right_table_->Get(idx);
-				// deltas from right table
-				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
-				// iterate all deltas of this tuple
-				for (auto &right_delta : right_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
-					                    in_left_tuple->delta.count * right_delta.count};
+			
+			auto &matches = this->match_to_index_right_table_[Key<MatchType>(match)];
+			for(auto it = matches.begin(); it!= matches.end(); it++ ){
+				index idx = *it;
+				if(this->left_delete_idxs_.contains(idx)){
+					it = matches.erase(it);
+					continue;
+				}
+				else {
+					InTypeRight right_data = this->right_table_->Get(idx);
+					// deltas from right table
+					std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+					// iterate all deltas of this tuple
+					for (auto &right_delta : right_deltas) {
+						this->out_cache_->ReserveNext(&out_data);
+						Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+						out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
+						out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
+											in_left_tuple->delta.count * right_delta.count};
+					}
 				}
 			}
 		}
@@ -1140,16 +1146,24 @@ public:
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
-			for (const auto &idx : this->match_to_index_left_table_[Key<MatchType>(match)]) {
-				InTypeLeft left_data = this->left_table_->Get(idx);
-				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
-				// iterate all deltas of this tuple
-				for (auto &left_delta : left_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
-					                    in_right_tuple->delta.count * left_delta.count};
+			auto &matches = this->match_to_index_left_table_[Key<MatchType>(match)];
+			for(auto it = matches.begin(); it!= matches.end(); it++ ){
+				index idx = *it;
+				if(this->right_delete_idxs_.contains(idx)){
+					it = matches.erase(it);
+					continue;
+				}
+				else{
+					InTypeLeft left_data = this->left_table_->Get(idx);
+					std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+					// iterate all deltas of this tuple
+					for (auto &left_delta : left_deltas) {
+						this->out_cache_->ReserveNext(&out_data);
+						Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+						out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
+						out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
+											in_right_tuple->delta.count * left_delta.count};
+					}
 				}
 			}
 		}
@@ -1194,8 +1208,15 @@ public:
 
 		// periodically call garbage collector
 		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
-			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			std::vector<index> left_delete_idxs = this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			std::vector<index> right_delete_idxs = this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+
+			// now we can either iterate all left matches and right matches, and remove deleted indexes from values, ..or,
+			// just store delete idx and only really delete them during match, search,
+			// and we don't need to update anything in destructor since it's not persistent state
+			this->left_delete_idxs_.insert(left_delete_idxs.begin(), left_delete_idxs.end()); 
+			this->right_delete_idxs_.insert(right_delete_idxs.begin(), right_delete_idxs.end()); 
+
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 	}
@@ -1221,6 +1242,9 @@ private:
 	    match_to_index_left_table_;
 	std::unordered_map<std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType>>
 	    match_to_index_right_table_;
+	
+	std::unordered_set<index>left_delete_idxs_ = {}; 
+	std::unordered_set<index>right_delete_idxs_ = {}; 
 };
 
 /**
@@ -1321,16 +1345,16 @@ public:
 		// so in this node our table will be normal one and our match will be temoprar and not persistent
 
 		std::unordered_map<MatchType, InType> matches_;
-		index idx = 0;
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
 
+			auto [data, idx] = it.Get();
 			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
 			// check if it oldest if previous ts that will mean it was already emited
 			if (olders_delta.ts <= this->previous_ts_) {
-				if (matches_.contains(get_match_(*it))) {
-					matches_[get_match_(*it)] = *it;
+				if (matches_.contains(get_match_(data))) {
+					matches_[get_match_(data)] = data;
 				} else {
-					matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it);
+					matches_[get_match_(data)] = aggr_fun_(matches_[get_match_(data)], data);
 				}
 			}
 		}
@@ -1348,16 +1372,15 @@ public:
 		this->compact_ = false;
 
 		matches_ = {};
-		idx = 0;
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it, idx++) {
-
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+			auto [data, idx] = it.Get();
 			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
 			// check if it oldest if previous ts that will mean it was already emited
 			if (olders_delta.ts <= this->previous_ts_) {
-				if (matches_.contains(get_match_(*it))) {
-					matches_[get_match_(*it)] = *it;
+				if (matches_.contains(get_match_(data))) {
+					matches_[get_match_(data)] = data;
 				} else {
-					matches_[get_match_(*it)] = aggr_fun_(matches_[get_match_(*it)], *it);
+					matches_[get_match_(data)] = aggr_fun_(matches_[get_match_(data)], data);
 				}
 			}
 		}

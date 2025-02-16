@@ -86,6 +86,15 @@ struct TablePage {
 		return (Type *)(this->storage_ + id * sizeof(Type));
 	}
 
+	bool Full(){
+		for(int i = 0; i < this->tuple_count_; i++){
+			if(this->slots_[i] == 0){
+				return false;
+			}
+		}
+		return true;
+	}
+
 	inline index GetDiskIndex() {
 		return disk_index_;
 	}
@@ -141,6 +150,14 @@ struct TablePageReadOnly {
 		}
 
 		return (Type *)(this->storage_ + id * sizeof(Type));
+	}
+
+	// returns true if given index contains data
+	bool Contains(const index &id){
+		if(id >= this->tuple_count_){
+			return false;			
+		}		
+		return this->slots_[id];
 	}
 
 	inline index GetDiskIndex() {

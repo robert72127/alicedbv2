@@ -1113,7 +1113,6 @@ public:
 				}
 			}
 		}
-
 		// compute left cache against right table
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);

@@ -296,13 +296,15 @@ struct HeapState{
 template <typename Type>
 class HeapIterator {
 public:
-	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, unsigned int pages_count)
+	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, size_t pages_count)
 	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page}, pages_count_{pages_count}, start_page_idx_{page_idx} {
 	}
 
 	HeapState<Type> Get() {
-		this->LoadPage();	
-		return HeapState<Type>(current_page_->Get(tpl_idx_), this->tuples_per_page_ *  *page_idx_ + tpl_idx_); 
+		this->LoadPage();
+		// when returning heap state we want to return page index corresponding to position in vector of pages, not actual on disk page id
+		index logical_page_index = (page_idx_ - start_page_idx_);	
+		return HeapState<Type>(current_page_->Get(tpl_idx_), this->tuples_per_page_ *  logical_page_index + tpl_idx_); 
 	}
 
 	HeapIterator &operator++() {
@@ -352,7 +354,7 @@ private:
 	BufferPool *bp_;
 	size_t tuples_per_page_;
 
-	unsigned int pages_count_;
+	size_t pages_count_;
 	index *start_page_idx_;
 
 	std::unique_ptr<TablePageReadOnly<Type>> current_page_;
@@ -393,26 +395,28 @@ public:
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
+			return idx + this->tuples_per_page_ * this->current_page_idx_;
 		} 
 			
-			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->data_page_indexes_[this->current_page_idx_],
+		write_page = std::make_unique<TablePage<Type>>(this->bp_, this->data_page_indexes_[this->current_page_idx_],
 			                                               this->tuples_per_page_);
 			
-			// iterate to next pages to check if they have free space
-			while(!write_page->Insert(in_data, &idx) && this->current_page_idx_ < this->data_page_indexes_.size()){
-				this->current_page_idx_++;
-				write_page = std::make_unique<TablePage<Type>>(this->bp_, this->data_page_indexes_[this->current_page_idx_],
-			                                               	this->tuples_per_page_);
-				if(write_page->Insert(in_data, &idx)){
-					return idx + this->tuples_per_page_ * this->current_page_idx_;
-				}
-			}
-			
-			// if there is no place left in current write page, allocate new one
+		// iterate to next pages to check if they have free space
+		while(!write_page->Insert(in_data, &idx) ){
 			this->current_page_idx_++;
+			if(this->current_page_idx_ >= this->data_page_indexes_.size()){
+				break;	
+			}
+			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->data_page_indexes_[this->current_page_idx_],
+			                                               	this->tuples_per_page_);
+		}
+
+		if(this->current_page_idx_ == this->data_page_indexes_.size()){	
+			// if there is no place left in current write page, allocate new one
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
+		}
 
 		return idx + this->tuples_per_page_ * this->current_page_idx_;
 	}

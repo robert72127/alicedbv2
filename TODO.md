@@ -18,7 +18,7 @@
     * Implement B+Tree, and Storage class []
         * write code working without b+tree, heap based, test whole system [v]
         * add b+tree indexes []
-        * add garbage collection [] 
+        * add garbage collection [v] 
     * Add metadata loading/storing [v]
 
     * Add correct destructors [V]:
@@ -33,6 +33,7 @@
 
 
 ## Write tests and make the system actually works [v]:
+    actually write even more tests for the rest of nodes, but only ater btree and garbage collection is implemented []
 ----------------------------------------------------------------------------------------------
 
 ## Write PDF with description

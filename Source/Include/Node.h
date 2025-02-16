@@ -50,11 +50,9 @@ struct MetaState {
 	index table_idx_;
 };
 
-
 // we need this definition to store graph pointer in node
 class Graph;
 class BufferPool;
-
 
 class Node {
 public:
@@ -187,9 +185,10 @@ private:
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
-	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
-	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_{meta},
-		 frontier_ts_ {in_node->GetFrontierTs()} {
+	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
+	         MetaState &meta, index table_index)
+	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta},
+	      frontier_ts_ {in_node->GetFrontierTs()} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
@@ -221,11 +220,10 @@ public:
 		this->in_node_->CleanCache();
 
 		// periodically call garbage collector
-		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
-
 	}
 
 	// print state of table at this moment, used for debugging only
@@ -457,11 +455,11 @@ private:
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
-	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &meta,
-	             index table_index)
+	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
+	             MetaState &meta, index table_index)
 	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node},
-	      table_index_(table_index), gb_settings_ {gb_settings}, meta_{meta},  frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_{meta.previous_ts_} 
-		{
+	      table_index_(table_index), gb_settings_ {gb_settings}, meta_ {meta}, frontier_ts_ {in_node->GetFrontierTs()},
+	      previous_ts_ {meta.previous_ts_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
@@ -470,7 +468,6 @@ public:
 		// init table from graph metastate based on index
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
-
 	}
 
 	~DistinctNode() {
@@ -594,7 +591,7 @@ public:
 		}
 
 		// periodically call garbage collector
-		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
@@ -631,7 +628,7 @@ private:
 	timestamp next_clean_ts_;
 
 	MetaState &meta_;
-	
+
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
@@ -748,16 +745,16 @@ template <typename LeftType, typename RightType, typename OutType>
 class StatefulBinaryNode : public TypedNode<OutType> {
 public:
 	StatefulBinaryNode(TypedNode<LeftType> *in_node_left, TypedNode<RightType> *in_node_right, Graph *graph,
-	                   BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, 
-					   index left_table_index, index right_table_index)
+	                   BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta,
+	                   index left_table_index, index right_table_index)
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
-	      gb_settings_ {gb_settings}, left_meta_{left_meta}, right_meta_{right_meta},  frontier_ts_ {
-	                                      std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
+	      gb_settings_ {gb_settings}, left_meta_ {left_meta}, right_meta_ {right_meta},
+	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
-		
+
 		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
@@ -829,7 +826,6 @@ protected:
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
 
-
 	MetaState &left_meta_;
 	MetaState &right_meta_;
 
@@ -846,9 +842,10 @@ template <typename Type>
 class IntersectNode : public StatefulBinaryNode<Type, Type, Type> {
 public:
 	IntersectNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, Graph *graph, BufferPool *bp,
-	              GarbageCollectSettings &gb_settings, MetaState &left_meta,MetaState &right_meta, index left_table_index, index right_table_index)
-	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, gb_settings, left_meta, right_meta, left_table_index,
-	                                           right_table_index) {
+	              GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta,
+	              index left_table_index, index right_table_index)
+	    : StatefulBinaryNode<Type, Type, Type>(in_node_left, in_node_right, graph, bp, gb_settings, left_meta,
+	                                           right_meta, left_table_index, right_table_index) {
 	}
 
 	void Compute() {
@@ -928,9 +925,8 @@ public:
 			this->Compact();
 		}
 
-
 		// periodically call garbage collector
-		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
 			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -949,10 +945,11 @@ class CrossJoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType
 public:
 	CrossJoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
 	              std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph,
-	              BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, index left_table_index, index right_table_index)
+	              BufferPool *bp, GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta,
+	              index left_table_index, index right_table_index)
 	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, gb_settings,
-	                 										   left_meta, right_meta,                                          
-															   left_table_index, right_table_index),
+	                                                           left_meta, right_meta, left_table_index,
+	                                                           right_table_index),
 	      join_layout_ {join_layout} {
 	}
 
@@ -1036,9 +1033,8 @@ public:
 			this->Compact();
 		}
 
-
 		// periodically call garbage collector
-		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
 			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -1059,17 +1055,17 @@ public:
 	         std::function<MatchType(const InTypeLeft &)> get_match_left,
 	         std::function<MatchType(const InTypeRight &)> get_match_right,
 	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph, BufferPool *bp,
-	         GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, 
-			 index left_table_index, index right_table_index)
+	         GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, index left_table_index,
+	         index right_table_index)
 	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, gb_settings,
-															   left_meta, right_meta,
-	                                                           left_table_index, right_table_index),
+	                                                           left_meta, right_meta, left_table_index,
+	                                                           right_table_index),
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		/** recompute matches */
 		for (auto it = this->left_table_->begin(); it != this->left_table_->end(); ++it) {
 			auto [data, idx] = it.Get();
-			
+
 			MatchType match = this->get_match_left_(*data);
 
 			if (!this->match_to_index_left_table_.contains(match)) {
@@ -1117,15 +1113,14 @@ public:
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
-			
+
 			auto &matches = this->match_to_index_right_table_[Key<MatchType>(match)];
-			for(auto it = matches.begin(); it!= matches.end(); it++ ){
+			for (auto it = matches.begin(); it != matches.end(); it++) {
 				index idx = *it;
-				if(this->left_delete_idxs_.contains(idx)){
+				if (this->left_delete_idxs_.contains(idx)) {
 					it = matches.erase(it);
 					continue;
-				}
-				else {
+				} else {
 					InTypeRight right_data = this->right_table_->Get(idx);
 					// deltas from right table
 					std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
@@ -1135,7 +1130,7 @@ public:
 						Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 						out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
 						out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
-											in_left_tuple->delta.count * right_delta.count};
+						                    in_left_tuple->delta.count * right_delta.count};
 					}
 				}
 			}
@@ -1146,13 +1141,12 @@ public:
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
 			auto &matches = this->match_to_index_left_table_[Key<MatchType>(match)];
-			for(auto it = matches.begin(); it!= matches.end(); it++ ){
+			for (auto it = matches.begin(); it != matches.end(); it++) {
 				index idx = *it;
-				if(this->right_delete_idxs_.contains(idx)){
+				if (this->right_delete_idxs_.contains(idx)) {
 					it = matches.erase(it);
 					continue;
-				}
-				else{
+				} else {
 					InTypeLeft left_data = this->left_table_->Get(idx);
 					std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 					// iterate all deltas of this tuple
@@ -1161,7 +1155,7 @@ public:
 						Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
 						out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
 						out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
-											in_right_tuple->delta.count * left_delta.count};
+						                    in_right_tuple->delta.count * left_delta.count};
 					}
 				}
 			}
@@ -1206,15 +1200,17 @@ public:
 		}
 
 		// periodically call garbage collector
-		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
-			std::vector<index> left_delete_idxs = this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			std::vector<index> right_delete_idxs = this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
+			std::vector<index> left_delete_idxs =
+			    this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			std::vector<index> right_delete_idxs =
+			    this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 
-			// now we can either iterate all left matches and right matches, and remove deleted indexes from values, ..or,
-			// just store delete idx and only really delete them during match, search,
-			// and we don't need to update anything in destructor since it's not persistent state
-			this->left_delete_idxs_.insert(left_delete_idxs.begin(), left_delete_idxs.end()); 
-			this->right_delete_idxs_.insert(right_delete_idxs.begin(), right_delete_idxs.end()); 
+			// now we can either iterate all left matches and right matches, and remove deleted indexes from values,
+			// ..or, just store delete idx and only really delete them during match, search, and we don't need to update
+			// anything in destructor since it's not persistent state
+			this->left_delete_idxs_.insert(left_delete_idxs.begin(), left_delete_idxs.end());
+			this->right_delete_idxs_.insert(right_delete_idxs.begin(), right_delete_idxs.end());
 
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
@@ -1241,9 +1237,9 @@ private:
 	    match_to_index_left_table_;
 	std::unordered_map<std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType>>
 	    match_to_index_right_table_;
-	
-	std::unordered_set<index>left_delete_idxs_ = {}; 
-	std::unordered_set<index>right_delete_idxs_ = {}; 
+
+	std::unordered_set<index> left_delete_idxs_ = {};
+	std::unordered_set<index> right_delete_idxs_ = {};
 };
 
 /**
@@ -1271,9 +1267,9 @@ public:
 	AggregateByNode(TypedNode<InType> *in_node, std::function<InType(const InType &, const InType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp,
 	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
-	    : aggr_fun_ {aggr_fun},
-	      get_match_ {get_match}, graph_ {graph}, in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      gb_settings_ {gb_settings}, meta_{meta}, table_index_ {table_index}, frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_{meta.previous_ts_} {
+	    : aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, in_node_ {in_node},
+	      in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta}, table_index_ {table_index},
+	      frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
@@ -1283,7 +1279,6 @@ public:
 
 		// init table from graph metastate based on index
 		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
-
 	}
 
 	~AggregateByNode() {
@@ -1392,13 +1387,12 @@ public:
 			ins_tuple->delta = {this->previous_ts_, 11};
 			std::memcpy(&ins_tuple->data, in_data, sizeof(OutType));
 		}
-		
+
 		// periodically call garbage collector
-		if(this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_){
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
-
 	}
 
 	void UpdateTimestamp(timestamp ts) {

@@ -1123,7 +1123,7 @@ public:
 				} else {
 					InTypeRight right_data = this->right_table_->Get(idx);
 					// deltas from right table
-					std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+					const std::vector<Delta> &right_deltas = this->right_table_->Scan(idx);
 					// iterate all deltas of this tuple
 					for (auto &right_delta : right_deltas) {
 						this->out_cache_->ReserveNext(&out_data);
@@ -1148,7 +1148,7 @@ public:
 					continue;
 				} else {
 					InTypeLeft left_data = this->left_table_->Get(idx);
-					std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+					const std::vector<Delta> &left_deltas = this->left_table_->Scan(idx);
 					// iterate all deltas of this tuple
 					for (auto &left_delta : left_deltas) {
 						this->out_cache_->ReserveNext(&out_data);

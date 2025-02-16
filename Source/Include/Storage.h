@@ -128,7 +128,9 @@ public:
 			return false;
 		} else {
 			// index was preset return true
-			deltas_[idx].insert(d);
+			auto &vec = deltas_[idx];
+			auto pos = std::upper_bound(vec.begin(), vec.end(), d, DeltaComparator());
+			vec.insert(pos, d);
 			return true;
 		}
 	}
@@ -159,7 +161,7 @@ public:
 				// if current delta has bigger tiemstamp than one we are setting, or we
 				// iterated all deltas insert accumulated delta and break loop
 				if (it == deltas.rend() || it->ts > end_ts) {
-					deltas.insert(Delta {ts, previous_count});
+					deltas.push_back(Delta {ts, previous_count});
 					break;
 				} else {
 					continue;
@@ -173,13 +175,13 @@ public:
 	/**
 	 * @brief returns multiset of all the deltas for given key
 	 */
-	inline std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
+	inline const std::vector<Delta> &Scan(const index idx) {
 		return this->deltas_[idx];
 	}
 
 	// return oldest delta for index
 	inline Delta Oldest(index idx) {
-		return *deltas_[idx].rbegin();
+		return deltas_[idx][0];
 	}
 
 	inline size_t Size() {
@@ -233,7 +235,7 @@ private:
 				break;
 			}
 
-			std::multiset<Delta, DeltaComparator> ms;
+			std::vector<Delta> ms;
 
 			// Read <count, ts> pairs 'numDeltas' times
 			for (std::size_t i = 0; i < num_deltas; i++) {
@@ -242,19 +244,18 @@ private:
 				if (!(file_stream >> d.count >> d.ts)) {
 					return 1;
 				}
-				ms.insert(d);
+				ms.push_back(d);
 			}
 
 			// move the collected deltas into the map
-			deltas_[idx] = std::move(ms);
+			deltas_[idx] = ms; // std::move(ms);
 		}
 
 		return 0;
 	}
 
 	// multiset of deltas for each index
-	std::unordered_map<index, std::multiset<Delta, DeltaComparator>> deltas_;
-
+	std::unordered_map<index, std::vector<Delta>> deltas_;
 	std::string log_file_;
 };
 
@@ -530,7 +531,7 @@ public:
 	}
 
 	// returns all deltas for given index
-	std::multiset<Delta, DeltaComparator> &Scan(const index idx) {
+	const std::vector<Delta> &Scan(const index idx) {
 		return this->ds_->deltas_[idx];
 	}
 

@@ -378,18 +378,24 @@ struct BTree {
 
 	// searches for key if it finds it sets idx to corresponding index, and returns true,
 	// else returns alse
-	bool Search(const Type &key, StorageIndex &idx) {
+	std::vector<StorageIndex> Search(const Type &key) {
+		std::vector<StorageIndex> matching_idx;
+
 		MatchType match_key = this->transform_(key);
 		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
 		auto &candidates = this->tuples_to_index_[key_hash];
 		for (const auto &candidate_idx : candidates) {
 			MatchType candidate = this->transform_(this->table_->Get(this->table_->StorageIndexToIndex(candidate_idx)));
 			if (std::memcmp((char *)&candidate, (char *)&match_key, this->key_size_) == 0) {
-				idx = candidate_idx;
-				return true;
+				matching_idx.push_back(candidate_idx);
+				// if this tree computes identity we know there is single matching index, so we don't need to search no
+				// more
+				if (std::is_same_v<Type, MatchType>) {
+					return matching_idx;
+				}
 			}
 		}
-		return false;
+		return matching_idx;
 	}
 
 	bool Delete(const Type &key) {
@@ -428,14 +434,29 @@ public:
 	      BufferPool *bp, Graph *g)
 	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)},
 	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
-	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))} {
+	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))}, use_match_to_index_ {false} {
 
 		this->tree_ =
 		    new BTree<Type, MatchType>(this, static_cast<MatchType (*)(const Type &)>(Identity<Type, MatchType>));
 	}
 
+	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
+	      BufferPool *bp, Graph *g, std::function<MatchType(const Type &)> transform)
+	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)},
+	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
+	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))}, use_match_to_index_ {true} {
+
+		this->tree_ =
+		    new BTree<Type, MatchType>(this, static_cast<MatchType (*)(const Type &)>(Identity<Type, MatchType>));
+
+		this->match_tree_ = new BTree<Type, MatchType>(this, transform);
+	}
+
 	~Table() {
 		delete tree_;
+		if (this->use_match_to_index_) {
+			delete match_tree_;
+		}
 	}
 
 	// return index if data already present in table, doesn't insert but just return index
@@ -459,6 +480,10 @@ public:
 			write_page->Insert(in_data, &idx);
 			this->tree_->Insert(in_data,
 			                    this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+			if (this->use_match_to_index_) {
+				this->match_tree_->Insert(
+				    in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+			}
 			return idx + this->tuples_per_page_ * this->current_page_idx_;
 		}
 
@@ -483,6 +508,10 @@ public:
 		}
 
 		this->tree_->Insert(in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+		if (this->use_match_to_index_) {
+			this->match_tree_->Insert(
+			    in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+		}
 
 		return idx + this->tuples_per_page_ * this->current_page_idx_;
 	}
@@ -490,15 +519,29 @@ public:
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
 	// index
 	bool Search(const Type &data, index *idx) {
-		StorageIndex strg_idx;
-		bool found = this->tree_->Search(data, strg_idx);
-		if (found) {
-			*idx = this->StorageIndexToIndex(strg_idx);
+		std::vector<StorageIndex> storage_idx = this->tree_->Search(data);
+		if (storage_idx.empty()) {
+			return false;
 		}
-		return found;
+		*idx = this->StorageIndexToIndex(storage_idx[0]);
+		return true;
+	}
+
+	/** returns all indexes that matches hash of data in match tree*/
+	std::vector<index> MatchSearch(const Type &data) {
+		if (!this->use_match_to_index_) {
+			return {};
+		}
+		std::vector<StorageIndex> stg_idxs = this->match_tree_->Search(data);
+		std::vector<index> idxs;
+		for (const auto &stg_idx : stg_idxs) {
+			idxs.push_back(StorageIndexToIndex(stg_idx));
+		}
 	}
 
 	/**
+	 * @todo fix for use with trees
+	 *
 	 * @brief deletes all tuples that are older than ts,
 	 * if zeros_only is set only those for which current delta count is zero are deleted
 	 *
@@ -629,8 +672,9 @@ private:
 	std::vector<index> &btree_indexes_;
 
 	BTree<Type, MatchType> *tree_;
-	// bool use_match_to_index_;
-	// std::unordered_map<uint64_t std::vector<index>> match_to_index_ = {};
+
+	const bool use_match_to_index_;
+	BTree<Type, MatchType> *match_tree_;
 
 	// delta storage
 	std::unique_ptr<DeltaStorage> ds_;

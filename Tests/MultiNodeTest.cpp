@@ -79,18 +79,18 @@ void prepare_test_data_files(std::string people_fname, std::string dogs_fname){
     int cnt = 0;
     for (auto &name : names){
         for(auto &surname: surnames ){
-                int age = std::rand() % 101; // Random number between 0 and 100
+                int age = 50;// std::rand() % 101; // Random number between 0 and 100
                 
                 int dog_race_nr = std::rand() % 50;
                 
-                float account_ballance =  (std::rand() / (float)RAND_MAX) * 2000.0f;
+                float account_ballance = 100;// (std::rand() / (float)RAND_MAX) * 2000.0f;
 
                 std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) 
                     + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
                 //std::cout << test_str <<std::endl;
                 people_writter << person_str << std::endl;
                 cnt++;
-                if(cnt > 100){ break;}
+                if(cnt > 1){ break;}
         }
         if(cnt > 100){break;}
     }
@@ -98,7 +98,7 @@ void prepare_test_data_files(std::string people_fname, std::string dogs_fname){
     people_writter.close();
 
     // parse dogs
-    for(int i = 0; i < 50; i++){
+    for(int i = 0; i < 5; i++){
         std::string breed = dogbreeds[i];
         float price = dogprices[i];
         std::string dog_str =  "insert " + std::to_string(AliceDB::get_current_timestamp() ) 
@@ -227,6 +227,7 @@ TEST(MULTINODE_TEST, multinode_test){
             )
         );
         */
+       /*
     auto *view = 
         g->View(
             g->Projection(
@@ -261,7 +262,7 @@ TEST(MULTINODE_TEST, multinode_test){
                 )
             )
         );
-   /*
+        */
     auto *view = g->View(
                     g->Join(
                         [](const Person &p)  { return p.favourite_dog_race;},
@@ -278,13 +279,12 @@ TEST(MULTINODE_TEST, multinode_test){
                         },
                         g->Filter(
                             [](const Person &p) -> bool {return p.age > 18;},
-                            g->Source(prod_people,0)
+                            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
                         ),
-                        g->Source(prod_dogs,0)
+                        g->Source<Dog>(AliceDB::ProducerType::FILE, dogs_fname, parseDog,0)
                     )
                     
                 );
-    */
 
     // start processing data
     db->StartGraph(g);
@@ -294,11 +294,13 @@ TEST(MULTINODE_TEST, multinode_test){
     std::cout<<i<<std::endl;
     db->StopGraph(g);
 
-    AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
+    //AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
     //AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+    AliceDB::SinkNode<JoinDogPerson> *real_sink = reinterpret_cast<AliceDB::SinkNode<JoinDogPerson>*>(view);
 
-    real_sink->Print(AliceDB::get_current_timestamp()*2, print_canafforddog);
+    //real_sink->Print(AliceDB::get_current_timestamp()*2, print_canafforddog);
     //real_sink->Print(AliceDB::get_current_timestamp()*2, print_person);
+    real_sink->Print(AliceDB::get_current_timestamp()*2, print_joindogperson);
 
     db->Shutdown();
 

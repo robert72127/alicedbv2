@@ -85,6 +85,7 @@ also all our storage can be single threaded since we work on single node by one 
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -101,7 +102,7 @@ class Graph;
  */
 class DeltaStorage {
 public:
-	template <typename Type>
+	template <typename Type, typename MatchType>
 	friend class Table;
 
 	/*initialize delta storage from log file*/
@@ -340,25 +341,32 @@ private:
 	std::unique_ptr<TablePageReadOnly<Type>> current_page_;
 };
 
-template <typename Type>
+template <typename Type, typename MatchType>
 class Table;
 
-template <typename Type>
+template <typename Type, typename MatchType>
+MatchType Identity(const Type &input) {
+	return static_cast<MatchType>(input);
+}
+
+template <typename Type, typename MatchType>
 struct BTree {
 
-	BTree(Table<Type> *table, size_t key_size) : table_ {table}, key_size_ {key_size} {
+	BTree(Table<Type, MatchType> *table, std::function<MatchType(const Type &)> transform)
+	    : table_ {table}, transform_ {transform}, key_size_ {sizeof(MatchType)} {
 		// init tuples to tables from heap iterator
 		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
 			auto [data, idx] = it.Get();
-			this->Insert((const char *)data, this->table_->IndexToStorageIndex(idx));
+			this->Insert(*data, this->table_->IndexToStorageIndex(idx));
 			Type other = this->table_->Get(idx);
-			assert(std::memcmp(data, &other, key_size) == 0);
+			assert(std::memcmp(data, &other, key_size_) == 0);
 		}
 	}
 
 	// return true if key was not present, else returns false, sets idx to corresponding index
-	void Insert(const char *key, const StorageIndex &idx) {
-		uint64 key_hash = CityHash64WithSeed(key, this->key_size_, 0);
+	void Insert(const Type &key, const StorageIndex &idx) {
+		MatchType match_key = this->transform_(key);
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
 
 		if (!this->tuples_to_index_.contains(key_hash)) {
 			this->tuples_to_index_[key_hash] = {};
@@ -370,12 +378,13 @@ struct BTree {
 
 	// searches for key if it finds it sets idx to corresponding index, and returns true,
 	// else returns alse
-	bool Search(const char *key, StorageIndex &idx) {
-		uint64 key_hash = CityHash64WithSeed(key, this->key_size_, 0);
+	bool Search(const Type &key, StorageIndex &idx) {
+		MatchType match_key = this->transform_(key);
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
 		auto &candidates = this->tuples_to_index_[key_hash];
 		for (const auto &candidate_idx : candidates) {
-			Type candidate = this->table_->Get(this->table_->StorageIndexToIndex(candidate_idx));
-			if (std::memcmp((char *)&candidate, key, this->key_size_) == 0) {
+			MatchType candidate = this->transform_(this->table_->Get(this->table_->StorageIndexToIndex(candidate_idx)));
+			if (std::memcmp((char *)&candidate, (char *)&match_key, this->key_size_) == 0) {
 				idx = candidate_idx;
 				return true;
 			}
@@ -383,12 +392,14 @@ struct BTree {
 		return false;
 	}
 
-	bool Delete(const char *key) {
-		uint64 key_hash = CityHash64WithSeed(key, this->key_size_, 0);
+	bool Delete(const Type &key) {
+		MatchType match_key = this->transform_(key);
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
 
 		auto &vec = this->tuples_to_index_[key_hash];
 		for (auto it = vec.begin(); it != vec.end(); it++) {
-			if (std::memcmp((char *)&this->table_->Get(*it), key, this->key_size_) == 0) {
+			MatchType candidate = this->transform_(this->table_->Get(*it));
+			if (std::memcmp((char *)&candidate, (char *)&match_key, this->key_size_) == 0) {
 				it = vec.erase(it);
 				return true;
 			}
@@ -397,10 +408,12 @@ struct BTree {
 	}
 
 private:
-	Table<Type> *table_;
+	Table<Type, MatchType> *table_;
 	size_t key_size_;
 	// std::vector<index> btree_page_indexes_;
 	std::unordered_map<uint64_t, std::vector<StorageIndex>> tuples_to_index_ = {};
+
+	std::function<MatchType(const Type &)> transform_;
 };
 
 /**
@@ -408,7 +421,7 @@ private:
  * B+tree's? we got em,
  * Delta's with persistent storage? you guessed it we got em too
  */
-template <typename Type>
+template <typename Type, typename MatchType = Type>
 class Table {
 public:
 	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
@@ -417,7 +430,8 @@ public:
 	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
 	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))} {
 
-		this->tree_ = new BTree<Type>(this, sizeof(Type));
+		this->tree_ =
+		    new BTree<Type, MatchType>(this, static_cast<MatchType (*)(const Type &)>(Identity<Type, MatchType>));
 	}
 
 	~Table() {
@@ -443,7 +457,7 @@ public:
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
-			this->tree_->Insert((const char *)&in_data,
+			this->tree_->Insert(in_data,
 			                    this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
 			return idx + this->tuples_per_page_ * this->current_page_idx_;
 		}
@@ -468,8 +482,7 @@ public:
 			write_page->Insert(in_data, &idx);
 		}
 
-		this->tree_->Insert((const char *)&in_data,
-		                    this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+		this->tree_->Insert(in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
 
 		return idx + this->tuples_per_page_ * this->current_page_idx_;
 	}
@@ -478,7 +491,7 @@ public:
 	// index
 	bool Search(const Type &data, index *idx) {
 		StorageIndex strg_idx;
-		bool found = this->tree_->Search((const char *)&data, strg_idx);
+		bool found = this->tree_->Search(data, strg_idx);
 		if (found) {
 			*idx = this->StorageIndexToIndex(strg_idx);
 		}
@@ -615,7 +628,7 @@ private:
 
 	std::vector<index> &btree_indexes_;
 
-	BTree<Type> *tree_;
+	BTree<Type, MatchType> *tree_;
 	// bool use_match_to_index_;
 	// std::unordered_map<uint64_t std::vector<index>> match_to_index_ = {};
 

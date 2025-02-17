@@ -344,15 +344,15 @@ private:
 template <typename Type, typename MatchType>
 class Table;
 
-template <typename Type, typename MatchType>
-MatchType Identity(const Type &input) {
-	return static_cast<MatchType>(input);
+template <typename Type>
+Type Identity(const Type &input) {
+	return input;
 }
 
-template <typename Type, typename MatchType>
+template <typename Type, typename TableType, typename MatchType>
 struct BTree {
 
-	BTree(Table<Type, MatchType> *table, std::function<MatchType(const Type &)> transform)
+	BTree(Table<Type, TableType> *table, std::function<MatchType(const Type &)> transform)
 	    : table_ {table}, transform_ {transform}, key_size_ {sizeof(MatchType)} {
 		// init tuples to tables from heap iterator
 		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
@@ -378,21 +378,34 @@ struct BTree {
 
 	// searches for key if it finds it sets idx to corresponding index, and returns true,
 	// else returns alse
-	std::vector<StorageIndex> Search(const Type &key) {
-		std::vector<StorageIndex> matching_idx;
-
+	bool Search(const Type &key, StorageIndex &idx) {
 		MatchType match_key = this->transform_(key);
 		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
 		auto &candidates = this->tuples_to_index_[key_hash];
 		for (const auto &candidate_idx : candidates) {
-			MatchType candidate = this->transform_(this->table_->Get(this->table_->StorageIndexToIndex(candidate_idx)));
+			Type candidate = this->table_->Get(this->table_->StorageIndexToIndex(candidate_idx));
 			if (std::memcmp((char *)&candidate, (char *)&match_key, this->key_size_) == 0) {
-				matching_idx.push_back(candidate_idx);
-				// if this tree computes identity we know there is single matching index, so we don't need to search no
-				// more
-				if (std::is_same_v<Type, MatchType>) {
-					return matching_idx;
-				}
+				idx = candidate_idx;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// searches for key if it finds it sets idx to corresponding index, and returns true,
+	// else returns alse
+	/** @todo instead use two different search functions, one for getting index, and other for getting tuples from match
+	 */
+	std::vector<std::pair<Type, index>> MatchSearch(const MatchType &match_key) {
+		std::vector<std::pair<Type, index>> matching_idx;
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
+		auto &candidates = this->tuples_to_index_[key_hash];
+		for (const auto &candidate_idx : candidates) {
+			index tuple_idx = this->table_->StorageIndexToIndex(candidate_idx);
+			Type candidate = this->table_->Get(tuple_idx);
+			MatchType match_candidate = this->transform_(candidate);
+			if (std::memcmp((char *)&match_candidate, (char *)&match_key, this->key_size_) == 0) {
+				matching_idx.push_back({candidate, tuple_idx});
 			}
 		}
 		return matching_idx;
@@ -414,7 +427,7 @@ struct BTree {
 	}
 
 private:
-	Table<Type, MatchType> *table_;
+	Table<Type, TableType> *table_;
 	size_t key_size_;
 	// std::vector<index> btree_page_indexes_;
 	std::unordered_map<uint64_t, std::vector<StorageIndex>> tuples_to_index_ = {};
@@ -436,8 +449,7 @@ public:
 	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
 	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))}, use_match_to_index_ {false} {
 
-		this->tree_ =
-		    new BTree<Type, MatchType>(this, static_cast<MatchType (*)(const Type &)>(Identity<Type, MatchType>));
+		this->tree_ = new BTree<Type, MatchType, Type>(this, Identity<Type>);
 	}
 
 	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
@@ -446,10 +458,9 @@ public:
 	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
 	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))}, use_match_to_index_ {true} {
 
-		this->tree_ =
-		    new BTree<Type, MatchType>(this, static_cast<MatchType (*)(const Type &)>(Identity<Type, MatchType>));
+		this->tree_ = new BTree<Type, MatchType, Type>(this, Identity<Type>);
 
-		this->match_tree_ = new BTree<Type, MatchType>(this, transform);
+		this->match_tree_ = new BTree<Type, MatchType, MatchType>(this, transform);
 	}
 
 	~Table() {
@@ -519,24 +530,20 @@ public:
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
 	// index
 	bool Search(const Type &data, index *idx) {
-		std::vector<StorageIndex> storage_idx = this->tree_->Search(data);
-		if (storage_idx.empty()) {
-			return false;
+		StorageIndex strg_idx;
+		bool found = this->tree_->Search(data, strg_idx);
+		if (found) {
+			*idx = this->StorageIndexToIndex(strg_idx);
 		}
-		*idx = this->StorageIndexToIndex(storage_idx[0]);
-		return true;
+		return found;
 	}
 
 	/** returns all indexes that matches hash of data in match tree*/
-	std::vector<index> MatchSearch(const Type &data) {
+	std::vector<std::pair<Type, index>> MatchSearch(const MatchType &data) {
 		if (!this->use_match_to_index_) {
 			return {};
 		}
-		std::vector<StorageIndex> stg_idxs = this->match_tree_->Search(data);
-		std::vector<index> idxs;
-		for (const auto &stg_idx : stg_idxs) {
-			idxs.push_back(StorageIndexToIndex(stg_idx));
-		}
+		return this->match_tree_->MatchSearch(data);
 	}
 
 	/**
@@ -671,10 +678,10 @@ private:
 
 	std::vector<index> &btree_indexes_;
 
-	BTree<Type, MatchType> *tree_;
+	BTree<Type, MatchType, Type> *tree_;
 
 	const bool use_match_to_index_;
-	BTree<Type, MatchType> *match_tree_;
+	BTree<Type, MatchType, MatchType> *match_tree_;
 
 	// delta storage
 	std::unique_ptr<DeltaStorage> ds_;

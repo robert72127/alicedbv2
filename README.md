@@ -1,28 +1,70 @@
 ![Alice](./assets/logo.png)
-Alicedb is database managment system, that works by transpiling queries into C++, and executing them in streaming model.
+Alicedb is incremental database library for C++, that works by executing queries in streaming model.
+
+## Development Commands
+
+### clang-format: 
+#### check
+python3 scripts/run-clang-format.py -r --exclude src/third_party --exclude tests src include
+### apply
+python3 scripts/run-clang-format.py -r --exclude src/third_party --exclude tests src include --in-place 
+
+### clang-tidy:
+#### check
+python3 scripts/run-clang-tidy.py -p build
+
+### apply
+python3 scripts/run-clang-tidy.py -p build -fix
+
+#### cmake build debug:
+cmake --buid build
+cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Debug
+
+##### cmake build release:
+cmake --buid build
+cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release
 
 ### Usage
 
 How it works?
 
-first we have to create graph instance, and assign numebrs of worker thread we want it to use
+first we have to create graph instance, and assign numbers of worker thread we want it to use
 
-auto g = std::make_shared<Graph>(worker_count);
 
-then we need to create some source nodes, design will allow to create many different kinds of source nodes but for the demo,
-we will only provide file as a source
+auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
 
-g.call("Create source S from File filename
-    column1 datatype1
-    ....
-    "
-)
+then we can create DAG instances that will represent our query
 
-g.call("Create source S2 from File filename2
-    column1 datatype1
-    ....
-"
-)
+auto *view = g->View(
+    g->Join(
+        [](const Person &p)  { return p.favourite_dog_race;},
+        [](const Dog &d)  { return d.name;},
+        [](const Person &p, const Dog &d) { 
+            return  JoinDogPerson{
+                      .name=p.name,
+                      .surname=p.surname,
+                      .favourite_dog_race=d.name,
+                      .dog_cost=d.cost,
+                      .account_balace=p.account_balance,
+                      .age=p.age
+                    };
+          },
+          g->Filter(
+              [](const Person &p) -> bool {return p.age > 18;},
+              g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+          ),
+          g->Source<Dog>(AliceDB::ProducerType::FILE, dogs_fname, parseDog,0)
+      )                    
+);
+
+and finally we can start processing data by calling
+
+db->StartGraph(g);
+
+and stop it, using 
+
+db->StopGraph(g);
+
 
 after we created source we can create our queries that will be executed in streaming way
 
@@ -33,124 +75,141 @@ g.call("Select name, surname, accout_balance from S where accout_balance > 1500
 and now we can either show results from S3, treat it as new source for new views, or write it somewhere else (not included for now)
 
 
+
 ### How it works:
-
-#### SQL Layer:
-
-SQL query is compiled into C++ graph program that streamingly computes query results, 
-then this program is compiled using off the shelf C++ compiler such as GCC and linked with currently running process,
-note our generated code doesn't contain code for say DataStorage, instead it uses call's to Object that already exist in main process. we pass this object as a pointer to dynamically linked library
 
 #### Graph layer:
 
-Graph layer stores nodes in vector and stores they dependency graph, then uses set of workers to perform computations on this graph
-calling compute on each node in topological order
+Graph layer is responsible for keeping track of nodes, monitioring whether it's already running, scheduling node's computations 
+and for type inference. 
+
+
+#### WorkerPool:
+
+WorkerPool dynamically allocate new threads, based on amount of currently running graphs, and perform computations on them.
+
+#### Storage:
+
+##### Table
+
+Main abstraction for accesing persistent data by Nodes,
+It's stores deltas, datastructure for efficient search of keys and tuples accesing.
+Is responsible for compressing deltas and garbage collection.
+Supports standard operations of insert delete search .
+
+##### Buffer Pool
+
+Integrated with disk manager through preregistered buffers, used to load disk pages into memory
+
+
+##### Disk Manager
+
+Disk manager is responsible for disk I/O
+it has it's own single thread that is responsible for
+Compaction, and managing requests with IO_URING
+
+Work operationss will return future that will be satisfied when actual operation
+is performed
+
+disk manager, delay disk write, perform in batch when at least some critical %
+of data  set write flag
+
+when to write heuristics ?
+
+ if there is read request also use this occasion to perform write on all those
+that want it
+
+file descriptor and
+all pages of buffer pool are  registered for io_uring
+/
+
+Storage layer utilises async disk worker & io_uring preregistered with buffer pool, using single file for storage
+
+#### Producers
+
+Ingest and parse data into the system, for now limited to reading from file and from tcp server.
+
 
 #### Nodes
 
 ##### Processing node in streaming database graph
- 
- for storage we need to:
- 1) be able to find count of tuple corresponding to given tuple in cache, - we can check that from the latest value and current one from cache 
- 2) be able to tell if given value at time T can be deleted from persistent storage - we can do that by checking if it's newest value and if it's ts is greater or less than current one
- 3) be able to search for all tuples that matches given one, yes by hashing on all fields, and storing mapping from this hash to list of indexes in table
- since collision could happen we will also need to check if it's a match
 
- 4) Join and group by will also need a way to effectively search by only part of tuple, ie by specific fields 
+for each tuple we would want to:
+1) store it in persistent storage, with count of such tuples in each point of time.
+2) Be able to effectively retrive it
+3) Be able to decide whether this tuple can be deleted from the system
 
 
- ok' this kinda makes sense, so now let's think again about storing indexes and count's
- 
- 
- Each Table will maintain it's own indexes, and they will only be used for garbage collection
- 
-##### This will work for Union, Except, Intersect
-ok what if we stored: single <value,index> mapping to know what index to assign to given value, this also would be persistent and append only
-<index, list<TupleLocation>> to store list of all tuples with given index in database- this will be sorted and never deleted
- 
-this way we could satisfy 1 by checking first mapping and then getting first matching from second mapping
-satisfy 2 by first checking  first mapping than second mapping
-be able to satisfy three by first checking first matching than second mapping 
- 
-##### For join and gruping functions we would need, so there would be single extra field to keep track of
-<value, index> mapping to know what index to assign to given value
-<index, list<TupleLocation>> to store list of all tuples with given index in database- this will be sorted indexes won't be deleted but lists will be trimmed
-<specific fields, index> mapping to know which tuples match given constrain
+ 4) Join and group by will also need a way to effectively search by only part of tuple, ie by specific fields,
+ defined by transformation from original tuple 
 
-#### and for cross join: we would only need
-<value, index> mapping to know what index to assign to given value, rest we have to do iteratively
+
+ Each Table will maintain it's own indexes
  
 
-So what is api that we need to provide from Tables:
-
-BatchInsert - ok
-
-Iterate - returns all tuples one by one - ok
-
-Get - this will return satisfying tuples in sorted order
-
-HashSearch - it will search for tuples,
-depending on node type we will use different map here either <specific fields, index>
-or <value_index>
-
-
- 										____________________________________
-And finally our storage would keep  | index | timestamp | count | data | 
-  								  	------------------------------------
-where timestamp persist through computation, index is maintained by each tuple, and count is being updated continiously
- 
 Node can be of type:
  
-###### Selection, which is sql substitute of
- 
-Select name, last_name, age from Osoby
-Where age > 18 and age < 65
+###### Projection, 
+
+g->Projection(
+    [](const InType &t) { return OutType {.field_x=t.field_z}; },
+    g->Source<InType>(Producer , in_file, parse_function,0)
+)
+
+doesn't care about state, doesn't care about count, doesn't care about index or timestamps, just compuuuutes on data field
+
+###### Filter, 
+
+here is example combining it with projection
+
+g->Projection(
+    [](const InType &t) { return OutType {.field_x=t.field_z}; },
+    g->Filter(
+        [](const InType &t) -> bool {return t.field_x > 18 && t.field_y[0] == 'S' ;},
+        g->Source<Type>(Producer , in_file, parse_function,0)
+    )
+)
+
+which corresponds to sql
+
+select field_z from InType
+where field_x > 18, and field_y[0] equals S
+
  
 It's selection with WHERE
- 
-so we can see that our tuple for this node may need to store all of the fields
-of ingres tuple, and it doesn't store any state(table)
- 
+
 doesn't care about state, doesn't care about count, doesn't care about index or timestamps, just compuuuutes on data field
- 
-###### Projection, which is sql substitute of
- 
- Select name, last_name, age from Osoby
- 
- It's selection but without WHERE
- 
- so we can see thah our tuple for this node may need to store all of the fields
- of ingres tuple, and it does not store any state(table)
- 
- doesn't care about state, doesn't care about count, doesn't care about index or timestamps, just compuuuutes on data field
- 
-###### Union, which is sql substitute of
- 
+
+###### Union, Except
+
+since those works in almost identical way we will only provide example of Union
+
+we can think of normal sql union as
+
  SELECT column1, column2, ...
    FROM table1
    UNION
    SELECT column1, column2, ...
    FROM table2;
- 
- It combines tuples from two tables removing duplicate values
- 
- select profesion from workers
- union
- select profession from profession
- 
- and then we remove single worker with given proffesion from table1, 
- then union should probably only remove it if there are 0 left.
- 
- So we should produce output of:  Timestamp | index| previous_count -1 | - this will be the correct state  
- or when we insert we should do the same but with	   previous_count + 1 instead 
- 
- we will want to process both queuues at once, because we process graph in topological order, so both inputs are ready
- we can first merge caches to update corresponding count's and then do single insert to table and then write it to the output
-  
- ok what if we would do this :
- tuples comes in either from right or left:
- 	insert them all into table and put it into out_cache with updated count, and right timestamps
-  
+
+
+wheres in ou case we would first do projection on table1 and table2 and the use union node,
+
+g->Union(
+    g->Projection(
+        [](const InType_1 &t) { return OutType_1 {.field_x=t.field_x, .field_y=t.field_y}; },
+        g->Source<InType>(Producer , in_file_1, parse_function_1,0)
+    ),
+    g->Projection(
+        [](const InType_2 &t) { return OutType_2 {.field_a=t.field_a, .field_b=t.field.b}; },
+        g->Source<InType>(Producer , in_file_2, parse_function_2,0)
+    )
+)
+
+both union and except are actually implemented as stateless nodes in Node.h,
+Graph.h automatically sets Distinct node as output of them so that state is persisted
+and we correctly know when to emit insert and delete to out node
+
  
 ###### Intersect which is sql substitute of
  
@@ -160,41 +219,44 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  SELECT column1, column2, ...
    FROM table2;
  
+ g->Intersect(
+    g->Projection(
+        [](const InType_1 &t) { return OutType_1 {.field_x=t.field_x, .field_y=t.field_y}; },
+        g->Source<InType>(Producer , in_file_1, parse_function_1,0)
+    ),
+    g->Projection(
+        [](const InType_2 &t) { return OutType_2 {.field_a=t.field_a, .field_b=t.field.b}; },
+        g->Source<InType>(Producer , in_file_2, parse_function_2,0)
+    )
+)
+
+Works very similiar to defined above, also places distinct node to track when to emit insert delete etc.
+But intersect operator itself is also stateful, since it need other table state to compute results
+
+
  It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_cache,
- then processed second one, also write it into table and then update result in out_cache if needed
  
  keep two tables one for each source
- so first we insert into tables, than perform cross check on both right and left and put into out 
  
- count should be left_count right_count 
+ count should be left_count x right_count 
  
-###### Difference
- 
- SELECT column1, column2, ...
-   FROM table1
-   EXCEPT
-   SELECT column1, column2, ...
-   FROM table2;
- 
- It passes tuple's that doesn't appear in second table
- 
- it needs state, to know which tuples were present in table 2
- it doesn't need to know, fields
- it only needs to store single table
- 
- and it will also need's to store table nr 1 to know what count to emit when we delete single value from table nr 1
- 
- It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_cache,
- then processed second one, also write it into table and then update result in out_cache if needed
- 
- 
- regarding count when second becomes negative new tuple will have - total_count of first,
- otherwie it will have + total_count 
- 
+
 ###### Product
  
+g->CrossJoin(
+                [](const Person &left, const Person &right){
+                    return CrossPerson{
+                        .lname=left.name,
+                        .lsurname=left.surname,
+                        .lage=left.age,
+                        .rname=right.name,
+                        .rsurname=right.surname,
+                        .rage=right.age
+                    };
+                },
+                g->Source(prod_1, 0),
+                g->Source(prod_2,0)
+            )
  // this is projection
  SELECT Employees.ID, Employees.Name, Employees.Department,
       Projects.Project_ID, Projects.Project_Name
@@ -202,19 +264,18 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  
    CROSS JOIN Projects
  	
-	 // this is filter
-   WHERE Employees.Department = 'IT' AND Projects.Project_Name = 'AI Development';
- 
  It takes two tables as ingerses and produce X product
  it needs to store two Tables
  and it doesn't need to know their fields
  
- It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_cache,
- then processed second one, also write it into table and then update result in out_cache if needed
+it matches every tuple with every other
+
+count will be multiplied of first and second
  
- count will be multiplied of first and second
- 
+###### Distinct
+
+This node output only single outtuple for given in tuple, its responsible for keeping track on when tuple count becomes positive/negative
+
 ###### Join
  
  SELECT Employees.Name, Departments.Dept_Name
@@ -223,10 +284,6 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  ON Employees.Department = Departments.Dept_ID;
  
  WE need to keep both inputs in tables
- 
- It combines tuples from two tables, only passing those that appeard in both
- we first process first, inserted it into table and written it into out_cache,
- then processed second one, also write it into table and then update result in out_cache if needed
  
  
  count will be multiplication of first and second
@@ -249,53 +306,11 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  
  it will create tuple with data | group_by field | rest of fields with appiled function
  
- 
  but the catch is we will need to search etc. tuples only by aggregate fields
- 
- 
- How will we actually perform computation and maintaint consistency?
- 
- How will we handle update delete insert?
- 
- How will we garbage collect?
- 
- How will we iterate our tables to get all matching inputs for say, joins
- 
- we will store all nodes for all queries in single graph
- graph will we defined as set of connected nodes & N workers
- 
- For each node we will let input accumulate in it's input cache,
- after some time, or amount of Tuple's in input cache we will start computation,
- in topological order.
-
-##### Table
-
-  On disk tuples will also hold InTableIndex of next(older version) of tuple
 
 
-	// Tables are sorted by <timestamp|index>
+This design allows the graph to handle inserts and deletes in a streaming fashion, updating stateful nodes and propagating changes downstream in real time.
 
-
-	// now let's think how to efficiently implement our required operations:
-	// tuple will be computed against all versions newer than itself or just newest one if it's the newest
-
-
-
-	// update timestamp
-	/*
-		for given tuple if it's first and it's pointer is less than ts -> remove all older
-		else travel to next version of this tuple and repeat
-	*/
-
-	// compaction
-	/*
-		let's assume they will only happen on shut down, could be also after X hours for some systems, but
-		we won't implement that, keep only most recent version,
-		travel pages by two at once compact them, and overlaping switch to next two pages
-
-	
- 
- 
 ##### Consistency:
  
  After computation for each node we will update it's timestamp,
@@ -319,41 +334,6 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
  if we already seen given tuple, and for all timestamp less than predefined remove those
  
  
- ##### How we will use nodes in graph creation
- 
-  firstly we need global graph object, that worker's wiil process in topological order
- 
-  So creating all nodes we need to put all of them onto graph,
-  therefore we won't create nodes directly, but instead we will do something like
-  auto graph = Graph()
- 
-  .. or first create global graph object and pass it in constructor
- 
- 
- auto in_1 = graph.input_node(constructor args...)
- auto in_2 = graph.other_input(constructor args...)
- 
- auto in_1 = input_node.filter(function).project(function)
- auto in_2 = input_node_2.filter(function).project(function)
- auto out = join(in_1, in_2)
- 
- auto result =
-  graph.join(function,
-      project(function,
-               filter(function, input_node)),
-      project(function,
-               filter(function, input_node_2)))
- 
-  Do we need types and dynamics' node creation?
- 
-  dynamic node creation would be cool, types not necessary needed
- 
- 
- let's say node also holds vector of enum fields, like:
- enum Field = {STRING, FLOAT, INT, BOOL},
- which will correspond to
- 
- 
 ##### Node's api:
  
   Compute: this will perform all computable action <for now> that is:
@@ -368,75 +348,30 @@ doesn't care about state, doesn't care about count, doesn't care about index or 
    updating table state is more costly and will be handled by worker threads
  
  
- 
- ##### All automatically created functions will work on data part of tuples
- without timestamp indexes, and op metadata
- 
 
+### Future Extensions:
 
+#### SQL Layer:
 
+SQL queries can be compiled into our C++ graph program 
+then this program would be compiled using off the shelf C++ compiler such as GCC and linked with currently running process,
+note our generated code wouldn't contain code for general DataStorage. Instead it would just generate structs, and recursively compute 
+graph layout as defined above.
 
-#### Storage:
-
-Disk manager is responsible for disk I/O
-it has it's own single thread that is responsible for
-Compaction, and managing requests with IO_URING
-
-Work operationss will return future that will be satisfied when actual operation
-is performed
-
-disk manager, delay disk write, perform in batch when at least some critical %
-of data  set write flag
-
-when to write heuristics ?
-
- if there is read request also use this occasion to perform write on all those
-that want it
-
-file descriptor and
-all pages of buffer pool are  registered for io_uring
-/
-
-
-Storage layer utilises async disk worker & io_uring preregistered with buffer pool, using single file for storage
-
+(cmu 15-721)[https://15721.courses.cs.cmu.edu/spring2024/slides/07-compilation.pdf]
 
 
 
 #### Sources
 
-(cmu 15-721)[https://15721.courses.cs.cmu.edu/spring2024/slides/07-compilation.pdf]
 
-(unixism)[https://unixism.net/loti/tutorial/fixed_buffers.html]
+(unixism)[https://unixism.net/loti/tutorial/fixed_buffers.html] - fixed buffers
 
-https://www.vldb.org/pvldb/vol7/p853-klonatos.pdf
+https://www.vldb.org/pvldb/vol7/p853-klonatos.pdf dbsp - as general for processing framework
 
-dbsp
+https://www.skyzh.dev/blog/2023-12-28-store-of-streaming-states/ - overwiew of streaming systems
 
-https://www.skyzh.dev/blog/2023-12-28-store-of-streaming-states/
-
-[dida why] https://github.com/jamii/dida/blob/main/docs/why.md
+[dida why] https://github.com/jamii/dida/blob/main/docs/why.md - dida simple streaming database based on differential dataflow,
+this document explain needs for internal consistency, eventual consistency. And batch processing in streaming system.
 
 
-## Develomnept Commands
-
-### clang-format: 
-#### check
-python3 scripts/run-clang-format.py -r --exclude src/third_party --exclude tests src include
-### apply
-python3 scripts/run-clang-format.py -r --exclude src/third_party --exclude tests src include --in-place 
-
-### clang-tidy:
-#### check
-python3 scripts/run-clang-tidy.py -p build
-
-### apply
-python3 scripts/run-clang-tidy.py -p build -fix
-
-#### cmake build debug:
-cmake --buid build
-cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Debug
-
-##### cmake build release:
-cmake --buid build
-cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release

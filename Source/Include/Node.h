@@ -1049,7 +1049,7 @@ private:
 // join on
 // match type could be even char[] in this case
 template <typename InTypeLeft, typename InTypeRight, typename MatchType, typename OutType>
-class JoinNode : public StatefulBinaryNode<InTypeLeft, InTypeRight, OutType> {
+class JoinNode : public TypedNode<OutType> {
 public:
 	JoinNode(TypedNode<InTypeLeft> *in_node_left, TypedNode<InTypeRight> *in_node_right,
 	         std::function<MatchType(const InTypeLeft &)> get_match_left,
@@ -1057,33 +1057,28 @@ public:
 	         std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout, Graph *graph, BufferPool *bp,
 	         GarbageCollectSettings &gb_settings, MetaState &left_meta, MetaState &right_meta, index left_table_index,
 	         index right_table_index)
-	    : StatefulBinaryNode<InTypeLeft, InTypeRight, OutType>(in_node_left, in_node_right, graph, bp, gb_settings,
-	                                                           left_meta, right_meta, left_table_index,
-	                                                           right_table_index),
+	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
+	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
+	      gb_settings_ {gb_settings}, left_meta_ {left_meta}, right_meta_ {right_meta},
+	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
-		/** recompute matches */
-		for (auto it = this->left_table_->begin(); it != this->left_table_->end(); ++it) {
-			auto [data, idx] = it.Get();
+		this->ts_ = get_current_timestamp();
+		this->next_clean_ts_ = ts_;
 
-			MatchType match = this->get_match_left_(*data);
+		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
 
-			if (!this->match_to_index_left_table_.contains(match)) {
-				this->match_to_index_left_table_[match] = {};
-			}
-			this->match_to_index_left_table_[match].insert(idx);
-		}
+		// init table from graph metastate based on index
 
-		for (auto it = this->right_table_->begin(); it != this->right_table_->end(); ++it) {
-			auto [data, idx] = it.Get();
+		this->left_table_ = new Table<InTypeLeft, MatchType>(left_meta.delta_filename_, left_meta.pages_,
+		                                                     left_meta.btree_pages_, bp, graph_, get_match_left);
 
-			MatchType match = this->get_match_right_(*data);
+		// we also need to set ts for the node, we will use left ts for it, thus right ts will always be 0
 
-			if (!this->match_to_index_right_table_.contains(match)) {
-				this->match_to_index_right_table_[match] = {};
-			}
-			this->match_to_index_right_table_[match].insert(idx);
-		}
+		// get reference to corresponding metastate
+
+		this->right_table_ = new Table<InTypeRight, MatchType>(left_meta.delta_filename_, left_meta.pages_,
+		                                                       left_meta.btree_pages_, bp, graph_, get_match_right);
 	}
 
 	// this function changes
@@ -1093,6 +1088,7 @@ public:
 		const char *in_data_left;
 		const char *in_data_right;
 		char *out_data;
+		std::cout << "piff\n";
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			while (this->in_cache_right_->GetNext(&in_data_right)) {
@@ -1109,54 +1105,47 @@ public:
 				}
 			}
 		}
+		std::cout << "paff\n";
 		// compute left cache against right table
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			MatchType match = this->get_match_left_(in_left_tuple->data);
 
-			auto &matches = this->match_to_index_right_table_[Key<MatchType>(match)];
+			auto matches = this->right_table_->MatchSearch(match);
+
 			for (auto it = matches.begin(); it != matches.end(); it++) {
-				index idx = *it;
-				if (this->left_delete_idxs_.contains(idx)) {
-					it = matches.erase(it);
-					continue;
-				} else {
-					InTypeRight right_data = this->right_table_->Get(idx);
-					// deltas from right table
-					const std::vector<Delta> &right_deltas = this->right_table_->Scan(idx);
-					// iterate all deltas of this tuple
-					for (auto &right_delta : right_deltas) {
-						this->out_cache_->ReserveNext(&out_data);
-						Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-						out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
-						out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
-						                    in_left_tuple->delta.count * right_delta.count};
-					}
+				index idx = it->second;
+				InTypeRight &right_data = it->first;
+				// deltas from right table
+				const std::vector<Delta> &right_deltas = this->right_table_->Scan(idx);
+				// iterate all deltas of this tuple
+				for (auto &right_delta : right_deltas) {
+					this->out_cache_->ReserveNext(&out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
+					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
+					                    in_left_tuple->delta.count * right_delta.count};
 				}
 			}
 		}
+		std::cout << "poff\n";
 
 		// compute right cache against left table
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
 			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
 			MatchType match = this->get_match_right_(in_right_tuple->data);
-			auto &matches = this->match_to_index_left_table_[Key<MatchType>(match)];
+			auto matches = this->left_table_->MatchSearch(match);
 			for (auto it = matches.begin(); it != matches.end(); it++) {
-				index idx = *it;
-				if (this->right_delete_idxs_.contains(idx)) {
-					it = matches.erase(it);
-					continue;
-				} else {
-					InTypeLeft left_data = this->left_table_->Get(idx);
-					const std::vector<Delta> &left_deltas = this->left_table_->Scan(idx);
-					// iterate all deltas of this tuple
-					for (auto &left_delta : left_deltas) {
-						this->out_cache_->ReserveNext(&out_data);
-						Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-						out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
-						out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
-						                    in_right_tuple->delta.count * left_delta.count};
-					}
+				index idx = it->second;
+				InTypeLeft &left_data = it->first;
+				const std::vector<Delta> &left_deltas = this->left_table_->Scan(idx);
+				// iterate all deltas of this tuple
+				for (auto &left_delta : left_deltas) {
+					this->out_cache_->ReserveNext(&out_data);
+					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
+					out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
+					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
+					                    in_right_tuple->delta.count * left_delta.count};
 				}
 			}
 		}
@@ -1168,13 +1157,6 @@ public:
 			index idx = this->right_table_->Insert(in_right_tuple->data);
 
 			this->right_table_->InsertDelta(idx, in_right_tuple->delta);
-
-			// track match on insert
-			MatchType match = this->get_match_right_(in_right_tuple->data);
-			if (!this->match_to_index_right_table_.contains(Key<MatchType>(match))) {
-				this->match_to_index_right_table_[Key<MatchType>(match)] = {};
-			}
-			this->match_to_index_right_table_[Key<MatchType>(match)].insert(idx);
 		}
 
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
@@ -1182,13 +1164,6 @@ public:
 			// and this will actually handle inserting into both match tree and normal btree
 			index idx = this->left_table_->Insert(in_left_tuple->data);
 			this->left_table_->InsertDelta(idx, in_left_tuple->delta);
-
-			// track match on insert
-			MatchType match = this->get_match_left_(in_left_tuple->data);
-			if (!this->match_to_index_left_table_.contains(Key<MatchType>(match))) {
-				this->match_to_index_left_table_[Key<MatchType>(match)] = {};
-			}
-			this->match_to_index_left_table_[Key<MatchType>(match)].insert(idx);
 		}
 
 		// clean in_caches
@@ -1206,13 +1181,38 @@ public:
 			std::vector<index> right_delete_idxs =
 			    this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 
-			// now we can either iterate all left matches and right matches, and remove deleted indexes from values,
-			// ..or, just store delete idx and only really delete them during match, search, and we don't need to update
-			// anything in destructor since it's not persistent state
-			this->left_delete_idxs_.insert(left_delete_idxs.begin(), left_delete_idxs.end());
-			this->right_delete_idxs_.insert(right_delete_idxs.begin(), right_delete_idxs.end());
-
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+		}
+	}
+
+	~JoinNode() {
+		delete this->out_cache_;
+		delete this->left_table_;
+		delete this->right_table_;
+	}
+
+	Cache *Output() {
+		this->out_count++;
+		return this->out_cache_;
+	}
+	void CleanCache() {
+		clean_count++;
+		if (this->clean_count == this->out_count) {
+			this->out_cache_->Clean();
+			this->clean_count = 0;
+		}
+	}
+
+	timestamp GetFrontierTs() const {
+		return this->frontier_ts_;
+	}
+
+	void UpdateTimestamp(timestamp ts) {
+		if (this->ts_ + this->frontier_ts_ < ts) {
+			this->compact_ = true;
+			this->ts_ = ts;
+			this->in_node_left_->UpdateTimestamp(ts);
+			this->in_node_right_->UpdateTimestamp(ts);
 		}
 	}
 
@@ -1223,23 +1223,42 @@ private:
 		return !std::memcmp(&left_match, &right_match, sizeof(MatchType));
 	}
 
-	// we need those functions to calculate matchfields from tuples on left and
-	// righ
+	void Compact() {
+		this->left_table_->MergeDelta(this->ts_);
+		this->right_table_->MergeDelta(this->ts_);
+	}
+
 	std::function<MatchType(const InTypeLeft &)> get_match_left_;
 	std::function<MatchType(const InTypeRight &)> get_match_right_;
 	std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 
-	/**  we will store matches as non persistent storage,
-	    on system start we will recalculate matches for all tuples,
-	    then when inserting new tuples we will just compare their matches and check for indexes
-	*/
-	std::unordered_map<std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType>>
-	    match_to_index_left_table_;
-	std::unordered_map<std::array<char, sizeof(MatchType)>, std::set<index>, KeyHash<MatchType>>
-	    match_to_index_right_table_;
+	Graph *graph_;
 
-	std::unordered_set<index> left_delete_idxs_ = {};
-	std::unordered_set<index> right_delete_idxs_ = {};
+	TypedNode<InTypeLeft> *in_node_left_;
+	TypedNode<InTypeRight> *in_node_right_;
+
+	Table<InTypeLeft, MatchType> *left_table_;
+	Table<InTypeRight, MatchType> *right_table_;
+
+	Cache *in_cache_left_;
+	Cache *in_cache_right_;
+
+	Cache *out_cache_;
+	int out_count = 0;
+	int clean_count = 0;
+
+	GarbageCollectSettings &gb_settings_;
+	timestamp next_clean_ts_;
+
+	MetaState &left_meta_;
+	MetaState &right_meta_;
+
+	// timestamp will be used to track valid tuples
+	// after update propagate it to input nodes
+	bool compact_ = false;
+	timestamp ts_;
+
+	timestamp frontier_ts_;
 };
 
 /**

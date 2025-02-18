@@ -79,11 +79,13 @@ also all our storage can be single threaded since we work on single node by one 
 #define ALICEDBSTORAGE
 
 #include "BufferPool.h"
+#include "City.h"
 #include "Common.h"
 #include "TablePage.h"
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -100,7 +102,7 @@ class Graph;
  */
 class DeltaStorage {
 public:
-	template <typename Type>
+	template <typename Type, typename MatchType>
 	friend class Table;
 
 	/*initialize delta storage from log file*/
@@ -260,24 +262,17 @@ private:
 struct StorageIndex {
 	index page_id_;
 	index tuple_id_;
-};
 
-template <typename Key>
-class BTree {
+	bool operator<(const StorageIndex &other) const {
+		if (this->page_id_ == other.page_id_) {
+			return this->tuple_id_ < other.tuple_id_;
+		}
+		return this->page_id_ < other.page_id_;
+	}
 
-	BTree(BufferPool *bp);
-
-	// return true if key was not present, else returns false, sets idx to corresponding index
-	bool Insert(const Key &key, const StorageIndex &idx);
-
-	bool Delete(Key *key);
-
-	// searches for key if it finds it sets idx to corresponding index, and returns true,
-	// else returns alse
-	bool Search(const Key &key, const StorageIndex &idx);
-
-private:
-	std::vector<index> btree_page_indexes_;
+	bool operator==(const StorageIndex &other) const {
+		return this->page_id_ == other.page_id_ && this->tuple_id_ == other.tuple_id_;
+	}
 };
 
 template <typename Type>
@@ -285,7 +280,6 @@ struct HeapState {
 	const Type *data_;
 	index idx_;
 };
-
 template <typename Type>
 class HeapIterator {
 public:
@@ -309,7 +303,6 @@ public:
 		this->tpl_idx_++;
 
 		while (!this->current_page_->Contains(tpl_idx_)) {
-			/** @todo  we need to make sure we didn't reach end of pages, and if so return heapiterator end or sth */
 
 			if (this->tpl_idx_ == this->tuples_per_page_) {
 				this->tpl_idx_ = 0;
@@ -351,19 +344,130 @@ private:
 	std::unique_ptr<TablePageReadOnly<Type>> current_page_;
 };
 
+template <typename Type, typename MatchType>
+class Table;
+
+template <typename Type>
+Type Identity(const Type &input) {
+	return input;
+}
+
+template <typename Type, typename TableType, typename MatchType>
+struct SearchTree {
+
+	SearchTree(Table<Type, TableType> *table, std::function<MatchType(const Type &)> transform)
+	    : table_ {table}, transform_ {transform}, key_size_ {sizeof(MatchType)} {
+		// init tuples to tables from heap iterator
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+			auto [data, idx] = it.Get();
+			this->Insert(*data, this->table_->IndexToStorageIndex(idx));
+			Type other = this->table_->Get(idx);
+			assert(std::memcmp(data, &other, key_size_) == 0);
+		}
+	}
+
+	// return true if key was not present, else returns false, sets idx to corresponding index
+	void Insert(const Type &key, const StorageIndex &idx) {
+		MatchType match_key = this->transform_(key);
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
+
+		if (!this->tuples_to_index_.contains(key_hash)) {
+			this->tuples_to_index_[key_hash] = {};
+		}
+		auto &vec = this->tuples_to_index_[key_hash];
+		auto pos = std::upper_bound(vec.begin(), vec.end(), idx);
+		vec.insert(pos, idx);
+	}
+
+	// searches for key if it finds it sets idx to corresponding index, and returns true,
+	// else returns alse
+	bool Search(const Type &key, StorageIndex &idx) {
+		MatchType match_key = this->transform_(key);
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
+		auto &candidates = this->tuples_to_index_[key_hash];
+		for (const auto &candidate_idx : candidates) {
+			Type candidate = this->table_->Get(this->table_->StorageIndexToIndex(candidate_idx));
+			if (std::memcmp((char *)&candidate, (char *)&match_key, this->key_size_) == 0) {
+				idx = candidate_idx;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// searches for key if it finds it sets idx to corresponding index, and returns true,
+	// else returns alse
+	std::vector<std::pair<Type, index>> MatchSearch(const MatchType &match_key) {
+		std::vector<std::pair<Type, index>> matching_idx;
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
+		auto &candidates = this->tuples_to_index_[key_hash];
+		for (const auto &candidate_idx : candidates) {
+			index tuple_idx = this->table_->StorageIndexToIndex(candidate_idx);
+			Type candidate = this->table_->Get(tuple_idx);
+			MatchType match_candidate = this->transform_(candidate);
+			if (std::memcmp((char *)&match_candidate, (char *)&match_key, this->key_size_) == 0) {
+				matching_idx.push_back({candidate, tuple_idx});
+			}
+		}
+		return matching_idx;
+	}
+
+	bool Delete(const Type &key, StorageIndex str_idx) {
+		MatchType match_key = this->transform_(key);
+		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
+
+		auto &vec = this->tuples_to_index_[key_hash];
+		for (auto it = vec.begin(); it != vec.end(); it++) {
+			if (*it == str_idx) {
+				it = vec.erase(it);
+				return true;
+			}
+		}
+		return false;
+	}
+
+private:
+	Table<Type, TableType> *table_;
+	size_t key_size_;
+	// std::vector<index> btree_page_indexes_;
+	std::unordered_map<uint64_t, std::vector<StorageIndex>> tuples_to_index_ = {};
+
+	std::function<MatchType(const Type &)> transform_;
+};
+
 /**
  * @brief all the stuff that might be needed,
  * B+tree's? we got em,
  * Delta's with persistent storage? you guessed it we got em too
  */
-template <typename Type>
+template <typename Type, typename MatchType = Type>
 class Table {
 public:
 	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
 	      BufferPool *bp, Graph *g)
 	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)},
 	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
-	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))} {
+	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))}, use_match_to_index_ {false} {
+
+		this->tree_ = new SearchTree<Type, MatchType, Type>(this, Identity<Type>);
+	}
+
+	Table(std::string delta_storage_fname, std::vector<index> &data_page_indexes, std::vector<index> &btree_indexes,
+	      BufferPool *bp, Graph *g, std::function<MatchType(const Type &)> transform)
+	    : bp_ {bp}, g_ {g}, ds_ {std::make_unique<DeltaStorage>(delta_storage_fname)},
+	      data_page_indexes_ {data_page_indexes}, btree_indexes_ {btree_indexes},
+	      tuples_per_page_ {PageSize / (sizeof(bool) + sizeof(Type))}, use_match_to_index_ {true} {
+
+		this->tree_ = new SearchTree<Type, MatchType, Type>(this, Identity<Type>);
+
+		this->match_tree_ = new SearchTree<Type, MatchType, MatchType>(this, transform);
+	}
+
+	~Table() {
+		delete tree_;
+		if (this->use_match_to_index_) {
+			delete match_tree_;
+		}
 	}
 
 	// return index if data already present in table, doesn't insert but just return index
@@ -385,6 +489,12 @@ public:
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
+			this->tree_->Insert(in_data,
+			                    this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+			if (this->use_match_to_index_) {
+				this->match_tree_->Insert(
+				    in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+			}
 			return idx + this->tuples_per_page_ * this->current_page_idx_;
 		}
 
@@ -402,10 +512,16 @@ public:
 		}
 
 		if (this->current_page_idx_ == this->data_page_indexes_.size()) {
-			// if there is no place left in current write page, allocate new one
+			// if theSearchre is no place left in current write page, allocate new one
 			write_page = std::make_unique<TablePage<Type>>(this->bp_, this->tuples_per_page_);
 			this->data_page_indexes_.push_back(write_page->GetDiskIndex());
 			write_page->Insert(in_data, &idx);
+		}
+
+		this->tree_->Insert(in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
+		if (this->use_match_to_index_) {
+			this->match_tree_->Insert(
+			    in_data, this->IndexToStorageIndex(idx + this->tuples_per_page_ * this->current_page_idx_));
 		}
 
 		return idx + this->tuples_per_page_ * this->current_page_idx_;
@@ -414,25 +530,29 @@ public:
 	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
 	// index
 	bool Search(const Type &data, index *idx) {
-
-		for (HeapIterator<Type> it = this->begin(); it != this->end(); ++it) {
-			HeapState<Type> state = it.Get();
-			if (std::memcmp(&data, state.data_, sizeof(Type)) == 0) {
-				*idx = state.idx_;
-				return true;
-			}
+		StorageIndex strg_idx;
+		bool found = this->tree_->Search(data, strg_idx);
+		if (found) {
+			*idx = this->StorageIndexToIndex(strg_idx);
 		}
+		return found;
+	}
 
-		return false;
+	/** returns all indexes that matches hash of data in match tree*/
+	std::vector<std::pair<Type, index>> MatchSearch(const MatchType &data) {
+		if (!this->use_match_to_index_) {
+			return {};
+		}
+		return this->match_tree_->MatchSearch(data);
 	}
 
 	/**
+	 *
 	 * @brief deletes all tuples that are older than ts,
 	 * if zeros_only is set only those for which current delta count is zero are deleted
 	 *
-	 * @return list of deleted tuple indexes
 	 * */
-	std::vector<index> GarbageCollect(timestamp ts, bool zeros_only) {
+	void GarbageCollect(timestamp ts, bool zeros_only) {
 		// first we got to iterate delta storage to get vector of all the indexes we wish to delete
 		std::vector<index> delete_indexes;
 
@@ -461,9 +581,17 @@ public:
 		std::sort(delete_indexes.begin(), delete_indexes.end());
 		std::unique_ptr<TablePage<Type>> wip_page_;
 		for (const auto &idx : delete_indexes) {
-			auto [page_idx, tpl_idx] = this->IndexToStorageIndex(idx);
+			StorageIndex strg_idx = this->IndexToStorageIndex(idx);
+			index page_idx = strg_idx.page_id_;
+			index tpl_idx = strg_idx.tuple_id_;
 			if (!wip_page_ || wip_page_->GetDiskIndex() != page_idx) {
 				wip_page_ = std::make_unique<TablePage<Type>>(this->bp_, page_idx, this->tuples_per_page_);
+			}
+			// get key, and remove it from tree
+			Type *Key = wip_page_->Get(tpl_idx);
+			this->tree_->Delete(*Key, strg_idx);
+			if (this->use_match_to_index_) {
+				this->match_tree_->Delete(*Key, strg_idx);
 			}
 			wip_page_->Remove(tpl_idx);
 		}
@@ -475,7 +603,6 @@ public:
 		}
 
 		// then we can return list of deleted indexes, then we set current write page to first one that has holes
-		return delete_indexes;
 
 		// and also when we will insert new pages we will now consider this page, and then next ones.. till we reach
 		// end, only then we will alloc new page
@@ -504,7 +631,6 @@ public:
 	// other will be iterate all tuples, so heap based for
 	// cross join and compact delta for distinct node
 
-	/** @todo all iterators should return tuple or sth so like data - pointer | index */
 	HeapIterator<Type> begin() {
 		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_,
 		                          this->data_page_indexes_.size());
@@ -537,15 +663,15 @@ public:
 		return this->ds_->Size();
 	}
 
-private:
 	inline index StorageIndexToIndex(StorageIndex sidx) {
-		return this->tuples_per_page * sidx.page_id_ + sidx.tuple_id_;
+		return this->tuples_per_page_ * sidx.page_id_ + sidx.tuple_id_;
 	}
 
 	StorageIndex IndexToStorageIndex(index idx) {
 		return {idx / this->tuples_per_page_, idx % this->tuples_per_page_};
 	}
 
+private:
 	// methods for page accesing etc
 
 	// heap data pages
@@ -555,6 +681,11 @@ private:
 	index current_page_idx_ = 0;
 
 	std::vector<index> &btree_indexes_;
+
+	SearchTree<Type, MatchType, Type> *tree_;
+
+	const bool use_match_to_index_;
+	SearchTree<Type, MatchType, MatchType> *match_tree_;
 
 	// delta storage
 	std::unique_ptr<DeltaStorage> ds_;

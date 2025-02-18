@@ -19,7 +19,7 @@ namespace AliceDB {
 class DataBase {
 public:
 	/** @brief Initialize shared graphs state, such as common directory, worker pool , buffer pool, disk manager */
-	DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 2,
+	DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 1,
 	         GarbageCollectSettings *gb_settings = nullptr)
 	    : database_directory_(database_directory), graph_count_ {0} {
 

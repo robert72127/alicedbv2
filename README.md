@@ -1,4 +1,3 @@
-![Alice](./assets/logo.png)
 Alicedb is incremental database library for C++, that works by executing queries in streaming model.
 
 ## Development Commands
@@ -335,19 +334,24 @@ This design allows the graph to handle inserts and deletes in a streaming fashio
  
  
 ##### Node's api:
- 
+
+  all nodes implement following api
+
   Compute: this will perform all computable action <for now> that is:
  
-       Updating timestamp of internal tables possibly with garbage collection
-       Computing out_tuples
+  Updating timestamp of internal tables, compacting deltas, inserting tuples into persistent storage, providing output into out_cache
  
    Output: return out_cache of given node: this will be used by graph layer for chaining nodes
  
- 
    UpdateTimestamp: this will be called by output nodes it will update ts and propagate to input nodes
    updating table state is more costly and will be handled by worker threads
- 
- 
+
+
+  CleanCache: - keeps track on nuber of output nodes, to know when all of them processed this node's output cacne and it can be cleaned 
+
+
+	GetFrontierTs: - returns how much time in the past from current time do we have to store deltas
+
 
 ### Future Extensions:
 

@@ -1,75 +1,13 @@
 /*
-We need to store three things:
+We need to store following things:
 
-< Index | Timestamp > -> Count - this can either be done entirely in memory or also using btree, cause it gives us
-prefix search for free
-
-<Key(Tuple) | index> - this can be done by btree
-
-<Match | Keys> - this will be recomputed on the fly when restarting the system
-
-but before we go further let's think what are acces cases :
+<Index > list of pairs <timestamp| count> sorted by timestamp - this is handled by delta storage
 
 
-<index | timestamp  ||| count > - acces:
+<Key(Tuple) | index> - index is naturally computed based on tuple location in heap file,
+but's its also stored in searchtree(couldn't find better name)
 
-searching all indexes up to given timestamp for merge.
-
-
-searching all indexes up to given timestamp for insert new item.
-
-inserting new timestamps
-
-delete old timestamp
-
-so read is always sequential
-
-hmm we can use in  memory only  structure, and log new timestamps to per table file,
-then during compaction update file to new one
-
-so if crash read log, and update persistent on save
-
-
-<Key(Tuple) ||| Index> -> acces:
-
-search : when we get tuple we can check whether it already has index by searching b+tree
-insert : assign new index
-search: find all matching tuples in other table
-
-
-<Match ||| Key(Tuple)> -> acces:
-
-search find all matching tuples in other table
-insert, create new entry that will point to right tuple
-
-
-------------------------------------------------------------------
-
-all in all we could simpy store
-
-
-<tuple ||| index ||| count > as persistent data.
-
-+ log file for deltas
-
-+ in memory <index| timestamp -> count > data structure for deltas
-
-and build b+tree indexed by:
-
-
-tuple for getting correct index'es
-
-match field for gettign correct tuples for joins
-
-Now there is also matter of indexes:
-
-cause in theory we could also build third b+tree that uses indexes this should be light since indexes are just ints so
-small data. However is it really needed? we could load it into memory once at the beginning and then once to persistent
-storage at the end
-
-
-So now we can implement api and then see if we can replace our storage with this design
-
+<Match | Keys> - recomputed on the fly when restarting the system, also stored in search tree
 
 also all our storage can be single threaded since we work on single node by one thread at once
 

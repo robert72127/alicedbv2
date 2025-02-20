@@ -1176,10 +1176,8 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			std::vector<index> left_delete_idxs =
-			    this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			std::vector<index> right_delete_idxs =
-			    this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}

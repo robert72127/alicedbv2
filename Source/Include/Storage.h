@@ -192,11 +192,6 @@ private:
 	std::string log_file_;
 };
 
-/**
- *  @brief persistent storage
- *
- */
-
 struct StorageIndex {
 	index page_id_;
 	index tuple_id_;
@@ -290,6 +285,11 @@ Type Identity(const Type &input) {
 	return input;
 }
 
+/**
+ * @brief class that is used for fast search on whether given key already exists in database,
+ * it stores hash of the key with index as value, to confirm tuple is actually present in persistent storage,
+ * and presence of key is not effect of colission it reads page from disk to confirm
+ */
 template <typename Type, typename TableType, typename MatchType>
 struct SearchTree {
 
@@ -299,8 +299,6 @@ struct SearchTree {
 		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
 			auto [data, idx] = it.Get();
 			this->Insert(*data, this->table_->IndexToStorageIndex(idx));
-			Type other = this->table_->Get(idx);
-			assert(std::memcmp(data, &other, key_size_) == 0);
 		}
 	}
 
@@ -333,8 +331,7 @@ struct SearchTree {
 		return false;
 	}
 
-	// searches for key if it finds it sets idx to corresponding index, and returns true,
-	// else returns alse
+	// searches for  key if it finds it returns all tuples that corresponds to match_key
 	std::vector<std::pair<Type, index>> MatchSearch(const MatchType &match_key) {
 		std::vector<std::pair<Type, index>> matching_idx;
 		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
@@ -350,6 +347,7 @@ struct SearchTree {
 		return matching_idx;
 	}
 
+	// deletes tuple from storage
 	bool Delete(const Type &key, StorageIndex str_idx) {
 		MatchType match_key = this->transform_(key);
 		uint64 key_hash = CityHash64WithSeed((char *)&match_key, this->key_size_, 0);
@@ -374,9 +372,7 @@ private:
 };
 
 /**
- * @brief all the stuff that might be needed,
- * B+tree's? we got em,
- * Delta's with persistent storage? you guessed it we got em too
+ * General storage class that tracks deltas, and tuples
  */
 template <typename Type, typename MatchType = Type>
 class Table {

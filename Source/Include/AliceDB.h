@@ -108,6 +108,9 @@ public:
 		return g;
 	}
 
+	/**
+	 * @brief start performing computations on given graph
+	 */
 	void StartGraph(Graph *g) {
 		if (pool_) {
 			pool_->Start(g);

@@ -14,7 +14,6 @@
 
 namespace AliceDB {
 
-#define HOLES_THRESHOLD   (0.1)
 #define DISK_OP_THRESHOLD 0.01 // (0.01)
 
 enum class DiskOp { Write, Read };
@@ -95,23 +94,6 @@ private:
 	 */
 	void ForceFlush();
 
-	/**
-	 * @brief Removes holes from on disk file
-	 * this operation also modifies Buffer Pool and Table's
-	 * updating page's to new indexes so it needs a way to temporary block them
-	 *
-	 * @note this function is only called by worker_thread
-	 * and assumes mutex is being held
-	 *
-	 * There is another kind of compaction which is Table specific.
-	 * Each Table can remove tuples which will create holes in it's
-	 * pages.After Table removes enough tuples there will come time when
-	 * number of deleted tuples * tuple size > greater than PageSize,
-	 * this also needs to be compacted it is however implemented by other
-	 * part of the system, here we only care about removing PageSize'd holes
-	 */
-	int Compact();
-
 	/** submit io_uring  request
 	 * remember to update BufferPool metadata
 	 * clean free'd page's and add them to free list
@@ -164,8 +146,6 @@ private:
 	std::mutex holes_mutex_;
 	unsigned int holes_count_ = 0;
 	std::list<index> holes_;
-	const float holes_threshold_ = HOLES_THRESHOLD;
-	bool compact_ = false;
 
 	// io_uring
 	struct io_uring ring_;

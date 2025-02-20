@@ -68,9 +68,6 @@ private:
 
 /*
   Buffer pool is used to work on persistent data that is stored for each table
-  for start we will support write && reading in iterative way, there is no concept of transaction
-  && There will be N worker thread and each worker will pin single page at most,
-  For now assume there always will be some unpined pages to be used.
   After page is unpined, it can be removed from buffer pool, if it's dirty it must be flushed
   to the disk
 

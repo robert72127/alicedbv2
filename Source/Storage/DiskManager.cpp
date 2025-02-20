@@ -128,10 +128,6 @@ DiskManager::~DiskManager() {
 		close(this->fd_);
 	}
 
-	/** @todo write holes numbers into some metadata file,
-	 * later on when we will call DiskManager() again load hole numbers from it
-	 *
-	 */
 	std::filesystem::path metadata_path = this->file_path_;
 	metadata_path.replace_extension(".metadata");
 	this->WriteMetadata(metadata_path);
@@ -225,13 +221,6 @@ bool DiskManager::DeletePage(const index &on_disk_page_id) {
 
 	this->holes_.emplace_back(on_disk_page_id);
 	this->holes_count_++;
-
-	// check if we should notify worker
-	if (this->holes_count_ / this->page_count_ > holes_threshold_) {
-		this->compact_ = true;
-		// notify worker
-		this->condition_var_.notify_one();
-	}
 
 	return true;
 }
@@ -422,11 +411,6 @@ void DiskManager::WriteMetadata(std::filesystem::path metadata_path) {
 	file << "\n";
 }
 
-/** @todo implement later when we will have tables and buffer pool*/
-int DiskManager::Compact() {
-	return true;
-}
-
 void DiskManager::WorkerThread() {
 	try {
 		while (true) {
@@ -434,23 +418,12 @@ void DiskManager::WorkerThread() {
 
 			std::unique_lock<std::mutex> lock(this->work_mutex_);
 			this->condition_var_.wait_for(lock, std::chrono::microseconds(this->sleep_duration_ms_),
-			                              [this] { return this->stop_ || this->perform_disk_op_ || this->compact_; });
+			                              [this] { return this->stop_ || this->perform_disk_op_; });
 
 			if (this->stop_) {
 				lock.unlock();
 				break; // Exit the loop
 			}
-			/** @todo implement compaction  */
-			/*
-			if (this->compact_) {
-			    lock.unlock();
-			    if (Compact()) {
-			        // @todo  maybe instead copy this file first and restore on fail, or
-			        // assume it always work's
-			        throw std::runtime_error("Compaction failed");
-			    }
-			}
-			*/
 
 			// either timeout or perform_disk_op is set to true
 			else if (this->submit_work_requests_.size() > 0) {

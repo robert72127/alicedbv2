@@ -16,7 +16,7 @@ struct Delta {
 	int count;
 };
 
-// this will be used by cache to transfer data
+// used by cache to transfer data
 template <typename Type>
 struct Tuple {
 	Delta delta;
@@ -29,17 +29,6 @@ struct DeltaComparator {
 		return a.ts < b.ts; // Sort based on the timestamp
 	}
 };
-
-/* use buffer pool and memory arena for cache as two separate memory pools
-
-Starting: BufferPool start first then disk manager
-
-Stopping: Stop buffer pool, send all write requests, then stop DiskManager
-
-*/
-
-template <typename T>
-concept Arithmetic = std::is_arithmetic_v<T>;
 
 inline timestamp get_current_timestamp() {
 	auto now = std::chrono::system_clock::now();

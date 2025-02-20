@@ -55,14 +55,18 @@ class WorkerPool {
 public:
 	explicit WorkerPool(int max_workers_cnt = 1)
 	    : max_workers_cnt_ {max_workers_cnt > 0 ? max_workers_cnt : 1}, workers_cnt_ {0} {
+		this->stop_worker_.resize(this->max_workers_cnt_);
+		for (int i = 0; i < this->max_workers_cnt_; i++) {
+			this->stop_worker_[i] = true;
+		}
 	}
 
 	~WorkerPool() {
 		this->StopAll();
 		std::lock_guard<std::mutex> lock(threads_lock_);
-		for (auto &w : this->workers_) {
-			if (w.worker_thread_.joinable()) {
-				w.worker_thread_.join();
+		for (auto &worker : this->workers_) {
+			if (worker.joinable()) {
+				worker.join();
 			};
 		}
 	}
@@ -74,7 +78,8 @@ public:
 	// remove graph g from being processed by worker poll
 	/** @todo if after stop there will be more workers than threads stop some worker */
 	void Stop(Graph *g) {
-		this->graphs_lock_.lock();
+		std::scoped_lock(graphs_lock_);
+		// this->graphs_lock_.lock();
 		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
 			if ((*it)->g_ == g) {
 				(*it)->shared_lock_.lock();
@@ -82,20 +87,18 @@ public:
 				this->graphs_.erase(it);
 				state->shared_lock_.unlock();
 				/** @todo maybe not delete but just stop processing it and still make accesible? */
-				state.reset();
-
 				break;
 			}
 		}
-		this->graphs_lock_.unlock();
+		// this->graphs_lock_.unlock();
 
 		this->threads_lock_.lock();
 		if (this->workers_cnt_ > this->graphs_.size()) {
 			int i = this->workers_cnt_ - 1;
 			this->workers_cnt_--;
-			this->workers_[i].stop_ = true;
-			if (this->workers_[i].worker_thread_.joinable()) {
-				this->workers_[i].worker_thread_.join();
+			this->stop_worker_[i] = true;
+			if (this->workers_[i].joinable()) {
+				this->workers_[i].join();
 			}
 			this->workers_.pop_back();
 		}
@@ -103,14 +106,24 @@ public:
 	}
 
 	void Start(Graph *g) {
-		g->Start();
-		this->graphs_lock_.lock();
-		graphs_.push_back(std::make_shared<GraphState>(g));
-		this->graphs_lock_.unlock();
+		std::scoped_lock(graphs_lock_);
+		if (g) {
+			g->Start();
+		}
+		// this->graphs_lock_.lock();
+		for (const auto &state : graphs_) {
+			if (state->g_ == g) {
+				// this->graphs_lock_.unlock();
+				return;
+			}
+		}
+		graphs_.emplace_back(std::make_shared<GraphState>(g));
+		// this->graphs_lock_.unlock();
 
 		this->threads_lock_.lock();
 		if (this->workers_cnt_ < this->graphs_.size() && this->workers_cnt_ < this->max_workers_cnt_) {
-			this->workers_.emplace_back(std::thread(&WorkerPool::WorkerThread, this, workers_cnt_), false);
+			this->stop_worker_[workers_cnt_] = false;
+			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, workers_cnt_);
 			this->workers_cnt_++;
 		}
 		this->threads_lock_.unlock();
@@ -119,7 +132,7 @@ public:
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
-			while (!this->workers_[index].stop_ && !this->stop_all_) {
+			while (!this->stop_worker_[index] && !this->stop_all_) {
 				auto task = this->GetWork();
 				if (!task) {
 					return;
@@ -149,18 +162,19 @@ private:
 	 * @return function that needs to be performed
 	 */
 	std::shared_ptr<GraphState> GetWork() {
-		this->graphs_lock_.lock();
-		// should neven happen
+		std::scoped_lock(graphs_lock_);
+		// this->graphs_lock_.lock();
+		//  should neven happen
 		size_t g_size = this->graphs_.size();
 		int index = this->next_index_;
-		next_index_ = next_index_ + 1 < g_size ? next_index_ + 1 : 0;
+		next_index_ = (next_index_ + 1) % g_size;
 
 		if (g_size == 0) [[unlikely]] {
-			this->graphs_lock_.unlock();
+			// this->graphs_lock_.unlock();
 			return nullptr;
 		}
 		this->graphs_[index]->shared_lock_.lock_shared();
-		this->graphs_lock_.unlock();
+		// this->graphs_lock_.unlock();
 		return this->graphs_[index];
 	}
 
@@ -172,7 +186,9 @@ private:
 	// index next graph to be processed
 	int next_index_ = 0;
 
-	std::vector<WorkerState> workers_;
+	std::vector<std::thread> workers_;
+	std::vector<bool> stop_worker_;
+
 	std::mutex threads_lock_;
 	bool stop_all_ = false;
 

@@ -28,6 +28,8 @@ enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
  */
 class Graph {
 public:
+	/** @brief  create graph instance with, read metadata from graph_directory if it exists,
+	 * load garbage collector settings that will be applied for all nodes */
 	Graph(std::filesystem::path graph_directory, BufferPool *bp, GarbageCollectSettings &gb_settings)
 	    : graph_directory_ {graph_directory}, bp_ {bp}, gb_settings_ {gb_settings} {
 		// graph file format:
@@ -129,6 +131,7 @@ public:
 		}
 	}
 
+	/** Write metadata about graph to file and shut it down */
 	~Graph() {
 
 		/** call destructor on nodes */
@@ -177,12 +180,13 @@ public:
 		}
 	}
 
-	// we will store all metadata in graph. nodes will just hold references to it's own meta state based on index
+	/* All metadata about tables is owned by graph
+	 graph. nodes will just hold references to it's own meta state based on index */
 	MetaState &GetTableMetadata(index table_idx) {
 		return this->tables_metadata_[table_idx];
 	}
 
-	// Node creations
+	// Stateless  node,  responsible for reading data from producer, and passing it to the system
 	template <typename Type>
 	auto Source(ProducerType prod_type, const std::string &prod_source,
 	            std::function<bool(std::istringstream &, Type *)> parse, timestamp frontier_ts, int duration_us = 500)
@@ -195,6 +199,7 @@ public:
 		return Source;
 	}
 
+	// Allows for storing output state of any node
 	template <typename N>
 	auto View(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
@@ -210,6 +215,7 @@ public:
 		return sink;
 	}
 
+	// stateless node that filters tuples based on condition applied to it
 	template <typename F, typename N>
 	auto Filter(F condition, N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
@@ -220,6 +226,7 @@ public:
 		return filter;
 	}
 
+	// stateless node that creates output tuples from input tuples using projection function
 	template <typename F, typename N>
 	auto Projection(F projection_function, N *in_node)
 	    -> TypedNode<std::invoke_result_t<F, const typename N::value_type &>> * {
@@ -232,6 +239,7 @@ public:
 		return projection;
 	}
 
+	// Statefull node that keeps track whether current tuple count is positive or negative for each tuple
 	template <typename N>
 	auto Distinct(N *in_node) -> TypedNode<typename N::value_type> * {
 		this->check_running();
@@ -246,6 +254,8 @@ public:
 		return distinct;
 	}
 
+	// Creates stateless union node that unions inputs from left and right node, after that creates distinct node as its
+	// output
 	template <typename N>
 	auto Union(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
@@ -257,6 +267,8 @@ public:
 		return Distinct(plus);
 	}
 
+	// Creates stateless except node that computes difference of inputs from left and right node, after that creates
+	// distinct node as its output
 	template <typename N>
 	auto Except(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
@@ -268,6 +280,8 @@ public:
 		return Distinct(plus);
 	}
 
+	// Creates statefull node that computes intersection of inputs from left and right node, after that creates distinct
+	// node as its output
 	template <typename N>
 	auto Intersect(N *in_node_left, N *in_node_right) -> TypedNode<typename N::value_type> * {
 		this->check_running();
@@ -286,7 +300,7 @@ public:
 		return Distinct(intersect);
 	}
 
-	// crossjoin deduces outtype from join_layout and input node types
+	// Statefull crossproduct node
 	template <typename F, typename NL, typename NR>
 	auto CrossJoin(F join_layout, NL *in_node_left, NR *in_node_right)
 	    -> TypedNode<std::invoke_result_t<F, const typename NL::value_type &, const typename NR::value_type &>> * {
@@ -310,7 +324,9 @@ public:
 		return cross_join;
 	}
 
-	// join deduces matchType get_match_left, get_match_right, and mutType from join_layout
+	// Statefull join node join deduces matchType get_match_left, get_match_right, and mutType from join_layout
+	// get match functions are responsible for accesing matched fields from left and right inputs, join layout
+	// specify layout of the output
 	template <typename F_left, typename F_right, typename F_join, typename NL, typename NR>
 	auto Join(F_left get_match_left, F_right get_match_right, F_join join_layout, NL *in_node_left, NR *in_node_right)
 	    -> TypedNode<std::invoke_result_t<F_join, const typename NL::value_type &, const typename NR::value_type &>> * {
@@ -346,6 +362,7 @@ public:
 		using arguments_tuple = std::tuple<Args...>;
 	};
 
+	// statefull agregation node
 	template <typename F_aggr, typename F_getmatch, typename N>
 	auto AggregateBy(F_aggr aggr_fun, F_getmatch get_match, N *in_node) -> TypedNode<
 	    std::remove_reference_t<std::tuple_element_t<1, typename function_traits<F_aggr>::arguments_tuple>>> * {
@@ -382,8 +399,7 @@ public:
 	 * @return true on succes, false when there is no nodes at the current time to be processed
 	 */
 	bool GetNext(Node **next_node) {
-		this->graph_latch_.lock();
-
+		std::scoped_lock(graph_latch_);
 		// this means we can reset levels
 		if (this->current_level_ >= this->levels_.size() - 1 && AllProcesed()) {
 			// great all processed, reet state ad start from beginning
@@ -394,7 +410,8 @@ public:
 			}
 		}
 		// we assigned all nodes at highest level but some were not processed yet, return false
-		if (this->current_level_ > this->levels_.size()) {
+		if (this->current_level_ >= this->levels_.size()) {
+			this->graph_latch_.unlock();
 			return false;
 		}
 
@@ -414,7 +431,6 @@ public:
 		}
 
 		this->SetState(*next_node, NodeState::PROCESSING);
-		this->graph_latch_.unlock();
 
 		return true;
 	}

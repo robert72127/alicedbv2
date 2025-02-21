@@ -120,7 +120,6 @@ public:
 		auto start = std::chrono::steady_clock::now();
 		std::chrono::microseconds duration(this->duration_us_);
 		auto end = start + duration;
-		int cnt = 0;
 		char *prod_data;
 		// produce some data with time limit set, into produce_cache
 		while (std::chrono::steady_clock::now() < end) {
@@ -132,7 +131,6 @@ public:
 				produce_cache_->RemoveLast();
 				break;
 			}
-			cnt++;
 		}
 	}
 

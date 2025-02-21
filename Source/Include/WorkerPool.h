@@ -33,15 +33,13 @@ namespace AliceDB {
 
 */
 
-
 /**
  * maybe instead submit all tasks at once, when thread dependencies are processed, put future ready on future tasks
  * use 1 thread per 1 graph
- * 
- * 
+ *
+ *
  * use lock free queue to submit and pop requests
  */
-
 
 /**
  * @brief initial simple worker pool implementation
@@ -58,11 +56,10 @@ struct GraphState {
 
 class WorkerPool {
 public:
-	explicit WorkerPool(int workers_cnt = 1)
-	    : workers_cnt_ {workers_cnt} {
+	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt} {
 		this->stop_worker_.resize(this->workers_cnt_);
 		for (int i = 0; i < this->workers_cnt_; i++) {
-			this->stop_worker_[i] = true;
+			this->stop_worker_[i] = false;
 			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, workers_cnt_);
 		}
 	}
@@ -115,13 +112,15 @@ public:
 			while (!this->stop_worker_[index] && !this->stop_all_) {
 				auto task = this->GetWork();
 				if (!task) {
-					return;
+					std::this_thread::yield();
+					continue;
 				}
 				Node *n;
 				if (!task->g_->GetNext(&n)) {
 					// no work to be done for this graph, continue
 					task->shared_lock_.unlock_shared();
 					std::this_thread::yield();
+					continue;
 				}
 				// process this node
 				n->Compute();
@@ -145,11 +144,11 @@ private:
 		// waits to graph locks, but it's held by thread that is waiting for current thread to end
 		std::shared_lock lock(graphs_lock_);
 		size_t g_size = this->graphs_.size();
-		
+
 		if (g_size == 0) [[unlikely]] {
 			return nullptr;
 		}
-		
+
 		int index = this->next_index_;
 		next_index_ = (next_index_ + 1) % g_size;
 

@@ -466,6 +466,7 @@ public:
 		// init table from graph metastate based on index
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->not_emited_ = {};
 	}
 
 	~DistinctNode() {
@@ -492,22 +493,24 @@ public:
 	}
 
 	void Compute() {
-		// whether tuple for given index was ever emited, this is needed for compute state machine
-		std::unordered_set<index> not_emited;
 
 		// first insert all new data from cache to table
 		const char *in_data_;
 		int test = 0;
 		while (this->in_cache_->GetNext(&in_data_)) {
 			const Tuple<Type> *in_tuple = (const Tuple<Type> *)(in_data_);
-
+			// std::cout<<&in_tuple->data<< std::endl;
 			index idx = this->table_->Insert(in_tuple->data);
 			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta);
 
 			if (!was_present) {
-				not_emited.insert(idx);
+				not_emited_.insert(idx);
 			}
 		}
+
+		/** @todo fix me, first we need to realize iterating indexes like that is wrong causse they mignt not come one after another
+		 * secondly for somre reason removing if compact doest the trick 
+		 */
 
 		// then if compact_
 		if (this->compact_) {
@@ -522,6 +525,7 @@ public:
 				oldest_deltas_[index] = this->table_->OldestDelta(index);
 			}
 
+
 			this->Compact();
 			this->compact_ = false;
 
@@ -533,6 +537,7 @@ public:
 				Delta cur_delta = this->table_->OldestDelta(idx);
 				bool previous_positive = oldest_deltas_[idx].count > 0;
 				bool current_positive = cur_delta.count > 0;
+				std::cout<<"After Segfault? :)\n";
 				/*
 				        Now we can deduce what to emit based on this index value from
 				   oldest_delta, negative delta -> previouse state was 0 positive delta
@@ -545,47 +550,23 @@ public:
 				                if now positive don't emit
 				                if now negative emit -1
 
+				        if it's first iteration of this Node we need to always emit if positive
+
 				*/
-
 				char *out_data;
-
-				// but if it's first iteration of this Node we need to always emit
-				if (not_emited.contains(idx)) {
-					if (current_positive) {
-						this->out_cache_->ReserveNext(&out_data);
-						Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-						update_tpl->delta.ts = cur_delta.ts;
-						update_tpl->delta.count = 1;
-						// finally copy data
-						std::memcpy(&update_tpl->data, data, sizeof(Type));
-					}
-
-				} else {
-					if (previous_positive) {
-						if (current_positive) {
-							continue;
-						} else {
-							this->out_cache_->ReserveNext(&out_data);
-							Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-							update_tpl->delta.ts = cur_delta.ts;
-							update_tpl->delta.count = -1;
-							// finally copy data
-							std::memcpy(&update_tpl->data, data, sizeof(Type));
-						}
-					} else {
-						if (current_positive) {
-							this->out_cache_->ReserveNext(&out_data);
-							Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-							update_tpl->delta.ts = cur_delta.ts;
-							update_tpl->delta.count = 1;
-							// finally copy data
-							std::memcpy(&update_tpl->data, data, sizeof(Type));
-						} else {
-							continue;
-						}
-					}
+				if ((not_emited_.contains(idx) && current_positive) || (previous_positive && !current_positive) ||
+				    (!previous_positive && current_positive)) {
+					this->out_cache_->ReserveNext(&out_data);
+					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
+					update_tpl->delta.ts = cur_delta.ts;
+					update_tpl->delta.count = current_positive ? 1 : -1;
+					// finally copy data
+					std::memcpy(&update_tpl->data, data, sizeof(Type));
 				}
+			std::cout<<"Before Segfault? :)\n";
 			}
+			std::cout<<"DONT CARE?\n";
+			not_emited_.clear();
 		}
 
 		// periodically call garbage collector
@@ -593,6 +574,8 @@ public:
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
+		
+		this->in_node_->CleanCache();
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -626,6 +609,9 @@ private:
 	timestamp next_clean_ts_;
 
 	MetaState &meta_;
+
+	// whether tuple for given index was ever emited, this is needed for compute state machine
+	std::unordered_set<index> not_emited_;
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes

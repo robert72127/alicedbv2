@@ -2,6 +2,7 @@
 #include <fstream>
 #include <filesystem>
 #include <memory>
+#include <chrono>
 
 #include "gtest/gtest.h"
 
@@ -65,7 +66,7 @@ std::array<float, 50> dogprices = {
 };
 
 // this isn't required part, but we just need to create our data files
-void prepare_test_data_files(std::string people_fname, std::string dogs_fname){
+void prepare_people_data_file(std::string people_fname){
     // Seed the random number generator
     std::srand(std::time(nullptr));
 
@@ -73,7 +74,6 @@ void prepare_test_data_files(std::string people_fname, std::string dogs_fname){
     // create file from it
 
     std::ofstream people_writter{people_fname};
-    std::ofstream dog_writter{dogs_fname};
     
     // parse people
     int cnt = 0;
@@ -81,7 +81,7 @@ void prepare_test_data_files(std::string people_fname, std::string dogs_fname){
         for(auto &surname: surnames ){
                 int age = 50;// std::rand() % 101; // Random number between 0 and 100
                 
-                int dog_race_nr = std::rand() % 50;
+                int dog_race_nr = 1; //std::rand() % 50;
                 
                 float account_ballance = 100;// (std::rand() / (float)RAND_MAX) * 2000.0f;
 
@@ -96,7 +96,11 @@ void prepare_test_data_files(std::string people_fname, std::string dogs_fname){
     }
 
     people_writter.close();
+}
 
+void prepare_dog_data_file(std::string dogs_fname){
+
+    std::ofstream dog_writter{dogs_fname};
     // parse dogs
     for(int i = 0; i < 5; i++){
         std::string breed = dogbreeds[i];
@@ -201,10 +205,57 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             return true;
 }
 
+
+TEST(STATEFULL_TEST, UNION){
+
+    std::string people_fname = "people.txt";
+    prepare_people_data_file(people_fname);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+
+    auto *view = 
+        g->View(
+                g->Union(
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+                )
+        );
+
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+
+    // debugging
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+
+
+
+
+
+
+
+
+
+    /*
+
 TEST(MULTINODE_TEST, multinode_test){
     std::string dogs_fname = "dogs.txt";
     std::string people_fname = "people.txt";
-    prepare_test_data_files(people_fname, dogs_fname);
+    prepare_people_data_file(people_fname);
+    prepare_dog_data_file(dogs_fname);
 
     std::filesystem::path db_path = "./database";
     unsigned int worker_threads_cnt = 2;
@@ -215,7 +266,6 @@ TEST(MULTINODE_TEST, multinode_test){
     auto *g = db->CreateGraph();
 
     // define processing graph
-    /*
     auto *view = 
         g->View(
             g->Except(
@@ -226,8 +276,6 @@ TEST(MULTINODE_TEST, multinode_test){
                 )
             )
         );
-        */
-       /*
     auto *view = 
         g->View(
             g->Projection(
@@ -262,7 +310,6 @@ TEST(MULTINODE_TEST, multinode_test){
                 )
             )
         );
-        */
     auto *view = g->View(
                     g->Join(
                         [](const Person &p)  { return p.favourite_dog_race;},
@@ -305,6 +352,7 @@ TEST(MULTINODE_TEST, multinode_test){
 
 }
 
+*/
 
 // notes where X in (table)
 

@@ -100,13 +100,13 @@ void print_person(const char *data){
 } 
 
 void print_name(const char *data){
-    std::cout<< (Name* )(data)<< std::endl; 
+    const Name *n = reinterpret_cast<const Name*>(data);
+    std::cout<< n->name.data()<< std::endl; 
 } 
 
 
 
-
-TEST(STATELESS_TEST, single_version_test_on_graph){
+TEST(STATELESS_TEST, FILTER){
 
     std::string people_fname = "people.txt";
     prepare_test_data_files(people_fname);
@@ -137,6 +137,42 @@ TEST(STATELESS_TEST, single_version_test_on_graph){
     real_sink->Print(AliceDB::get_current_timestamp(), print_person );
 
     // delete database directory
-    //db = nullptr;
-    //std::filesystem::remove_all("database");
+    db = nullptr;
+    std::filesystem::remove_all("database");
 }
+
+TEST(STATELESS_TEST, PROJECTION){
+
+    std::string people_fname = "people.txt";
+    prepare_test_data_files(people_fname);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+
+    auto *view = 
+        g->View(
+                g->Projection(
+                    [](const Person &p){ return Name{.name=p.name};},
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+                )
+        );
+
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    db->StopGraph(g);
+
+
+    // debugging
+    AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_name );
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+

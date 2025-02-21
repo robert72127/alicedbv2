@@ -33,6 +33,16 @@ namespace AliceDB {
 
 */
 
+
+/**
+ * maybe instead submit all tasks at once, when thread dependencies are processed, put future ready on future tasks
+ * use 1 thread per 1 graph
+ * 
+ * 
+ * use lock free queue to submit and pop requests
+ */
+
+
 /**
  * @brief initial simple worker pool implementation
  * we keep:
@@ -48,17 +58,17 @@ struct GraphState {
 
 class WorkerPool {
 public:
-	explicit WorkerPool(int max_workers_cnt = 1)
-	    : max_workers_cnt_ {max_workers_cnt > 0 ? max_workers_cnt : 1}, workers_cnt_ {0} {
-		this->stop_worker_.resize(this->max_workers_cnt_);
-		for (int i = 0; i < this->max_workers_cnt_; i++) {
+	explicit WorkerPool(int workers_cnt = 1)
+	    : workers_cnt_ {workers_cnt} {
+		this->stop_worker_.resize(this->workers_cnt_);
+		for (int i = 0; i < this->workers_cnt_; i++) {
 			this->stop_worker_[i] = true;
+			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, workers_cnt_);
 		}
 	}
 
 	~WorkerPool() {
 		this->StopAll();
-		std::lock_guard<std::mutex> lock(threads_lock_);
 		for (auto &worker : this->workers_) {
 			if (worker.joinable()) {
 				worker.join();
@@ -73,32 +83,16 @@ public:
 	// remove graph g from being processed by worker poll
 	/** @todo if after stop there will be more workers than threads stop some worker */
 	void Stop(Graph *g) {
-		this->graphs_lock_.lock();
-		// this->graphs_lock_.lock();
+		std::unique_lock lock(graphs_lock_);
 		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
 			if ((*it)->g_ == g) {
 				(*it)->shared_lock_.lock();
 				auto state = *it;
 				this->graphs_.erase(it);
 				state->shared_lock_.unlock();
-				/** @todo maybe not delete but just stop processing it and still make accesible? */
 				break;
 			}
 		}
-		this->graphs_lock_.unlock();
-		/*	
-		this->threads_lock_.lock();
-		if (this->workers_cnt_ > this->graphs_.size()) {
-			int i = this->workers_cnt_ - 1;
-			if (this->workers_[i].joinable()) {
-				this->workers_cnt_--;
-				this->stop_worker_[i] = true;
-				this->workers_[i].join();
-			}
-			this->workers_.pop_back();
-		}
-		this->threads_lock_.unlock();
-		*/
 	}
 
 	void Start(Graph *g) {
@@ -113,15 +107,6 @@ public:
 			}
 		}
 		graphs_.emplace_back(std::make_shared<GraphState>(g));
-
-
-		this->threads_lock_.lock();
-		if (this->workers_cnt_ < this->graphs_.size() && this->workers_cnt_ < this->max_workers_cnt_) {
-			this->stop_worker_[workers_cnt_] = false;
-			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, workers_cnt_);
-			this->workers_cnt_++;
-		}
-		this->threads_lock_.unlock();
 	}
 
 	void WorkerThread(int index) {
@@ -136,7 +121,7 @@ public:
 				if (!task->g_->GetNext(&n)) {
 					// no work to be done for this graph, continue
 					task->shared_lock_.unlock_shared();
-					continue;
+					std::this_thread::yield();
 				}
 				// process this node
 				n->Compute();
@@ -183,11 +168,9 @@ private:
 	std::vector<std::thread> workers_;
 	std::vector<bool> stop_worker_;
 
-	std::mutex threads_lock_;
 	bool stop_all_ = false;
 
-	int workers_cnt_;
-	const int max_workers_cnt_;
+	const int workers_cnt_;
 };
 
 } // namespace AliceDB

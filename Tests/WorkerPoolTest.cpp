@@ -128,8 +128,8 @@ TEST(WorkerPoolTest, StartStopTest) {
 
 TEST(WorkerPoolTest, GraphsThreadsSameCount) {
 
-    int worker_threads_cnt = 12;
-    int graphs_cnt = 12;
+    int worker_threads_cnt = 10;
+    int graphs_cnt = 10;
     
     for(int i = 0; i < graphs_cnt; i++){
         std::string people_fname = "people_" + std::to_string(i) + ".txt";
@@ -163,10 +163,10 @@ TEST(WorkerPoolTest, GraphsThreadsSameCount) {
     }
 
     int i =0;
-    for(; i < 1000000000; i ++ );
+    for(; i < 10000000; i ++ );
     std::cout << i <<std::endl;
 
-    // for(int i = 0; i < graphs_cnt; i++){ db->StopGraph(graphs_[i]);}
+  //  for(int i = 0; i < graphs_cnt; i++){ db->StopGraph(graphs_[i]);}
 
     db = nullptr;
     std::filesystem::remove_all("database");

@@ -46,11 +46,6 @@ struct GraphState {
 	std::shared_mutex shared_lock_;
 };
 
-struct WorkerState {
-	std::thread worker_thread_;
-	bool stop_;
-};
-
 class WorkerPool {
 public:
 	explicit WorkerPool(int max_workers_cnt = 1)
@@ -78,7 +73,7 @@ public:
 	// remove graph g from being processed by worker poll
 	/** @todo if after stop there will be more workers than threads stop some worker */
 	void Stop(Graph *g) {
-		std::scoped_lock(graphs_lock_);
+		this->graphs_lock_.lock();
 		// this->graphs_lock_.lock();
 		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
 			if ((*it)->g_ == g) {
@@ -90,35 +85,35 @@ public:
 				break;
 			}
 		}
-		// this->graphs_lock_.unlock();
-
+		this->graphs_lock_.unlock();
+		/*	
 		this->threads_lock_.lock();
 		if (this->workers_cnt_ > this->graphs_.size()) {
 			int i = this->workers_cnt_ - 1;
-			this->workers_cnt_--;
-			this->stop_worker_[i] = true;
 			if (this->workers_[i].joinable()) {
+				this->workers_cnt_--;
+				this->stop_worker_[i] = true;
 				this->workers_[i].join();
 			}
 			this->workers_.pop_back();
 		}
 		this->threads_lock_.unlock();
+		*/
 	}
 
 	void Start(Graph *g) {
-		std::scoped_lock(graphs_lock_);
+		std::unique_lock lock(this->graphs_lock_);
 		if (g) {
 			g->Start();
 		}
 		// this->graphs_lock_.lock();
 		for (const auto &state : graphs_) {
 			if (state->g_ == g) {
-				// this->graphs_lock_.unlock();
 				return;
 			}
 		}
 		graphs_.emplace_back(std::make_shared<GraphState>(g));
-		// this->graphs_lock_.unlock();
+
 
 		this->threads_lock_.lock();
 		if (this->workers_cnt_ < this->graphs_.size() && this->workers_cnt_ < this->max_workers_cnt_) {
@@ -162,25 +157,24 @@ private:
 	 * @return function that needs to be performed
 	 */
 	std::shared_ptr<GraphState> GetWork() {
-		std::scoped_lock(graphs_lock_);
-		// this->graphs_lock_.lock();
-		//  should neven happen
+		// waits to graph locks, but it's held by thread that is waiting for current thread to end
+		std::shared_lock lock(graphs_lock_);
 		size_t g_size = this->graphs_.size();
+		
+		if (g_size == 0) [[unlikely]] {
+			return nullptr;
+		}
+		
 		int index = this->next_index_;
 		next_index_ = (next_index_ + 1) % g_size;
 
-		if (g_size == 0) [[unlikely]] {
-			// this->graphs_lock_.unlock();
-			return nullptr;
-		}
 		this->graphs_[index]->shared_lock_.lock_shared();
-		// this->graphs_lock_.unlock();
 		return this->graphs_[index];
 	}
 
 	// all graphs that we are processing
 	std::vector<std::shared_ptr<GraphState>> graphs_;
-	std::mutex graphs_lock_;
+	std::shared_mutex graphs_lock_;
 	// we want to prevent situation where worker acquired graph node to be processed, and before
 	// calling compute on it, graph get's removed
 	// index next graph to be processed

@@ -6,6 +6,7 @@
 #include <thread>
 #include <vector>
 #include <filesystem>
+#include <chrono>
 
 struct Person {
     std::array<char, 50> name;
@@ -115,10 +116,8 @@ TEST(WorkerPoolTest, StartStopTest) {
 
         db->StartGraph(g);
 
-        int i =0;
-        for(; i < 10000000; i ++ );
-        std::cout << i <<std::endl;
-
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
         db->StopGraph(g);
     }
 
@@ -135,7 +134,6 @@ TEST(WorkerPoolTest, GraphsThreadsSameCount) {
         std::string people_fname = "people_" + std::to_string(i) + ".txt";
         prepare_test_data_files(people_fname);
     }
-    
     
 
     auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
@@ -162,11 +160,8 @@ TEST(WorkerPoolTest, GraphsThreadsSameCount) {
         db->StartGraph(graphs_[i]);
     }
 
-    int i =0;
-    for(; i < 10000000; i ++ );
-    std::cout << i <<std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
-  //  for(int i = 0; i < graphs_cnt; i++){ db->StopGraph(graphs_[i]);}
 
     db = nullptr;
     std::filesystem::remove_all("database");
@@ -208,11 +203,7 @@ TEST(WorkerPoolTest, MoreGraphs) {
         db->StartGraph(graphs_[i]);
     }
 
-    int i =0;
-    for(; i < 1000000000; i ++ );
-    std::cout << i <<std::endl;
-
-    // for(int i = 0; i < graphs_cnt; i++){ db->StopGraph(graphs_[i]);}
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     db = nullptr;
     std::filesystem::remove_all("database");

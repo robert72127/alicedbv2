@@ -289,9 +289,8 @@ TEST(MULTINODE_TEST, multinode_test){
     // start processing data
     db->StartGraph(g);
 
-    int i = 0;
-    for(; i < 50000000; i++);
-    std::cout<<i<<std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
     db->StopGraph(g);
 
     //AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);

@@ -15,7 +15,6 @@
 #include <mutex>
 #include <set>
 #include <type_traits>
-#include <unordered_set>
 
 template <typename Type>
 std::array<char, sizeof(Type)> Key(const Type &type) {
@@ -500,6 +499,10 @@ public:
 			const Tuple<Type> *in_tuple = (const Tuple<Type> *)(in_data_);
 			index idx = this->table_->Insert(in_tuple->data);
 			this->table_->InsertDelta(idx, in_tuple->delta);
+
+			recompute_indexes_.insert(idx);
+
+			/** @todo store recomputed indexes in persistent storage */
 		}
 
 		/*
@@ -534,11 +537,11 @@ public:
 
 			//  out node will always have count of each tuple as either 0 or 1
 
-			// use heap iterator to go through all tuples
-			for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+			// iterate only through tuples that needs recomputation
+			for (const auto &idx : recompute_indexes_) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
-				auto [data, idx] = it.Get();
+				Type data = this->table_->Get(idx);
 
 				std::vector<Delta> current_idx_deltas = this->table_->Scan(idx);
 
@@ -570,6 +573,7 @@ public:
 
 			this->Compact(); // after this iteration oldest version keep will be one with timestamp of current compact
 			this->compact_ = false;
+			recompute_indexes_ = {};
 		}
 
 		// periodically call garbage collector
@@ -621,6 +625,8 @@ private:
 	timestamp &previous_ts_;
 
 	timestamp frontier_ts_;
+
+	std::set<index> recompute_indexes_ = {};
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -1305,6 +1311,8 @@ public:
 
 			index idx = this->table_->Insert(in_tuple->data);
 			this->table_->InsertDelta(idx, in_tuple->delta);
+			/** @todo store recomputed indexes in persistent storage */
+			recompute_indexes_.insert(idx);
 		}
 
 		if (this->compact_) {
@@ -1317,66 +1325,55 @@ public:
 			// them
 
 			// insert and delete index in out edge cache, for this match type
-			std::unordered_map<MatchType, std::pair<index, index>> out_indexes;
-			for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+			for (const auto &idx : recompute_indexes_) {
 
-				auto [data, idx] = it.Get();
+				char *out_data_insert;
+				this->out_cache_->ReserveNext(&out_data_insert);
+				InType data = this->table_->Get(idx);
 				MatchType current_match = this->GetMatch(data);
-
-				// now iterate deltas for this idx
-				std::vector<Delta> current_idx_deltas = this->table_->Scan(idx);
-
-				int delete_count = 0;
-				int count = 0;
-				for (const auto &delta : current_idx_deltas) {
-					if (delta.ts <= this->previous_ts_) {
-						delete_count += delta.count;
-					}
-					if (delta.ts > this->ts_) {
-						break;
-					}
-					count += delta.count;
-				}
-
-				// prepare initial version of out tuple and store it's indexes
-				if (!this->out_indexes.contains(current_match)) {
-					// for inserting new tuple based on match
-					char *out_data_insert;
-					index insert_idx = this->out_cache_->ReserveNext(&out_data_insert);
-					out_indexes[current_match] = {insert_idx, delete_idx};
-				}
-
-				auto &[insert_idx, delete_idx] = this->out_indexes[current_match];
-
-				char *out_data_insert = this->out_cache_->Get(insert_idx);
 				Tuple<OutType> *insert_tpl = (Tuple<OutType> *)(out_data_insert);
+				delete_tpl->delta.count = 1;
+				delete_tpl->delta.ts = this->ts_;
 
-				// fix this data instead of tpl
-				*insert_tpl = this->aggr_fun_(data, count, insert_tpl->data);
-				insert_tpl->delta.count = 1;
-				insert_tpl->delta.ts = this->ts_;
+				char *out_data_delete = nullptr;
 
-				if (delete_count != 0) {
-					// there was no place reserved, we need to reserve it
-					if (delete_idx == -1) {
-						char *out_data_delete;
-						delete_idx = this->out_cache_->ReserveNext(&out_data_delete);
-						out_indexes[current_match].second = delete_idx;
+				auto matches = this->table_->MatchSearch(match);
+
+				for (auto it = matches.begin(); it != matches.end(); it++) {
+					InTypeRight &matched_data = it->first;
+					// deltas from right table
+					const std::vector<Delta> &deltas = this->table_->Scan(idx);
+
+					// iterate all deltas of this tuple
+					int delete_count = 0;
+					int count = 0;
+					for (const auto &delta : deltas) {
+						if (delta.ts <= this->previous_ts_) {
+							delete_count += delta.count;
+						}
+						if (delta.ts > this->ts_) {
+							break;
+						}
+						count += delta.count;
 					}
-					char *out_data_delete = this->out_cache_->Get(delete_idx);
-					Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
-					*delete_tpl = this->aggr_fun_(data, delete_count, delete_tpl->data);
+					if (delete_count > 0) {
+						if (out_data_delete == nullptr) {
+							this->out_cache_->ReserveNext(&out_data_delete);
+							Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
+							delete_tpl->delta.count = -1;
+							delete_tpl->delta.ts = this->ts_;
+						}
 
-					delete_tpl->delta.ts = this->ts_;
-					delete_tpl->delta.count = -1;
+						delete_tpl->data = this->aggr_fun_(matched_data, delete_count, delete_tpl->data);
+					}
+					insert_tpl->data = this->aggr_fun_(matched_data, count, insert_tpl->data);
 				}
 			}
 
 			this->Compact(); // after this iteration oldest version keep will be one with timestamp of current compact
 			this->compact_ = false;
 
-			// now we also need to somehow remove delete_tpls from out_queue, so that they won't be emited if they are
-			// at zero, and we are done
+			recompute_indexes_ = {};
 		}
 
 		this->in_node_->CleanCache();
@@ -1432,6 +1429,8 @@ private:
 	timestamp previous_ts_;
 
 	timestamp frontier_ts_;
+
+	std::set<index> recompute_indexes_ = {};
 };
 
 } // namespace AliceDB

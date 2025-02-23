@@ -36,9 +36,8 @@ struct Cache {
 
 	/**
 	 * @brief insert new element into cache
-	 * @return insert index, false if there is no space in cache left
 	 */
-	index Insert(const char *data) {
+	void Insert(const char *data) {
 		if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
 			// just resize :)
 			this->Resize(current_size_ * 2);
@@ -56,9 +55,8 @@ struct Cache {
 	 * set data to point to next free position
 	 * and assume user will insert's data there thus
 	 * increase metadata as in Insert
-	 * @return index of reserved data
 	 */
-	index ReserveNext(char **data) {
+	void ReserveNext(char **data) {
 		if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
 			this->Resize(current_size_ * 2);
 		}

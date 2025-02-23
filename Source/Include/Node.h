@@ -567,7 +567,7 @@ public:
 					update_tpl->delta.ts = this->ts_;
 					update_tpl->delta.count = current_positive ? 1 : -1;
 					// finally copy data
-					std::memcpy(&update_tpl->data, data, sizeof(Type));
+					std::memcpy(&update_tpl->data, &data, sizeof(Type));
 				}
 			}
 
@@ -1256,7 +1256,7 @@ public:
 	AggregateByNode(TypedNode<InType> *in_node,
 	                // count corresponds to count from delta, outtype is current aggregated OutType from rest of InType
 	                // matched tuples
-	                std::function<OutTypeonst(const InType &, int count, const OutType &)> aggr_fun,
+	                std::function<OutType(const InType &, int count, const OutType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp,
 	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
 	    : aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, in_node_ {in_node},
@@ -1271,7 +1271,7 @@ public:
 
 		// init table from graph metastate based on index
 		this->table_ = new Table<InType, MatchType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_,
-		                                            get_match_left);
+		                                            get_match);
 	}
 
 	~AggregateByNode() {
@@ -1330,17 +1330,17 @@ public:
 				char *out_data_insert;
 				this->out_cache_->ReserveNext(&out_data_insert);
 				InType data = this->table_->Get(idx);
-				MatchType current_match = this->GetMatch(data);
+				MatchType match = this->GetMatch(data);
 				Tuple<OutType> *insert_tpl = (Tuple<OutType> *)(out_data_insert);
-				delete_tpl->delta.count = 1;
-				delete_tpl->delta.ts = this->ts_;
+				insert_tpl->delta.count = 1;
+				insert_tpl->delta.ts = this->ts_;
 
 				char *out_data_delete = nullptr;
 
 				auto matches = this->table_->MatchSearch(match);
 
 				for (auto it = matches.begin(); it != matches.end(); it++) {
-					InTypeRight &matched_data = it->first;
+					InType &matched_data = it->first;
 					// deltas from right table
 					const std::vector<Delta> &deltas = this->table_->Scan(idx);
 
@@ -1364,6 +1364,7 @@ public:
 							delete_tpl->delta.ts = this->ts_;
 						}
 
+						Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
 						delete_tpl->data = this->aggr_fun_(matched_data, delete_count, delete_tpl->data);
 					}
 					insert_tpl->data = this->aggr_fun_(matched_data, count, insert_tpl->data);
@@ -1402,7 +1403,7 @@ private:
 		this->table_->MergeDelta(this->previous_ts_);
 	}
 
-	std::function<OutTypeonst(const InType &, int count, const OutType &)> aggr_fun_;
+	std::function<OutType(const InType &, int count, const OutType &)> aggr_fun_;
 	std::function<MatchType(const InType &)> get_match_;
 
 	Graph *graph_;

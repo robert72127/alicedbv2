@@ -46,7 +46,6 @@ struct Cache {
 
 		index ret_idx = this->current_size_ / this->tuple_size_;
 		this->current_size_ += tuple_size_;
-		return ret_idx;
 	}
 
 	/**
@@ -63,7 +62,6 @@ struct Cache {
 		*data = this->storage_ + this->current_size_;
 		index ret_idx = this->current_size_ / this->tuple_size_;
 		this->current_size_ += tuple_size_;
-		return ret_idx;
 	}
 	/**
 	 * @brief set's cache memory to 0

@@ -1379,12 +1379,6 @@ public:
 			// at zero, and we are done
 		}
 
-		// periodically call garbage collector
-		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
-		}
-
 		this->in_node_->CleanCache();
 
 		// periodically call garbage collector

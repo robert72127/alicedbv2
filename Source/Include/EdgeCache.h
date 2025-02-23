@@ -9,6 +9,12 @@
 
 namespace AliceDB {
 
+/** @todo
+ * store same tuple with multipled deltas as single data field and multiple deltas,
+ * instead of storing copy of tuple for each delta
+ *
+ */
+
 struct Cache {
 	/**
 	 * @brief create cache with given size of cache_size * tuple_size where

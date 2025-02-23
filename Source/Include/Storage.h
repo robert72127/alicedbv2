@@ -125,6 +125,10 @@ public:
 		return this->deltas_.size();
 	}
 
+	std::unordered_map<index, std::vector<Delta>> &Get() {
+		return this->deltas_;
+	}
+
 private:
 	// Write the entire delta storage as a binary file.
 	void UpdateLogFile() {
@@ -586,6 +590,10 @@ public:
 	// returns all deltas for given index
 	const std::vector<Delta> &Scan(const index idx) {
 		return this->ds_->deltas_[idx];
+	}
+
+	std::unordered_map<index, std::vector<Delta>> &GetDeltas() {
+		return this->ds_->Get();
 	}
 
 	// return oldest delta for index

@@ -466,7 +466,6 @@ public:
 		// init table from graph metastate based on index
 
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
-		this->not_emited_ = {};
 	}
 
 	~DistinctNode() {
@@ -501,72 +500,77 @@ public:
 			const Tuple<Type> *in_tuple = (const Tuple<Type> *)(in_data_);
 			// std::cout<<&in_tuple->data<< std::endl;
 			index idx = this->table_->Insert(in_tuple->data);
-			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta);
-
-			if (!was_present) {
-				not_emited_.insert(idx);
-			}
+			this->table_->InsertDelta(idx, in_tuple->delta);
 		}
 
-		/** @todo fix me, first we need to realize iterating indexes like that is wrong causse they mignt not come one after another
-		 * secondly for somre reason removing if compact doest the trick 
-		 */
+		/*
+		           We can deduce what to emit based on this index value from
+		           oldest_delta, negative delta -> previouse state was 0 positive delta
+		           -> previouse state was 1
 
-		// then if compact_
+		                if previous state was 0
+		                        if now positive emit 1
+		                        if now negative don't emit
+		                if previouse state was 1
+		                        if now positive don't emit
+		                        if now negative emit -1
+
+		                if it's first iteration of this Node we need to always emit if positive
+
+
+		    so if it's time to emit:
+
+		    we iter all indexes, and then:
+
+
+		    if oldest version is newer than previous ts we need to always emit
+		    else we either emit or not based on: oldest delta, and deltas up to current timestamp
+
+		    then we can compact
+		*/
+
 		if (this->compact_) {
 			// delta_count for oldest keept verson fro this we can deduce what tuples
 			// to emit;
-			std::vector<Delta> oldest_deltas_ {this->table_->DeltasSize()};
 
-			// emit delete for oldest keept version, emit insert for previous_ts
-
-			// iterate by tuple to index
-			for (size_t index = 0; index < this->table_->DeltasSize(); index++) {
-				oldest_deltas_[index] = this->table_->OldestDelta(index);
-			}
-
-
-			this->Compact();
-			this->compact_ = false;
+			//  out node will always have count of each tuple as either 0 or 1
 
 			// use heap iterator to go through all tuples
 			for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
 				auto [data, idx] = it.Get();
-				Delta cur_delta = this->table_->OldestDelta(idx);
-				bool previous_positive = oldest_deltas_[idx].count > 0;
-				bool current_positive = cur_delta.count > 0;
-				std::cout<<"After Segfault? :)\n";
-				/*
-				        Now we can deduce what to emit based on this index value from
-				   oldest_delta, negative delta -> previouse state was 0 positive delta
-				   -> previouse state was 1
 
-				        if previous state was 0
-				                if now positive emit 1
-				                if now negative don't emit
-				        if previouse state was 1
-				                if now positive don't emit
-				                if now negative emit -1
+				std::vector<Delta> current_idx_deltas = this->table_->Scan(idx);
 
-				        if it's first iteration of this Node we need to always emit if positive
+				// whether previous emited tuple delta had positive count
+				bool previous_positive = current_idx_deltas[0].count > 0;
+				// this means this tuple was never emited, then we discard previous positive, since it's incorrect
+				bool prev_not_emited = current_idx_deltas[0].ts > this->previous_ts_;
 
-				*/
+				int count = 0;
+				for (const auto &delta : current_idx_deltas) {
+					if (delta.ts > this->ts_) {
+						break;
+					}
+					count += delta.count;
+				}
+				bool current_positive = count > 0;
+
 				char *out_data;
-				if ((not_emited_.contains(idx) && current_positive) || (previous_positive && !current_positive) ||
+				if ((prev_not_emited && current_positive) || (previous_positive && !current_positive) ||
 				    (!previous_positive && current_positive)) {
 					this->out_cache_->ReserveNext(&out_data);
 					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-					update_tpl->delta.ts = cur_delta.ts;
+					update_tpl->delta.ts = this->ts_;
 					update_tpl->delta.count = current_positive ? 1 : -1;
 					// finally copy data
 					std::memcpy(&update_tpl->data, data, sizeof(Type));
 				}
-			std::cout<<"Before Segfault? :)\n";
 			}
-			std::cout<<"DONT CARE?\n";
-			not_emited_.clear();
+
+			this->Compact(); // after this iteration oldest version keep will be one with timestamp of current compact
+			this->compact_ = false;
 		}
 
 		// periodically call garbage collector
@@ -574,7 +578,7 @@ public:
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
-		
+
 		this->in_node_->CleanCache();
 	}
 
@@ -609,9 +613,6 @@ private:
 	timestamp next_clean_ts_;
 
 	MetaState &meta_;
-
-	// whether tuple for given index was ever emited, this is needed for compute state machine
-	std::unordered_set<index> not_emited_;
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes

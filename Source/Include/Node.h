@@ -498,7 +498,6 @@ public:
 		int test = 0;
 		while (this->in_cache_->GetNext(&in_data_)) {
 			const Tuple<Type> *in_tuple = (const Tuple<Type> *)(in_data_);
-			// std::cout<<&in_tuple->data<< std::endl;
 			index idx = this->table_->Insert(in_tuple->data);
 			this->table_->InsertDelta(idx, in_tuple->delta);
 		}
@@ -1073,7 +1072,6 @@ public:
 		const char *in_data_left;
 		const char *in_data_right;
 		char *out_data;
-		std::cout << "piff\n";
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
 			while (this->in_cache_right_->GetNext(&in_data_right)) {
@@ -1090,7 +1088,6 @@ public:
 				}
 			}
 		}
-		std::cout << "paff\n";
 		// compute left cache against right table
 		while (this->in_cache_left_->GetNext(&in_data_left)) {
 			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
@@ -1113,7 +1110,6 @@ public:
 				}
 			}
 		}
-		std::cout << "poff\n";
 
 		// compute right cache against left table
 		while (this->in_cache_right_->GetNext(&in_data_right)) {
@@ -1244,21 +1240,6 @@ private:
 	timestamp frontier_ts_;
 };
 
-/**
- * OK for this node we might want to use bit different model of computation
- * it will only emit single value at right time, and it need to delete old
- * value, it also need to compute next value based not only on data but also on
- * delta
- */
-
-// and finally aggregate_by, so we are aggregating but also with grouping by
-// fields what if we would store in type and out type, and then for all tuples
-// would emit new version from their oldest version
-
-// finally we will only aggregate by single field be it max sum etc,
-// doesn't matter point is we aggregate on one thing only because for
-// multiple aggregations we will be able to just chain them together
-
 template <typename InType, typename MatchType, typename OutType>
 class AggregateByNode : public TypedNode<OutType> {
 	// now output of aggr might be also dependent of count of in tuple, for
@@ -1266,7 +1247,10 @@ class AggregateByNode : public TypedNode<OutType> {
 	// Alice but with min it should not, so it will be dependent on aggregate
 	// function
 public:
-	AggregateByNode(TypedNode<InType> *in_node, std::function<InType(const InType &, const InType &)> aggr_fun,
+	AggregateByNode(TypedNode<InType> *in_node,
+	                // count corresponds to count from delta, outtype is current aggregated OutType from rest of InType
+	                // matched tuples
+	                std::function<OutTypeonst(const InType &, int count, const OutType &)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp,
 	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
 	    : aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, in_node_ {in_node},
@@ -1280,7 +1264,8 @@ public:
 		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
-		this->table_ = new Table<InType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
+		this->table_ = new Table<InType, MatchType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_,
+		                                            get_match_left);
 	}
 
 	~AggregateByNode() {
@@ -1312,7 +1297,6 @@ public:
 	// -1 and insert current with count 1 at the same time then old should get
 	// discarded
 	void Compute() {
-		std::unordered_set<index> not_emited;
 
 		// first insert all new data from cache to table
 		const char *in_data_;
@@ -1320,75 +1304,88 @@ public:
 			const Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data_);
 
 			index idx = this->table_->Insert(in_tuple->data);
-			bool was_present = this->table_->InsertDelta(idx, in_tuple->delta);
-
-			if (!was_present) {
-				not_emited.insert(idx);
-			}
+			this->table_->InsertDelta(idx, in_tuple->delta);
 		}
 
-		// and then we emit insert and delete based on index at the same time
+		if (this->compact_) {
+			// delta_count for oldest keept verson fro this we can deduce what tuples
+			// to emit;
 
-		// itreate all tuples, if it's in match of inserted:
-		// compute aggregate for it
+			//  out node will always have count of each tuple as either 0 or 1
 
-		// ok how can we know that some tuple was already emited?
-		// if our oldest delta timestamp is less than or equal to previous ts,
-		// it means than it was already emited as insert, so we can emit this value with delete
-		// otherwise, there was no previous version and we can safely delete
+			// use heap iterator to go through all tuples, keep track of each outtuple so that we will be able to update
+			// them
 
-		// now onto the way in which we will iterate: we need to iterate all tuples
-		// so in this node our table will be normal one and our match will be temoprar and not persistent
+			// insert and delete index in out edge cache, for this match type
+			std::unordered_map<MatchType, std::pair<index, index>> out_indexes;
+			for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
 
-		std::unordered_map<MatchType, InType> matches_;
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+				auto [data, idx] = it.Get();
+				MatchType current_match = this->GetMatch(data);
 
-			auto [data, idx] = it.Get();
-			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
-			// check if it oldest if previous ts that will mean it was already emited
-			if (olders_delta.ts <= this->previous_ts_) {
-				if (matches_.contains(get_match_(data))) {
-					matches_[get_match_(data)] = data;
-				} else {
-					matches_[get_match_(data)] = aggr_fun_(matches_[get_match_(data)], data);
+				// now iterate deltas for this idx
+				std::vector<Delta> current_idx_deltas = this->table_->Scan(idx);
+
+				int delete_count = 0;
+				int count = 0;
+				for (const auto &delta : current_idx_deltas) {
+					if (delta.ts <= this->previous_ts_) {
+						delete_count += delta.count;
+					}
+					if (delta.ts > this->ts_) {
+						break;
+					}
+					count += delta.count;
+				}
+
+				// prepare initial version of out tuple and store it's indexes
+				if (!this->out_indexes.contains(current_match)) {
+					// for inserting new tuple based on match
+					char *out_data_insert;
+					index insert_idx = this->out_cache_->ReserveNext(&out_data_insert);
+					out_indexes[current_match] = {insert_idx, delete_idx};
+				}
+
+				auto &[insert_idx, delete_idx] = this->out_indexes[current_match];
+
+				char *out_data_insert = this->out_cache_->Get(insert_idx);
+				Tuple<OutType> *insert_tpl = (Tuple<OutType> *)(out_data_insert);
+
+				// fix this data instead of tpl
+				*insert_tpl = this->aggr_fun_(data, count, insert_tpl->data);
+				insert_tpl->delta.count = 1;
+				insert_tpl->delta.ts = this->ts_;
+
+				if (delete_count != 0) {
+					// there was no place reserved, we need to reserve it
+					if (delete_idx == -1) {
+						char *out_data_delete;
+						delete_idx = this->out_cache_->ReserveNext(&out_data_delete);
+						out_indexes[current_match].second = delete_idx;
+					}
+					char *out_data_delete = this->out_cache_->Get(delete_idx);
+					Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
+					*delete_tpl = this->aggr_fun_(data, delete_count, delete_tpl->data);
+
+					delete_tpl->delta.ts = this->ts_;
+					delete_tpl->delta.count = -1;
 				}
 			}
-		}
-		// emit all matches from queue with delete
-		for (const auto &[_, in_data] : matches_) {
-			char *out_data;
-			this->out_cache_->ReserveNext(&out_data);
-			Tuple<InType> *del_tuple = (Tuple<InType> *)(out_data);
-			del_tuple->delta = {this->previous_ts_, -1};
-			std::memcpy(&del_tuple->data, in_data, sizeof(OutType));
+
+			this->Compact(); // after this iteration oldest version keep will be one with timestamp of current compact
+			this->compact_ = false;
+
+			// now we also need to somehow remove delete_tpls from out_queue, so that they won't be emited if they are
+			// at zero, and we are done
 		}
 
-		this->Compact();
-
-		this->compact_ = false;
-
-		matches_ = {};
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
-			auto [data, idx] = it.Get();
-			Delta &olders_delta = *this->table_->Scan(idx).rbegin();
-			// check if it oldest if previous ts that will mean it was already emited
-			if (olders_delta.ts <= this->previous_ts_) {
-				if (matches_.contains(get_match_(data))) {
-					matches_[get_match_(data)] = data;
-				} else {
-					matches_[get_match_(data)] = aggr_fun_(matches_[get_match_(data)], data);
-				}
-			}
+		// periodically call garbage collector
+		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
+			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-		// emit all matches from queue with insert
-		for (const auto &[_, in_data] : matches_) {
-			char *out_data;
-			this->out_cache_->ReserveNext(&out_data);
-			Tuple<InType> *ins_tuple = (Tuple<InType> *)(out_data);
-			ins_tuple->delta = {this->previous_ts_, 11};
-			std::memcpy(&ins_tuple->data, in_data, sizeof(OutType));
-		}
+		this->in_node_->CleanCache();
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
@@ -1414,7 +1411,7 @@ private:
 		this->table_->MergeDelta(this->previous_ts_);
 	}
 
-	std::function<InType(const InType &, const InType &)> aggr_fun_;
+	std::function<OutTypeonst(const InType &, int count, const OutType &)> aggr_fun_;
 	std::function<MatchType(const InType &)> get_match_;
 
 	Graph *graph_;

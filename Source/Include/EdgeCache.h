@@ -36,15 +36,18 @@ struct Cache {
 
 	/**
 	 * @brief insert new element into cache
-	 * @return true on success, false if there is no space in cache left
+	 * @return insert index, false if there is no space in cache left
 	 */
-	void Insert(const char *data) {
+	index Insert(const char *data) {
 		if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
 			// just resize :)
 			this->Resize(current_size_ * 2);
 		}
 		std::memcpy(this->storage_ + this->current_size_, data, this->tuple_size_);
+
+		index ret_idx = this->current_size_ / this->tuple_size_;
 		this->current_size_ += tuple_size_;
+		return ret_idx;
 	}
 
 	/**
@@ -53,13 +56,16 @@ struct Cache {
 	 * set data to point to next free position
 	 * and assume user will insert's data there thus
 	 * increase metadata as in Insert
+	 * @return index of reserved data
 	 */
-	void ReserveNext(char **data) {
+	index ReserveNext(char **data) {
 		if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
 			this->Resize(current_size_ * 2);
 		}
 		*data = this->storage_ + this->current_size_;
+		index ret_idx = this->current_size_ / this->tuple_size_;
 		this->current_size_ += tuple_size_;
+		return ret_idx;
 	}
 	/**
 	 * @brief set's cache memory to 0

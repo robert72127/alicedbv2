@@ -36,6 +36,8 @@ public:
 		/*
 		INDEX <idx>
 		PREVIOUS_TIMESTAMP <ts>
+		RECOMPUTE_INDEXES <recompute indexes ...>
+		ENDINDEX
 		DELTAFILENAME <metafilename>
 		PAGES <page_idx ....>
 		ENDPAGES
@@ -75,6 +77,25 @@ public:
 				throw std::runtime_error("Expected TIMESTAMP, got: " + token);
 			}
 			input_stream >> meta.previous_ts_;
+
+			// Expect the "PAGES" block.
+			input_stream >> token;
+			if (token != "RECOMPUTE_INDEXES") {
+				throw std::runtime_error("Expected RECOMPUTE_INDEXES, got: " + token);
+			}
+			// Read all page indices until the ENDPAGES token.
+			while (input_stream >> token && token != "END_RECOMPUTE_INDEXES") {
+				std::istringstream iss(token);
+				index idx;
+				if (!(iss >> idx)) {
+					throw std::runtime_error("Error index: " + token);
+				}
+				meta.recompute_idexes_.insert(idx);
+			}
+			// We expect token == "ENDPAGES" here.
+			if (token != "END_RECOMPUTE_INDEXES") {
+				throw std::runtime_error("Did not find END_RECOMPUTE_INDEXES token");
+			}
 
 			// EXPECT DELTAFILENAME <deltafilename>
 			input_stream >> token;
@@ -161,6 +182,12 @@ public:
 			output_stream << "INDEX " << table_idx << "\n";
 
 			output_stream << "PREVIOUS_TIMESTAMP " << meta.previous_ts_ << "\n";
+
+			output_stream << "RECOMPUTE_INDEXES";
+			for (const auto &idx : meta.recompute_idexes_) {
+				output_stream << " " << idx;
+			}
+			output_stream << "\nEND_RECOMPUTE_INDEXES\n";
 
 			output_stream << "DELTAFILENAME " << meta.delta_filename_ << "\n";
 
@@ -364,22 +391,16 @@ public:
 
 	// statefull agregation node
 	template <typename F_aggr, typename F_getmatch, typename N>
-	auto AggregateBy(F_aggr aggr_fun, F_getmatch get_match, N *in_node) -> TypedNode<
-	    std::remove_reference_t<std::tuple_element_t<1, typename function_traits<F_aggr>::arguments_tuple>>> * {
-		this->check_running();
-
+	auto AggregateBy(F_getmatch get_match, F_aggr aggr_fun, N *in_node) -> TypedNode<std::remove_const_t<
+	    std::remove_reference_t<std::tuple_element_t<2, typename function_traits<F_aggr>::arguments_tuple>>>> * {
 		index table_index = this->maybe_create_table();
 
 		using InType = typename N::value_type;
+		using AggrArgs = typename function_traits<F_aggr>::arguments_tuple;
 
-		// extract parameter types from aggr_fun
-		using AggrTraits = function_traits<F_aggr>;
-		using AggrArgs = typename AggrTraits::arguments_tuple;
+		using ThirdArg = std::tuple_element_t<2, AggrArgs>;
+		using OutType = std::remove_const_t<std::remove_reference_t<ThirdArg>>;
 
-		using FirstAggrArg = std::tuple_element_t<0, AggrArgs>;
-		using SecondAggrArg = std::tuple_element_t<1, AggrArgs>;
-
-		using OutType = std::remove_reference_t<SecondAggrArg>;
 		using MatchType = std::invoke_result_t<F_getmatch, const InType &>;
 
 		TypedNode<OutType> *aggr = new AggregateByNode<InType, MatchType, OutType>(
@@ -605,7 +626,8 @@ private:
 		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
 			this->tables_metadata_[table_index] = MetaState {
-			    {}, {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index) + ".bin"), 0, table_index};
+			    {}, {},         {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index) + ".bin"),
+			    0,  table_index};
 		}
 		return table_index;
 	}

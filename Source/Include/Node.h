@@ -44,6 +44,7 @@ struct GarbageCollectSettings {
 struct MetaState {
 	std::vector<index> pages_;
 	std::vector<index> btree_pages_;
+	std::set<index> recompute_idexes_;
 	std::string delta_filename_;
 	timestamp previous_ts_;
 	index table_idx_;
@@ -456,7 +457,7 @@ public:
 	             MetaState &meta, index table_index)
 	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node},
 	      table_index_(table_index), gb_settings_ {gb_settings}, meta_ {meta}, frontier_ts_ {in_node->GetFrontierTs()},
-	      previous_ts_ {meta.previous_ts_} {
+	      previous_ts_ {meta.previous_ts_}, recompute_indexes_ {meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
@@ -626,7 +627,7 @@ private:
 
 	timestamp frontier_ts_;
 
-	std::set<index> recompute_indexes_ = {};
+	std::set<index> &recompute_indexes_ = {};
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -1256,12 +1257,13 @@ public:
 	AggregateByNode(TypedNode<InType> *in_node,
 	                // count corresponds to count from delta, outtype is current aggregated OutType from rest of InType
 	                // matched tuples
-	                std::function<OutType(const InType &, int count, const OutType &)> aggr_fun,
+	                std::function<OutType(const InType &, int, const OutType &, bool)> aggr_fun,
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp,
 	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
 	    : aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, in_node_ {in_node},
 	      in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta}, table_index_ {table_index},
-	      frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_} {
+	      frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_}, recompute_indexes_ {
+	                                                                                     meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
@@ -1270,8 +1272,8 @@ public:
 		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
 
 		// init table from graph metastate based on index
-		this->table_ = new Table<InType, MatchType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_,
-		                                            get_match);
+		this->table_ =
+		    new Table<InType, MatchType>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_, get_match);
 	}
 
 	~AggregateByNode() {
@@ -1325,12 +1327,13 @@ public:
 			// them
 
 			// insert and delete index in out edge cache, for this match type
+
 			for (const auto &idx : recompute_indexes_) {
 
 				char *out_data_insert;
 				this->out_cache_->ReserveNext(&out_data_insert);
 				InType data = this->table_->Get(idx);
-				MatchType match = this->GetMatch(data);
+				MatchType match = this->get_match_(data);
 				Tuple<OutType> *insert_tpl = (Tuple<OutType> *)(out_data_insert);
 				insert_tpl->delta.count = 1;
 				insert_tpl->delta.ts = this->ts_;
@@ -1338,6 +1341,9 @@ public:
 				char *out_data_delete = nullptr;
 
 				auto matches = this->table_->MatchSearch(match);
+
+				bool first = true;
+				bool first_delete = true;
 
 				for (auto it = matches.begin(); it != matches.end(); it++) {
 					InType &matched_data = it->first;
@@ -1365,9 +1371,13 @@ public:
 						}
 
 						Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
-						delete_tpl->data = this->aggr_fun_(matched_data, delete_count, delete_tpl->data);
+						delete_tpl->data = this->aggr_fun_(matched_data, delete_count, delete_tpl->data, first_delete);
+						first_delete = false;
 					}
-					insert_tpl->data = this->aggr_fun_(matched_data, count, insert_tpl->data);
+					/* for first time computation we need to start with init value, after that we recompute based on
+					 * previous result */
+					insert_tpl->data = this->aggr_fun_(matched_data, count, insert_tpl->data, first);
+					first = false;
 				}
 			}
 
@@ -1403,14 +1413,14 @@ private:
 		this->table_->MergeDelta(this->previous_ts_);
 	}
 
-	std::function<OutType(const InType &, int count, const OutType &)> aggr_fun_;
+	std::function<OutType(const InType &, int count, const OutType &, bool first)> aggr_fun_;
 	std::function<MatchType(const InType &)> get_match_;
 
 	Graph *graph_;
 
 	TypedNode<InType> *in_node_;
 
-	Table<InType> *table_;
+	Table<InType, MatchType> *table_;
 	index table_index_;
 
 	Cache *in_cache_;
@@ -1427,11 +1437,11 @@ private:
 	// after update propagate it to input nodes
 	bool compact_ = false;
 	timestamp ts_;
-	timestamp previous_ts_;
+	timestamp &previous_ts_;
 
 	timestamp frontier_ts_;
 
-	std::set<index> recompute_indexes_ = {};
+	std::set<index> &recompute_indexes_ = {};
 };
 
 } // namespace AliceDB

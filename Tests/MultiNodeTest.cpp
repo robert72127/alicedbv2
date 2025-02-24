@@ -126,6 +126,15 @@ struct Person {
     float account_balance;
 };
 
+struct NamedBalance {
+    std::array<char, 50> name;
+    float account_balance;
+};
+
+struct Name{
+    std::array<char, 50> name;
+};
+
 struct Dog {
     std::array<char, 50> name;
     float cost;
@@ -217,11 +226,25 @@ TEST(STATEFULL_TEST, UNION){
 
     auto g = db->CreateGraph();
 
-
+    /*
     auto *view = 
         g->View(
                 g->Union(
                     g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+                )
+        );
+    */
+    auto *view = 
+        g->View(
+                g->AggregateBy(
+                    [](const Person &p) { return Name{.name = p.name}; },
+                    [](const Person &p, int count, const NamedBalance &nb, bool first ){
+                        return NamedBalance{
+                            .name = p.name,
+                            .account_balance = first?  p.account_balance : p.account_balance + nb.account_balance
+                        };
+                    },
                     g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
                 )
         );
@@ -353,21 +376,3 @@ TEST(MULTINODE_TEST, multinode_test){
 }
 
 */
-
-// notes where X in (table)
-
-// select with aggregate like : select sum(salary) from, select max()
-
-// select from, where ...  group by column x, column y, having x > 1000 (having is just extra filter)
-
-// subqueries: select x from y where x in z(table)
-/**
- * select from where is essentially project -> filter and then applying aggregate op to result
- * if we also add group by then it's aggregate with match
- * if we add having it's appyling filter to result ie after aggregate, 
- * 
- * so really aggregate solves those issues
- * 
- * in - not supported but later we can add ability to iterate table results for view or something and this way in will work
- * 
- */

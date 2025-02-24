@@ -33,10 +33,11 @@
     * Wrap everything yet another time [V]
 
 
-## Write tests and make the system actually works [v]:
-    actually write even more tests for the rest of nodes, but only ater btree and garbage collection is implemented []
+    
+## Tests []:
+    * write tests for each node []
+    * write tests for the whole system, that performs both inserts and deletes of tuples []
 
-## Write more tests []:
 ----------------------------------------------------------------------------------------------
 
 ## Write PDF with description

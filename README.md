@@ -27,13 +27,14 @@ cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release
 
 How it works?
 
-first we have to create graph instance, and assign numbers of worker thread we want it to use
+first we have to create database instance, and assign numbers of worker thread we want it to use
 
 
 auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
 
-then we can create DAG instances that will represent our query
+then we can create DAGs that will represent our query
 
+```
 auto *view = g->View(
     g->Join(
         [](const Person &p)  { return p.favourite_dog_race;},
@@ -55,15 +56,18 @@ auto *view = g->View(
           g->Source<Dog>(AliceDB::ProducerType::FILE, dogs_fname, parseDog,0)
       )                    
 );
+```
 
 and finally we can start processing data by calling
 
+```
 db->StartGraph(g);
+```
 
 and stop it, using 
-
+```
 db->StopGraph(g);
-
+```
 
 
 ### How it works:
@@ -76,7 +80,7 @@ and for type inference.
 
 #### WorkerPool:
 
-WorkerPool dynamically allocate new threads, based on amount of currently running graphs, and perform computations on them.
+WorkerPool manages worker threads and assign works to them, by fairly scheduling all graphs that are processed.
 
 #### Storage:
 
@@ -111,7 +115,6 @@ that want it
 
 file descriptor and
 all pages of buffer pool are  registered for io_uring
-/
 
 Storage layer utilises async disk worker & io_uring preregistered with buffer pool, using single file for storage
 
@@ -124,112 +127,93 @@ Ingest and parse data into the system, for now limited to reading from file and 
 
 ##### Processing node in streaming database graph
 
-for each tuple we would want to:
-1) store it in persistent storage, with count of such tuples in each point of time.
+for each tuple we want to be able to:
+1) store it in persistent storage, with count of such tuples at each point of time.
 2) Be able to effectively retrive it
 3) Be able to decide whether this tuple can be deleted from the system
 
 
  4) Join and group by will also need a way to effectively search by only part of tuple, ie by specific fields,
- defined by transformation from original tuple 
+ defined by transformation from original tuple.
 
 
- Each Table will maintain it's own indexes
+ Each Table will maintain it's own indexes.
  
 
-Node can be of type:
+There are following types of nodes:
  
 ###### Projection, 
 
-g->Projection(
-    [](const InType &t) { return OutType {.field_x=t.field_z}; },
-    g->Source<InType>(Producer , in_file, parse_function,0)
-)
+```
+    g->Projection(
+        [](const InType &t) { return OutType {.field_x=t.field_z}; },
+        g->Source<InType>(Producer , in_file, parse_function,0)
+    )
+```
 
-stateless node
+Stateless node that projects data from one struct to another
 
 ###### Filter, 
 
 here is example combining it with projection
 
-g->Projection(
-    [](const InType &t) { return OutType {.field_x=t.field_z}; },
-    g->Filter(
-        [](const InType &t) -> bool {return t.field_x > 18 && t.field_y[0] == 'S' ;},
-        g->Source<Type>(Producer , in_file, parse_function,0)
+```
+    g->Projection(
+        [](const InType &t) { return OutType {.field_x=t.field_z}; },
+        g->Filter(
+            [](const InType &t) -> bool {return t.field_x > 18 && t.field_y[0] == 'S' ;},
+            g->Source<Type>(Producer , in_file, parse_function,0)
+        )
     )
-)
+```
 
-which corresponds to sql
+Stateless node, that filters tuples.
 
-select field_z from InType
-where field_x > 18, and field_y[0] equals S
-
- 
-It's selection with WHERE
-
-stateless node
 ###### Union, Except
 
-since those works in almost identical way we will only provide example of Union
+Since those work in almost identical way we will only provide example of Union
 
-we can think of normal sql union as
-
- SELECT column1, column2, ...
-   FROM table1
-   UNION
-   SELECT column1, column2, ...
-   FROM table2;
-
-
-wheres in ou case we would first do projection on table1 and table2 and the use union node,
-
-g->Union(
-    g->Projection(
-        [](const InType_1 &t) { return OutType_1 {.field_x=t.field_x, .field_y=t.field_y}; },
-        g->Source<InType>(Producer , in_file_1, parse_function_1,0)
-    ),
-    g->Projection(
-        [](const InType_2 &t) { return OutType_2 {.field_a=t.field_a, .field_b=t.field.b}; },
-        g->Source<InType>(Producer , in_file_2, parse_function_2,0)
+```
+    g->Union(
+        g->Projection(
+            [](const InType_1 &t) { return OutType_1 {.field_x=t.field_x, .field_y=t.field_y}; },
+            g->Source<InType>(Producer , in_file_1, parse_function_1,0)
+        ),
+        g->Projection(
+            [](const InType_2 &t) { return OutType_2 {.field_a=t.field_a, .field_b=t.field.b}; },
+            g->Source<InType>(Producer , in_file_2, parse_function_2,0)
+        )
     )
-)
+```
 
 both union and except are actually implemented as stateless nodes in Node.h,
 Graph.h automatically sets Distinct node as output of them so that state is persisted
-and we correctly know when to emit insert and delete to out node
+and we correctly know when to emit insert and delete to out node, for each tuple.
 
-###### Intersect which is sql substitute of
+###### Intersect
  
- SELECT column1, column2, ...
-  FROM table1
- INTERSECT
- SELECT column1, column2, ...
-   FROM table2;
- 
- g->Intersect(
-    g->Projection(
-        [](const InType_1 &t) { return OutType_1 {.field_x=t.field_x, .field_y=t.field_y}; },
-        g->Source<InType>(Producer , in_file_1, parse_function_1,0)
-    ),
-    g->Projection(
-        [](const InType_2 &t) { return OutType_2 {.field_a=t.field_a, .field_b=t.field.b}; },
-        g->Source<InType>(Producer , in_file_2, parse_function_2,0)
+``` 
+    g->Intersect(
+        g->Projection(
+            [](const InType_1 &t) { return OutType_1 {.field_x=t.field_x, .field_y=t.field_y}; },
+            g->Source<InType>(Producer , in_file_1, parse_function_1,0)
+        ),
+        g->Projection(
+            [](const InType_2 &t) { return OutType_2 {.field_a=t.field_a, .field_b=t.field.b}; },
+            g->Source<InType>(Producer , in_file_2, parse_function_2,0)
+        )
     )
-)
-
-Works very similiar to defined above, also places distinct node to track when to emit insert delete etc.
-But intersect operator itself is also stateful, since it need other table state to compute results
-
- It combines tuples from two tables, only passing those that appeard in both
+```
+Uses same mechanism as union/except where distinct node is automatically set as output.
+It combines tuples from two tables, only passing those that appeard in both
  
- keep two tables one for each source
- 
- count should be left_count x right_count  
+Statefull node that stores two tables one for each source
+count should be left_count x right_count  
 
 ###### Product
  
-g->CrossJoin(
+ ```
+        g->CrossJoin(
                 [](const Person &left, const Person &right){
                     return CrossPerson{
                         .lname=left.name,
@@ -243,59 +227,77 @@ g->CrossJoin(
                 g->Source(prod_1, 0),
                 g->Source(prod_2,0)
             )
- // this is projection
- SELECT Employees.ID, Employees.Name, Employees.Department,
-      Projects.Project_ID, Projects.Project_Name
-   FROM Employees
- 
-   CROSS JOIN Projects
- 	
+```
+	
  It takes two tables as ingerses and produce X product
  it needs to store two Tables
  and it doesn't need to know their fields
  
-it matches every tuple with every other
+This statefull node matches every tuple with every other
 
 count will be multiplied of first and second
  
 ###### Distinct
 
-This node output only single outtuple for given in tuple, its responsible for keeping track on when tuple count becomes positive/negative
+This node output only single outtuple for given in tuple, its responsible for making sure outnode has 1/0 count for given tuple
+
+```
+    g->Distinct(
+        g->Source<InType>(Producer , in_file_1, parse_function_1,0)
+    );
+```
 
 ###### Join
- 
- SELECT Employees.Name, Departments.Dept_Name
-   FROM Employees
- JOIN Departments
- ON Employees.Department = Departments.Dept_ID;
- 
- WE need to keep both inputs in tables
- 
- 
+
  count will be multiplication of first and second
+
+```
+    // joins dog and person on dog race and person's favourite dog race
+     g->Join(
+        [](const Person &p)  { return p.favourite_dog_race;},
+        [](const Dog &d)  { return d.name;},
+        [](const Person &p, const Dog &d) { 
+            return  JoinDogPerson{
+                .name=p.name,
+                .surname=p.surname,
+                .favourite_dog_race=d.name,
+                .dog_cost=d.cost,
+                .account_balace=p.account_balance,
+                .age=p.age
+            };
+        },
+        g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+        g->Source<Dog>(AliceDB::ProducerType::FILE, dogs_fname, parseDog,0)
+    )
+```
+
  
+For this statefull node we need to keep both inputs in tables.
+
+
 ###### Aggregations, 
- 
- 
- SELECT customer_id, COUNT() AS order_count, SUM(amount) AS total_spent
- FROM orders
- GROUP BY customer_id;
- The GROUP BY clause groups rows that have the same values in specified columns and applies the aggregation to each group. 
- 
- SELECT customer_id, SUM(amount) AS total_spent
- FROM orders
- GROUP BY customer_id
- 
- HAVING filters groups based on aggregated values, while WHERE filters rows before aggregation.
- 
- ok so in general it's stateful single in cache single out_cache, that appiles function to given rows,
- 
- it will create tuple with data | group_by field | rest of fields with appiled function
- 
- but the catch is we will need to search etc. tuples only by aggregate fields
 
+```
+    // dummy example to explain idea,
+    // let's sum accounts balance of all people based on their name
 
-This design allows the graph to handle inserts and deletes in a streaming fashion, updating stateful nodes and propagating changes downstream in real time.
+    auto *view = 
+        g->View(
+                g->AggregateBy(
+                    [](const Person &p) { return Name{.name = p.name}; },
+                    [](const Person &p, int count, const NamedBalance &nb, bool first ){
+                        return NamedBalance{
+                            .name = p.name,
+                            .account_balance = first?  p.account_balance : p.account_balance + nb.account_balance
+                        };
+                    },
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+                )
+        );
+```
+
+This statefull node stores single table
+ 
 
 ##### Consistency:
  
@@ -337,7 +339,7 @@ This design allows the graph to handle inserts and deletes in a streaming fashio
   CleanCache: - keeps track on nuber of output nodes, to know when all of them processed this node's output cacne and it can be cleaned 
 
 
-	GetFrontierTs: - returns how much time in the past from current time do we have to store deltas
+  GetFrontierTs: - returns how much time in the past from current time do we have to store deltas
 
 
 ### Future Extensions:

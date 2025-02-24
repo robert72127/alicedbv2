@@ -65,15 +65,6 @@ and stop it, using
 db->StopGraph(g);
 
 
-after we created source we can create our queries that will be executed in streaming way
-
-g.call("Select name, surname, accout_balance from S where accout_balance > 1500
-    join S2 on accout_balance > dog_price as S3
- )
-
-and now we can either show results from S3, treat it as new source for new views, or write it somewhere else (not included for now)
-
-
 
 ### How it works:
 
@@ -155,7 +146,7 @@ g->Projection(
     g->Source<InType>(Producer , in_file, parse_function,0)
 )
 
-doesn't care about state, doesn't care about count, doesn't care about index or timestamps, just compuuuutes on data field
+stateless node
 
 ###### Filter, 
 
@@ -177,8 +168,7 @@ where field_x > 18, and field_y[0] equals S
  
 It's selection with WHERE
 
-doesn't care about state, doesn't care about count, doesn't care about index or timestamps, just compuuuutes on data field
-
+stateless node
 ###### Union, Except
 
 since those works in almost identical way we will only provide example of Union
@@ -209,7 +199,6 @@ both union and except are actually implemented as stateless nodes in Node.h,
 Graph.h automatically sets Distinct node as output of them so that state is persisted
 and we correctly know when to emit insert and delete to out node
 
- 
 ###### Intersect which is sql substitute of
  
  SELECT column1, column2, ...
@@ -232,13 +221,11 @@ and we correctly know when to emit insert and delete to out node
 Works very similiar to defined above, also places distinct node to track when to emit insert delete etc.
 But intersect operator itself is also stateful, since it need other table state to compute results
 
-
  It combines tuples from two tables, only passing those that appeard in both
  
  keep two tables one for each source
  
- count should be left_count x right_count 
- 
+ count should be left_count x right_count  
 
 ###### Product
  
@@ -287,7 +274,7 @@ This node output only single outtuple for given in tuple, its responsible for ke
  
  count will be multiplication of first and second
  
-###### Aggregations,  but let's include only those with group by: Count, sum avg, min, max are typical
+###### Aggregations, 
  
  
  SELECT customer_id, COUNT() AS order_count, SUM(amount) AS total_spent
@@ -323,7 +310,7 @@ This design allows the graph to handle inserts and deletes in a streaming fashio
  
  update is just delete and then insert one after another,
  
- delete is also insert but with negative value, negative values won't be presented when printing output
+ delete is also insert but with negative value, negative values 
  
  
 ##### Garbage collection
@@ -341,7 +328,7 @@ This design allows the graph to handle inserts and deletes in a streaming fashio
  
   Updating timestamp of internal tables, compacting deltas, inserting tuples into persistent storage, providing output into out_cache
  
-   Output: return out_cache of given node: this will be used by graph layer for chaining nodes
+  Output: return out_cache of given node: this will be used by graph layer for chaining nodes
  
    UpdateTimestamp: this will be called by output nodes it will update ts and propagate to input nodes
    updating table state is more costly and will be handled by worker threads

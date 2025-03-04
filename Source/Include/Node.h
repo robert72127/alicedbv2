@@ -67,11 +67,6 @@ public:
 	virtual void UpdateTimestamp(timestamp ts) = 0;
 
 	virtual timestamp GetFrontierTs() const = 0;
-
-	/**
-	 * @brief returns cache corresponding to output from this Tuple
-	 */
-	virtual Cache *Output() = 0;
 };
 
 template <typename OutType>
@@ -80,6 +75,11 @@ public:
 	using value_type = OutType;
 
 	virtual ~TypedNode() {};
+
+	/**
+	 * @brief returns cache corresponding to output from this Tuple
+	 */
+	virtual Cache<OutType> *Output() = 0;
 };
 
 /* Source node is responsible for producing data through Compute function and
@@ -108,7 +108,7 @@ public:
 			break;
 		}
 
-		this->produce_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
+		this->produce_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 		this->ts_ = get_current_timestamp();
 	}
 
@@ -120,21 +120,19 @@ public:
 		auto start = std::chrono::steady_clock::now();
 		std::chrono::microseconds duration(this->duration_us_);
 		auto end = start + duration;
-		char *prod_data;
 		// produce some data with time limit set, into produce_cache
 		while (std::chrono::steady_clock::now() < end) {
-			produce_cache_->ReserveNext(&prod_data);
-			Tuple<Type> *prod_tuple = (Tuple<Type> *)(prod_data);
-			prod_tuple->delta.ts = get_current_timestamp();
-			if (!this->produce_->next(prod_tuple)) {
-				// we reserved but won't insert so have to remove it from cache
-				produce_cache_->RemoveLast();
+			Tuple<Type> prod_tuple;
+			bool success = this->produce_->next(&prod_tuple);
+			if (!success) {
 				break;
 			}
+			prod_tuple.delta.ts = get_current_timestamp();
+			produce_cache_->Insert(prod_tuple);
 		}
 	}
 
-	Cache *Output() {
+	Cache<Type> *Output() {
 		this->out_count++;
 		return this->produce_cache_;
 	}
@@ -165,7 +163,7 @@ private:
 
 	// data from producer is put into this cache from it it's written into both
 	// table and passed to output nodes
-	Cache *produce_cache_;
+	Cache<Type> *produce_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -202,10 +200,10 @@ public:
 	void Compute() {
 		// write in cache into out_table
 		const char *in_data;
-		while (this->in_cache_->GetNext(&in_data)) {
-			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
-			index idx = this->table_->Insert(in_tuple->data);
-			this->table_->InsertDelta(idx, in_tuple->delta);
+		while (this->in_cache_->HasNext()) {
+			Tuple<Type> in_tuple = this->in_cache_->GetNext();
+			index idx = this->table_->Insert(in_tuple.data);
+			this->table_->InsertDelta(idx, in_tuple.delta);
 		}
 
 		// get current timestamp that can be considered
@@ -243,7 +241,7 @@ public:
 
 	// since all sink does is store state we can treat incache as out cache when we use sink(view)
 	// as source
-	Cache *Output() {
+	Cache<Type> *Output() {
 		return this->in_node_->Output();
 	}
 	void CleanCache() {
@@ -274,7 +272,7 @@ private:
 	Table<Type> *table_;
 
 	// in cache only, since sink isn't processing getting output from this node will also return output from this cache
-	Cache *in_cache_;
+	Cache<Type> *in_cache_;
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -296,7 +294,7 @@ public:
 	FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition, Graph *graph)
 	    : graph_ {graph}, condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()},
 	      frontier_ts_ {in_node->GetFrontierTs()} {
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
+		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 		this->ts_ = get_current_timestamp();
 	}
 
@@ -307,18 +305,17 @@ public:
 	// filters node
 	// those that pass are put into output cache, this is all that this node does
 	void Compute() {
-		const char *data;
 		// pass function that match condition to output
-		while (this->in_cache_->GetNext(&data)) {
-			const Tuple<Type> *tuple = (const Tuple<Type> *)(data);
-			if (this->condition_(tuple->data)) {
+		while (this->in_cache_->HasNext()) {
+			Tuple<Type> tuple = this->in_cache_->GetNext();
+			if (this->condition_(tuple.data)) {
 				this->out_cache_->Insert(data);
 			}
 		}
 		this->in_node_->CleanCache();
 	}
 
-	Cache *Output() {
+	Cache<Type> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -350,8 +347,8 @@ private:
 
 	std::function<bool(const Type &)> condition_;
 
-	Cache *in_cache_;
-	Cache *out_cache_;
+	Cache<Type> *in_cache_;
+	Cache<Type> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -368,7 +365,7 @@ public:
 	ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection, Graph *graph)
 	    : projection_ {projection}, graph_ {graph}, in_node_ {in_node}, in_cache_ {in_node->Output()},
 	      frontier_ts_ {in_node->GetFrontierTs()} {
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<OutType>));
+		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE);
 		this->ts_ = get_current_timestamp();
 	}
 
@@ -377,22 +374,16 @@ public:
 	}
 
 	void Compute() {
-		const char *in_data;
-		char *out_data;
-		while (in_cache_->GetNext(&in_data)) {
-			this->out_cache_->ReserveNext(&out_data);
-			Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data);
-			Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-
-			out_tuple->delta.ts = in_tuple->delta.ts;
-			out_tuple->delta.count = in_tuple->delta.count;
-			out_tuple->data = this->projection_(in_tuple->data);
+		while (in_cache_->HasNext()) {
+			Tuple<InType> in_tuple = this->in_cache_->GetNext();
+			Tuple<InType> out_tuple {this->projection_(in_tuple.data), in_tuple.delta};
+			out_cache_->Insert(out_tuple);
 		}
 
 		this->in_node_->CleanCache();
 	}
 
-	Cache *Output() {
+	Cache<OutType> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -424,8 +415,8 @@ private:
 	// track this for global timestamp state update
 	TypedNode<InType> *in_node_;
 
-	Cache *in_cache_;
-	Cache *out_cache_;
+	Cache<InType> *in_cache_;
+	Cache<OutType> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -461,7 +452,7 @@ public:
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
+		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 
 		// init table from graph metastate based on index
 
@@ -475,7 +466,7 @@ public:
 		delete table_;
 	}
 
-	Cache *Output() {
+	Cache<Type> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -494,16 +485,12 @@ public:
 	void Compute() {
 
 		// first insert all new data from cache to table
-		const char *in_data_;
-		int test = 0;
-		while (this->in_cache_->GetNext(&in_data_)) {
-			const Tuple<Type> *in_tuple = (const Tuple<Type> *)(in_data_);
-			index idx = this->table_->Insert(in_tuple->data);
-			this->table_->InsertDelta(idx, in_tuple->delta);
+		while (this->in_cache_->HasNext()) {
+			const Tuple<Type> in_tuple = this->in_cache_->GetNext();
+			index idx = this->table_->Insert(in_tuple.data);
+			this->table_->InsertDelta(idx, in_tuple.delta);
 
 			recompute_indexes_.insert(idx);
-
-			/** @todo store recomputed indexes in persistent storage */
 		}
 
 		/*
@@ -535,21 +522,19 @@ public:
 		if (this->compact_) {
 			// delta_count for oldest keept verson fro this we can deduce what tuples
 			// to emit;
-
 			//  out node will always have count of each tuple as either 0 or 1
 
 			// iterate only through tuples that needs recomputation
 			for (const auto &idx : recompute_indexes_) {
 				// iterate by delta tuple, ok since tuples are appeneded sequentially we can get index from tuple
 				// position using heap iterator, this should be fast since distinct shouldn't store that many tuples
-				Type data = this->table_->Get(idx);
 
 				std::vector<Delta> current_idx_deltas = this->table_->Scan(idx);
 
 				// whether previous emited tuple delta had positive count
 				bool previous_positive = current_idx_deltas[0].count > 0;
 				// this means this tuple was never emited, then we discard previous positive, since it's incorrect
-				bool prev_not_emited = current_idx_deltas[0].ts > this->previous_ts_;
+				bool prev_not_emited = current_idx_deltas[0].ts >= this->previous_ts_;
 
 				int count = 0;
 				for (const auto &delta : current_idx_deltas) {
@@ -560,15 +545,11 @@ public:
 				}
 				bool current_positive = count > 0;
 
-				char *out_data;
-				if ((prev_not_emited && current_positive) || (previous_positive && !current_positive) ||
-				    (!previous_positive && current_positive)) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<Type> *update_tpl = (Tuple<Type> *)(out_data);
-					update_tpl->delta.ts = this->ts_;
-					update_tpl->delta.count = current_positive ? 1 : -1;
-					// finally copy data
-					std::memcpy(&update_tpl->data, &data, sizeof(Type));
+				if ((prev_not_emited && current_positive) ||
+				    (previous_positive && !current_positive && ~prev_not_emited) ||
+				    (!previous_positive && current_positive && ~prev_not_emited)) {
+					Tuple<Type> update_tpl(this->table_->Get(idx), {this->ts_, current_positive ? 1 : -1});
+					this->out_cache_->Insert(update_tpl);
 				}
 			}
 
@@ -608,8 +589,8 @@ private:
 	Table<Type> *table_;
 	index table_index_;
 
-	Cache *in_cache_;
-	Cache *out_cache_;
+	Cache<Type> *in_cache_;
+	Cache<Type> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -627,7 +608,7 @@ private:
 
 	timestamp frontier_ts_;
 
-	std::set<index> &recompute_indexes_ = {};
+	std::set<index> &recompute_indexes_;
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -647,14 +628,14 @@ public:
 	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
 	      negate_left_(negate_left) {
 		this->ts_ = get_current_timestamp();
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE, sizeof(Tuple<Type>));
+		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 	}
 
 	~PlusNode() {
 		delete out_cache_;
 	}
 
-	Cache *Output() {
+	Cache<Type> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -674,27 +655,16 @@ public:
 		// process left input
 		const char *in_data;
 		char *out_data;
-		while (in_cache_left_->GetNext(&in_data)) {
-			this->out_cache_->ReserveNext(&out_data);
-			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
-			Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-
-			out_tuple->delta.ts = in_tuple->delta.ts;
-			out_tuple->delta.count = in_tuple->delta.count;
-			std::memcpy(&out_tuple->data, &in_tuple->data, sizeof(Type));
+		while (in_cache_left_->HasNext()) {
+			Tuple<Type> in_tuple = in_cache_left_->GetNext();
+			out_cache_->Insert(in_tuple);
 		}
-		in_data = nullptr;
-		out_data = nullptr;
 		this->in_node_left_->CleanCache();
 
 		// process right input
-		while (in_cache_right_->GetNext(&in_data)) {
-			this->out_cache_->ReserveNext(&out_data);
-			Tuple<Type> *in_tuple = (Tuple<Type> *)(in_data);
-			Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-			out_tuple->delta.ts = in_tuple->delta.ts;
-			out_tuple->delta.count = (this->negate_left_) ? -in_tuple->delta.count : in_tuple->delta.count;
-			std::memcpy(&out_tuple->data, &in_tuple->data, sizeof(Type));
+		while (in_cache_right_->HasNext()) {
+			Tuple<Type> in_tuple = in_cache_right_->GetNext();
+			out_cache_->Insert(in_tuple);
 		}
 
 		this->in_node_right_->CleanCache();
@@ -714,8 +684,8 @@ private:
 	TypedNode<Type> *in_node_left_;
 	TypedNode<Type> *in_node_right_;
 
-	Cache *in_cache_left_;
-	Cache *in_cache_right_;
+	Cache<Type> *in_cache_left_;
+	Cache<Type> *in_cache_right_;
 
 	Cache *out_cache_;
 	int out_count = 0;
@@ -746,7 +716,7 @@ public:
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
 
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
+		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2);
 
 		// init table from graph metastate based on index
 
@@ -767,7 +737,7 @@ public:
 		delete this->right_table_;
 	}
 
-	Cache *Output() {
+	Cache<OutType> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -807,8 +777,8 @@ protected:
 	Table<LeftType> *left_table_;
 	Table<RightType> *right_table_;
 
-	Cache *in_cache_left_;
-	Cache *in_cache_right_;
+	Cache<LeftType> *in_cache_left_;
+	Cache<RightType> *in_cache_right_;
 
 	Cache *out_cache_;
 	int out_count = 0;
@@ -842,68 +812,67 @@ public:
 	void Compute() {
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
-		const char *in_data_left;
-		const char *in_data_right;
-		char *out_data;
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
-			while (this->in_cache_right_->GetNext(&in_data_right)) {
-				Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-				// if left and right caches match on data put it into out_cache with new
-				// delta
-				if (!std::memcmp(&in_left_tuple->data, &in_right_tuple->data, sizeof(Type))) {
-					this->out_cache_->ReserveNext(&out_data);
-					Delta out_delta = this->delta_function_(in_left_tuple->delta, in_right_tuple->delta);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
-					out_tuple->delta = out_delta;
+		while (this->in_cache_left_->HasNext()) {
+			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
+			while (this->in_cache_right_->HasNext()) {
+				Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+				// if left and right caches match on data put it into out_cache with new delta
+				if (in_left_tuple.data == in_right_tuple.data) {
+					Tuple<Type> out_tuple {in_left_tuple.data,
+					                       this->delta_function_(in_left_tuple->delta, in_right_tuple->delta)};
+					out_cache->Insert(out_tuple);
 				}
 			}
 		}
 
 		// compute left cache against right table
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+		while (this->in_cache_left_->HasNext()) {
+			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
 
 			// get matching on data from left and iterate it's deltas
 			index idx;
 			if (this->right_table_->Search(in_left_tuple->data, &idx)) {
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+
+				Tuple<Type> out_tuple;
+				out_tuple.data = in_left_tuple.data;
 				for (auto &right_delta : right_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(in_left_tuple->delta, right_delta);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					std::memcpy(&out_tuple->data, &in_left_tuple->data, sizeof(Type));
-					out_tuple->delta = out_delta;
+					out_tuple.delta = out_delta;
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
 
 		// compute right cache against left table
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
+		while (this->in_cache_right_->HasNext()) {
+
+			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+
 			// get matching on data from right and iterate it's deltas
 			index idx;
 			if (this->left_table_->Search(in_right_tuple->data, &idx)) {
+				Tuple<Type> out_tuple;
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+
+				Tuple<Type> out_tuple;
+				out_tuple.data = in_left_tuple.data;
 				for (auto &left_delta : left_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
 					Delta out_delta = this->delta_function_(left_delta, in_right_tuple->delta);
-					Tuple<Type> *out_tuple = (Tuple<Type> *)(out_data);
-					std::memcpy(&out_tuple->data, &in_right_tuple->data, sizeof(Type));
-					out_tuple->delta = out_delta;
+					out_tuple.delta = out_delta;
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_->GetNext(&in_data_right)) {
-			Tuple<Type> *in_right_tuple = (Tuple<Type> *)(in_data_right);
-			index idx = this->right_table_->Insert(in_right_tuple->data);
-			this->table_->InsertDelta(idx, in_right_tuple->delta);
+		while (this->in_cache_right->HasNext()) {
+			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+			index idx = this->right_table_->Insert(in_right_tuple.data);
+			this->table_->InsertDelta(idx, in_right_tuple.delta);
 		}
-		while (this->in_cache_->GetNext(&in_data_left)) {
-			Tuple<Type> *in_left_tuple = (Tuple<Type> *)(in_data_left);
+		while (this->in_cache_left->HasNext()) {
+			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
 			index idx = this->left_table_->Insert(in_left_tuple->data);
 			this->table_->InsertDelta(idx, in_left_tuple->delta);
 		}
@@ -947,20 +916,18 @@ public:
 	void Compute() {
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
-		const char *in_data_left;
-		const char *in_data_right;
-		char *out_data;
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			while (this->in_cache_right_->GetNext(&in_data_right)) {
-				Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-				// if left and right caches match on data put it into out_cache with new
-				// delta
-				this->out_cache_->ReserveNext(&out_data);
-				Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-				out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
-				                    in_left_tuple->delta.count * in_right_tuple->delta.count};
-				out_tuple->data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
+		while (this->in_cache_left_->HasNext()) {
+			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
+			while (this->in_cache_right_->HasNext()) {
+				Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
+				// if left and right caches match on data put it into out_cache with new delta
+
+				Tuple<OutType> out_tuple;
+				out_tuple.delta = {std::max(in_left_tuple.delta.ts, in_right_tuple.delta.ts),
+				                   in_left_tuple.delta.count * in_right_tuple.delta.count};
+
+				out_tuple.data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
+				out_cache->Insert(out_tuple);
 			}
 		}
 
@@ -969,17 +936,17 @@ public:
 		for (auto it = this->table_right_->begin(); it != this->table_right_->end(); ++it) {
 			auto [data, idx] = it.Get();
 			// left cache
-			while (this->in_cache_left_->GetNext(&in_data_left)) {
-				Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
+			while (this->in_cache_left_->HasNext()) {
+				Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
 
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+				Tuple<OutType> out_tuple;
+				out_tuple->data = this->join_layout_(in_left_tuple->data, data);
 				for (auto &right_delta : right_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
-					                    in_left_tuple->delta.count * right_delta.count};
+					out_tuple.delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
+					                   in_left_tuple.delta.count * right_delta.count};
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
@@ -989,30 +956,30 @@ public:
 		for (auto it = this->table_left_->begin(); it != this->table_left_->end(); ++it) {
 			auto [data, idx] = it.Get();
 			// left cache
-			while (this->in_cache_right_->GetNext(&in_data_right)) {
-				Tuple<InTypeLeft> *in_right_tuple = (Tuple<InTypeLeft> *)(in_data_right);
+			while (this->in_cache_right_->HasNext()) {
+				Tuple<InTypeLeft> in_right_tuple = this->in_cache_right_->GetNext();
 
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+				Tuple<OutType> out_tuple;
+				out_tuple->data = this->join_layout_(in_left_tuple->data, data);
 				for (auto &left_delta : left_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(data, in_right_tuple->data);
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
-					                    in_right_tuple->delta.count * left_delta.count};
+					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
+					                   in_right_tuple.delta.count * left_delta.count};
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-			index idx = this->table_->Insert(in_right_tuple->data);
-			this->table_->InsertDelta(idx, in_right_tuple->delta);
+		while (this->in_cache_right->HasNext()) {
+			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+			index idx = this->right_table_->Insert(in_right_tuple.data);
+			this->table_->InsertDelta(idx, in_right_tuple.delta);
 		}
-		while (this->in_cache_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			index idx = this->table_->Insert(in_left_tuple->data);
+		while (this->in_cache_left->HasNext()) {
+			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
+			index idx = this->left_table_->Insert(in_left_tuple->data);
 			this->table_->InsertDelta(idx, in_left_tuple->delta);
 		}
 
@@ -1057,7 +1024,7 @@ public:
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
 
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2, sizeof(Tuple<OutType>));
+		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2);
 
 		// init table from graph metastate based on index
 
@@ -1076,29 +1043,27 @@ public:
 	void Compute() {
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
-		const char *in_data_left;
-		const char *in_data_right;
-		char *out_data;
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			while (this->in_cache_right_->GetNext(&in_data_right)) {
-				Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-				// if left and right caches match on data put it into out_cache with new
-				// delta
-				if (this->Compare(&in_left_tuple->data, &in_right_tuple->data)) {
-					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, in_right_tuple->delta.ts),
-					                    in_left_tuple->delta.count * in_right_tuple->delta.count};
+		while (this->in_cache_left_->HasNext()) {
+			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
+			while (this->in_cache_right_->HasNext()) {
+				Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
+				// if left and right caches match on data put it into out_cache with new delta
 
-					out_tuple->data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
+				if (this->Compare(&in_left_tuple.data, &in_right_tuple.data)) {
+					Tuple<OutType> out_tuple;
+					out_tuple.delta = {std::max(in_left_tuple.delta.ts, in_right_tuple.delta.ts),
+					                   in_left_tuple.delta.count * in_right_tuple.delta.count};
+
+					out_tuple.data = this->join_layout_(in_left_tuple.data, in_right_tuple.data);
+					out_cache_->Insert(out_tuple);
 				}
 			}
 		}
+
 		// compute left cache against right table
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			MatchType match = this->get_match_left_(in_left_tuple->data);
+		while (this->in_cache_left_->HasNext()) {
+			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
+			MatchType match = this->get_match_left_(in_left_tuple.data);
 
 			auto matches = this->right_table_->MatchSearch(match);
 
@@ -1108,50 +1073,51 @@ public:
 				// deltas from right table
 				const std::vector<Delta> &right_deltas = this->right_table_->Scan(idx);
 				// iterate all deltas of this tuple
+
+				Tuple<OutType> out_tuple;
+				out_tuple.data = this->join_layout_(in_left_tuple.data, right_data);
 				for (auto &right_delta : right_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(in_left_tuple->data, right_data);
-					out_tuple->delta = {std::max(in_left_tuple->delta.ts, right_delta.ts),
-					                    in_left_tuple->delta.count * right_delta.count};
+					out_tuple->delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
+					                    in_left_tuple.delta.count * right_delta.count};
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
 
 		// compute right cache against left table
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
+		while (this->in_cache_right_->HasNext()) {
+			Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
 			MatchType match = this->get_match_right_(in_right_tuple->data);
 			auto matches = this->left_table_->MatchSearch(match);
+
 			for (auto it = matches.begin(); it != matches.end(); it++) {
 				index idx = it->second;
 				InTypeLeft &left_data = it->first;
 				const std::vector<Delta> &left_deltas = this->left_table_->Scan(idx);
 				// iterate all deltas of this tuple
+
+				Tuple<OutType> out_tuple;
+				out_tuple.data = this->join_layout_(left_data, in_right_tuple.data);
 				for (auto &left_delta : left_deltas) {
 					this->out_cache_->ReserveNext(&out_data);
-					Tuple<OutType> *out_tuple = (Tuple<OutType> *)(out_data);
-					out_tuple->data = this->join_layout_(left_data, in_right_tuple->data);
-					out_tuple->delta = {std::max(in_right_tuple->delta.ts, left_delta.ts),
-					                    in_right_tuple->delta.count * left_delta.count};
+					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
+					                   in_right_tuple.delta.count * left_delta.count};
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
 
 		// insert new deltas from in_caches
-		while (this->in_cache_right_->GetNext(&in_data_right)) {
-			Tuple<InTypeRight> *in_right_tuple = (Tuple<InTypeRight> *)(in_data_right);
-			// and this will actually handle inserting into both match tree and normal btree
-			index idx = this->right_table_->Insert(in_right_tuple->data);
-
-			this->right_table_->InsertDelta(idx, in_right_tuple->delta);
+		while (this->in_cache_right->HasNext()) {
+			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+			index idx = this->right_table_->Insert(in_right_tuple.data);
+			this->table_->InsertDelta(idx, in_right_tuple.delta);
 		}
-
-		while (this->in_cache_left_->GetNext(&in_data_left)) {
-			Tuple<InTypeLeft> *in_left_tuple = (Tuple<InTypeLeft> *)(in_data_left);
-			// and this will actually handle inserting into both match tree and normal btree
+		while (this->in_cache_left->HasNext()) {
+			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
 			index idx = this->left_table_->Insert(in_left_tuple->data);
-			this->left_table_->InsertDelta(idx, in_left_tuple->delta);
+			this->table_->InsertDelta(idx, in_left_tuple->delta);
 		}
 
 		// clean in_caches
@@ -1177,7 +1143,7 @@ public:
 		delete this->right_table_;
 	}
 
-	Cache *Output() {
+	Cache < OutType *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -1226,10 +1192,10 @@ private:
 	Table<InTypeLeft, MatchType> *left_table_;
 	Table<InTypeRight, MatchType> *right_table_;
 
-	Cache *in_cache_left_;
-	Cache *in_cache_right_;
+	Cache<InTypeLeft> *in_cache_left_;
+	Cache<InTypeRight> *in_cache_right_;
 
-	Cache *out_cache_;
+	Cache<OutType> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -1269,7 +1235,7 @@ public:
 		this->next_clean_ts_ = ts_;
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
-		this->out_cache_ = new Cache(2, sizeof(Tuple<OutType>));
+		this->out_cache_ = new Cache(2);
 
 		// init table from graph metastate based on index
 		this->table_ =
@@ -1277,7 +1243,6 @@ public:
 	}
 
 	~AggregateByNode() {
-
 		delete out_cache_;
 		delete table_;
 	}
@@ -1307,12 +1272,11 @@ public:
 	void Compute() {
 
 		// first insert all new data from cache to table
-		const char *in_data_;
-		while (this->in_cache_->GetNext(&in_data_)) {
-			const Tuple<InType> *in_tuple = (Tuple<InType> *)(in_data_);
+		while (this->in_cache_->HasNext()) {
+			const Tuple<InType> in_tuple = this->in_cache_->GetNext();
 
-			index idx = this->table_->Insert(in_tuple->data);
-			this->table_->InsertDelta(idx, in_tuple->delta);
+			index idx = this->table_->Insert(in_tuple.data);
+			this->table_->InsertDelta(idx, in_tuple.delta);
 			/** @todo store recomputed indexes in persistent storage */
 			recompute_indexes_.insert(idx);
 		}
@@ -1334,11 +1298,14 @@ public:
 				this->out_cache_->ReserveNext(&out_data_insert);
 				InType data = this->table_->Get(idx);
 				MatchType match = this->get_match_(data);
-				Tuple<OutType> *insert_tpl = (Tuple<OutType> *)(out_data_insert);
-				insert_tpl->delta.count = 1;
-				insert_tpl->delta.ts = this->ts_;
 
-				char *out_data_delete = nullptr;
+				Tuple<OutType> insert_tpl;
+				insert_tpl.delta.count = 1;
+				insert_tpl.delta.ts = this->ts_;
+
+				Tuple<OutType> delete_tpl;
+				delete_tpl.delta.count = -1;
+				delete_tpl.delta.ts = this->ts_;
 
 				auto matches = this->table_->MatchSearch(match);
 
@@ -1363,21 +1330,17 @@ public:
 						count += delta.count;
 					}
 					if (delete_count > 0) {
-						if (out_data_delete == nullptr) {
-							this->out_cache_->ReserveNext(&out_data_delete);
-							Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
-							delete_tpl->delta.count = -1;
-							delete_tpl->delta.ts = this->ts_;
-						}
-
-						Tuple<OutType> *delete_tpl = (Tuple<OutType> *)(out_data_delete);
-						delete_tpl->data = this->aggr_fun_(matched_data, delete_count, delete_tpl->data, first_delete);
+						delete_tpl.data = this->aggr_fun_(matched_data, delete_count, delete_tpl.data, first_delete);
 						first_delete = false;
 					}
 					/* for first time computation we need to start with init value, after that we recompute based on
 					 * previous result */
-					insert_tpl->data = this->aggr_fun_(matched_data, count, insert_tpl->data, first);
+					insert_tpl.data = this->aggr_fun_(matched_data, count, insert_tpl.data, first);
 					first = false;
+				}
+				this->out_cache->Insert(insert_tpl);
+				if (first_delete == false) {
+					this->out_cache->Insert(delete_tpl);
 				}
 			}
 

@@ -11,7 +11,8 @@ namespace AliceDB {
 template <typename Type>
 class Cache {
 public:
-	Cache(size_t initial_size) : tuples_.reserve(initial_size) {
+	Cache(size_t initial_size) {
+		tuples_.reserve(initial_size);
 	}
 
 	void Clean() {

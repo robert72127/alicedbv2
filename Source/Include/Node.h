@@ -309,7 +309,7 @@ public:
 		while (this->in_cache_->HasNext()) {
 			Tuple<Type> tuple = this->in_cache_->GetNext();
 			if (this->condition_(tuple.data)) {
-				this->out_cache_->Insert(data);
+				this->out_cache_->Insert(tuple);
 			}
 		}
 		this->in_node_->CleanCache();
@@ -687,7 +687,7 @@ private:
 	Cache<Type> *in_cache_left_;
 	Cache<Type> *in_cache_right_;
 
-	Cache *out_cache_;
+	Cache<Type> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -716,7 +716,7 @@ public:
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
 
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2);
+		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
 		// init table from graph metastate based on index
 
@@ -780,7 +780,7 @@ protected:
 	Cache<LeftType> *in_cache_left_;
 	Cache<RightType> *in_cache_right_;
 
-	Cache *out_cache_;
+	Cache<OutType> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 
@@ -820,7 +820,7 @@ public:
 				if (in_left_tuple.data == in_right_tuple.data) {
 					Tuple<Type> out_tuple {in_left_tuple.data,
 					                       this->delta_function_(in_left_tuple->delta, in_right_tuple->delta)};
-					out_cache->Insert(out_tuple);
+					this->out_cache_->Insert(out_tuple);
 				}
 			}
 		}
@@ -837,7 +837,7 @@ public:
 				Tuple<Type> out_tuple;
 				out_tuple.data = in_left_tuple.data;
 				for (auto &right_delta : right_deltas) {
-					Delta out_delta = this->delta_function_(in_left_tuple->delta, right_delta);
+					Delta out_delta = this->delta_function_(in_left_tuple.delta, right_delta);
 					out_tuple.delta = out_delta;
 					this->out_cache_->Insert(out_tuple);
 				}
@@ -852,13 +852,12 @@ public:
 			// get matching on data from right and iterate it's deltas
 			index idx;
 			if (this->left_table_->Search(in_right_tuple->data, &idx)) {
-				Tuple<Type> out_tuple;
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 
 				Tuple<Type> out_tuple;
-				out_tuple.data = in_left_tuple.data;
+				out_tuple.data = in_right_tuple.data;
 				for (auto &left_delta : left_deltas) {
-					Delta out_delta = this->delta_function_(left_delta, in_right_tuple->delta);
+					Delta out_delta = this->delta_function_(left_delta, in_right_tuple.delta);
 					out_tuple.delta = out_delta;
 					this->out_cache_->Insert(out_tuple);
 				}
@@ -927,7 +926,7 @@ public:
 				                   in_left_tuple.delta.count * in_right_tuple.delta.count};
 
 				out_tuple.data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
-				out_cache->Insert(out_tuple);
+				this->out_cache_->Insert(out_tuple);
 			}
 		}
 
@@ -942,7 +941,7 @@ public:
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
 				Tuple<OutType> out_tuple;
-				out_tuple->data = this->join_layout_(in_left_tuple->data, data);
+				out_tuple.data = this->join_layout_(in_left_tuple.data, data);
 				for (auto &right_delta : right_deltas) {
 					out_tuple.delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
 					                   in_left_tuple.delta.count * right_delta.count};
@@ -962,7 +961,7 @@ public:
 				// deltas from right table
 				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
 				Tuple<OutType> out_tuple;
-				out_tuple->data = this->join_layout_(in_left_tuple->data, data);
+				out_tuple.data = this->join_layout_(data, in_right_tuple.data);
 				for (auto &left_delta : left_deltas) {
 					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
 					                   in_right_tuple.delta.count * left_delta.count};
@@ -973,12 +972,12 @@ public:
 
 		// insert new deltas from in_caches
 		while (this->in_cache_right->HasNext()) {
-			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+			Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
 			index idx = this->right_table_->Insert(in_right_tuple.data);
 			this->table_->InsertDelta(idx, in_right_tuple.delta);
 		}
 		while (this->in_cache_left->HasNext()) {
-			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
+			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
 			index idx = this->left_table_->Insert(in_left_tuple->data);
 			this->table_->InsertDelta(idx, in_left_tuple->delta);
 		}
@@ -1024,7 +1023,7 @@ public:
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = ts_;
 
-		this->out_cache_ = new Cache(DEFAULT_CACHE_SIZE * 2);
+		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
 		// init table from graph metastate based on index
 
@@ -1077,7 +1076,6 @@ public:
 				Tuple<OutType> out_tuple;
 				out_tuple.data = this->join_layout_(in_left_tuple.data, right_data);
 				for (auto &right_delta : right_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
 					out_tuple->delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
 					                    in_left_tuple.delta.count * right_delta.count};
 					this->out_cache_->Insert(out_tuple);
@@ -1100,7 +1098,6 @@ public:
 				Tuple<OutType> out_tuple;
 				out_tuple.data = this->join_layout_(left_data, in_right_tuple.data);
 				for (auto &left_delta : left_deltas) {
-					this->out_cache_->ReserveNext(&out_data);
 					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
 					                   in_right_tuple.delta.count * left_delta.count};
 					this->out_cache_->Insert(out_tuple);
@@ -1110,14 +1107,14 @@ public:
 
 		// insert new deltas from in_caches
 		while (this->in_cache_right->HasNext()) {
-			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
+			Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
 			index idx = this->right_table_->Insert(in_right_tuple.data);
 			this->table_->InsertDelta(idx, in_right_tuple.delta);
 		}
 		while (this->in_cache_left->HasNext()) {
-			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
-			index idx = this->left_table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta);
+			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
+			index idx = this->left_table_->Insert(in_left_tuple.data);
+			this->table_->InsertDelta(idx, in_left_tuple.delta);
 		}
 
 		// clean in_caches
@@ -1143,7 +1140,7 @@ public:
 		delete this->right_table_;
 	}
 
-	Cache < OutType *Output() {
+	Cache<OutType> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -1235,7 +1232,7 @@ public:
 		this->next_clean_ts_ = ts_;
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
-		this->out_cache_ = new Cache(2);
+		this->out_cache_ = new Cache<OutType>(2);
 
 		// init table from graph metastate based on index
 		this->table_ =
@@ -1247,7 +1244,7 @@ public:
 		delete table_;
 	}
 
-	Cache *Output() {
+	Cache<OutType> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
@@ -1277,7 +1274,6 @@ public:
 
 			index idx = this->table_->Insert(in_tuple.data);
 			this->table_->InsertDelta(idx, in_tuple.delta);
-			/** @todo store recomputed indexes in persistent storage */
 			recompute_indexes_.insert(idx);
 		}
 
@@ -1294,8 +1290,6 @@ public:
 
 			for (const auto &idx : recompute_indexes_) {
 
-				char *out_data_insert;
-				this->out_cache_->ReserveNext(&out_data_insert);
 				InType data = this->table_->Get(idx);
 				MatchType match = this->get_match_(data);
 
@@ -1386,8 +1380,8 @@ private:
 	Table<InType, MatchType> *table_;
 	index table_index_;
 
-	Cache *in_cache_;
-	Cache *out_cache_;
+	Cache<InType> *in_cache_;
+	Cache<OutType> *out_cache_;
 	int out_count = 0;
 	int clean_count = 0;
 

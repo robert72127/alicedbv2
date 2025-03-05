@@ -98,6 +98,40 @@ void prepare_people_data_file(std::string people_fname){
     people_writter.close();
 }
 
+// this isn't required part, but we just need to create our data files
+void prepare_people_data_file_random(std::string people_fname){
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+
+    std::ofstream people_writter{people_fname};
+    
+    // parse people
+    int cnt = 0;
+    for (auto &name : names){
+        for(auto &surname: surnames ){
+                int age = std::rand() % 101; // Random number between 0 and 100
+                
+                int dog_race_nr = std::rand() % 50;
+                
+                float account_ballance =  (std::rand() / (float)RAND_MAX) * 2000.0f;
+
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+                //std::cout << test_str <<std::endl;
+                people_writter << person_str << std::endl;
+                cnt++;
+                if(cnt > 1){ break;}
+        }
+        if(cnt > 100){break;}
+    }
+
+    people_writter.close();
+}
+
+
 void prepare_dog_data_file(std::string dogs_fname){
 
     std::ofstream dog_writter{dogs_fname};
@@ -126,7 +160,7 @@ struct Person {
     float account_balance;
 };
 
-struct NamedBalance {
+struct NameTotalBalance {
     std::array<char, 50> name;
     float account_balance;
 };
@@ -151,6 +185,26 @@ struct JoinDogPerson {
     int age;
 };
 
+struct PairPeople {
+    std::array<char, 50> lname;
+    std::array<char, 50> lsurname;
+    int lage;
+    std::array<char, 50> rname;
+    std::array<char, 50> rsurname;
+    int rage;
+};
+
+
+struct SameAgedPeople {
+    std::array<char, 50> lname;
+    std::array<char, 50> lsurname;
+    int age;
+    std::array<char, 50> rname;
+    std::array<char, 50> rsurname;
+};
+
+
+
 void print_person(const char *data){
     const Person *p = reinterpret_cast<const Person*>(data);
     std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " " << p->age << " " << p->account_balance  << std::endl; 
@@ -162,6 +216,12 @@ void print_joindogperson(const char *data){
 
     std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " " << p->dog_cost << " " << p->account_balace << " "  << p->age << std::endl; 
 } 
+
+void print_nametotalbalance(const char *data){
+    const NameTotalBalance *p = reinterpret_cast<const NameTotalBalance*>(data);
+    std::cout<<p->name.data() << " " << p->account_balance << std::endl; 
+} 
+
 
 
 
@@ -214,11 +274,13 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             return true;
 }
 
-
+/*
 TEST(STATEFULL_TEST, UNION){
 
     std::string people_fname = "people.txt";
+    std::string people_fname2 = "people2.txt";
     prepare_people_data_file(people_fname);
+    prepare_people_data_file(people_fname2);
     
     int worker_threads_cnt = 1;
 
@@ -226,29 +288,13 @@ TEST(STATEFULL_TEST, UNION){
 
     auto g = db->CreateGraph();
 
-    /*
     auto *view = 
         g->View(
                 g->Union(
                     g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
-                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname2, parsePerson,0)
                 )
         );
-    */
-    auto *view = 
-        g->View(
-                g->AggregateBy(
-                    [](const Person &p) { return Name{.name = p.name}; },
-                    [](const Person &p, int count, const NamedBalance &nb, bool first ){
-                        return NamedBalance{
-                            .name = p.name,
-                            .account_balance = first?  p.account_balance : p.account_balance + nb.account_balance
-                        };
-                    },
-                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
-                )
-        );
-
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -263,17 +309,240 @@ TEST(STATEFULL_TEST, UNION){
     db = nullptr;
     std::filesystem::remove_all("database");
 }
+*/
+
+/*
+TEST(STATEFULL_TEST, EXCEPT){
+
+    std::string people_fname = "people.txt";
+    std::string people_fname2 = "people2.txt";
+    prepare_people_data_file_random(people_fname);
+    prepare_people_data_file_random(people_fname2);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+                g->Except(
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname2, parsePerson,0)
+                )
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+
+    // debugging
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+*/
+
+/*
+TEST(STATEFULL_TEST, INTERSECT){
+
+    std::string people_fname = "people.txt";
+    std::string people_fname2 = "people2.txt";
+    prepare_people_data_file_random(people_fname);
+    prepare_people_data_file_random(people_fname2);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+                g->Intersect(
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname2, parsePerson,0)
+                )
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+
+    // debugging
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+*/
+/*
+void print_pairpeople(const char *data){
+    const PairPeople *p = reinterpret_cast<const PairPeople*>(data);
+
+    std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->lage << "\t\t"; 
+    std::cout<<p->rname.data() << " " << p->rsurname.data() << " " << p->rage << std::endl; 
+} 
+
+
+TEST(SIMPLESTATE_TEST, CROSSJOIN){
+
+    std::string people_fname = "people.txt";
+    std::string people_fname2 = "people2.txt";
+    prepare_people_data_file_random(people_fname);
+    prepare_people_data_file_random(people_fname2);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+
+    auto *view =
+        g->View(
+            g->CrossJoin(
+                [](const Person &left, const Person &right){
+                    return PairPeople{
+                        .lname=left.name,
+                        .lsurname=left.surname,
+                        .lage=left.age,
+                        .rname=right.name,
+                        .rsurname=right.surname,
+                        .rage=right.age
+                    };
+                },
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname2, parsePerson,0)
+            )
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<PairPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<PairPeople>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_pairpeople);
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+   
+    std::filesystem::remove("./people2.txt");
+    std::filesystem::remove("./people1.txt");
+}
+*/
+
+/*
+void print_sameagedpeople(const char *data){
+    const SameAgedPeople *p = reinterpret_cast<const SameAgedPeople*>(data);
+    std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->age << " "<< p->rname.data() << " " << p->rsurname.data()  << std::endl; 
+} 
+
+
+TEST(SIMPLESTATE_TEST, JOIN){
+
+    std::string people_fname = "people.txt";
+    std::string people_fname2 = "people2.txt";
+    prepare_people_data_file_random(people_fname);
+    prepare_people_data_file_random(people_fname2);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view =
+        g->View(
+            g->Join(
+                [](const Person &l)  { return l.age;},
+                [](const Person &r)  { return r.age;},
+                [](const Person &left, const Person &right) { 
+                    return SameAgedPeople {
+                        .lname = left.name,
+                        .lsurname = left.surname,
+                        .age = left.age,
+                        .rname = right.name,
+                        .rsurname = right.surname,
+                    };
+                },
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname2, parsePerson,0)
+            )
+        );
+
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<SameAgedPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<SameAgedPeople>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_sameagedpeople);
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+   
+    std::filesystem::remove("./people2.txt");
+    std::filesystem::remove("./people1.txt");
+}
+*/
+
+TEST(STATEFULL_TEST, AGGREGATEBY){
+
+    std::string people_fname = "people.txt";
+    std::string people_fname2 = "people2.txt";
+    prepare_people_data_file(people_fname);
+    prepare_people_data_file(people_fname2);
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+                g->AggregateBy(
+                    [](const Person &p) { return Name{.name = p.name}; },
+                    [](const Person &p, int count, const NameTotalBalance &nb, bool first ){
+                        return NameTotalBalance {
+                            .name = p.name,
+                            .account_balance = first?  p.account_balance : p.account_balance + nb.account_balance
+                        };
+                    },
+                    g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+                )
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+
+    // debugging
+    AliceDB::SinkNode<NameTotalBalance> *real_sink = reinterpret_cast<AliceDB::SinkNode<NameTotalBalance>*>(view);
+    real_sink->Print(AliceDB::get_current_timestamp(), print_nametotalbalance );
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+    std::filesystem::remove("./people2.txt");
+    std::filesystem::remove("./people1.txt");
+}
 
 
 
-
-
-
-
-
-
-    /*
-
+/*
 TEST(MULTINODE_TEST, multinode_test){
     std::string dogs_fname = "dogs.txt";
     std::string people_fname = "people.txt";

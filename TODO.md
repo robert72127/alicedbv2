@@ -35,9 +35,15 @@
 
     
 ## Tests []:
-    * write tests for each node []
+    * write tests for each node [V]
     * write tests for the whole system, that performs both inserts and deletes of tuples []
 
+## Fix:
+    AggregateNode []
+    WorkerPoolTest []
+
+## Add:
+    Exporting data []
 ----------------------------------------------------------------------------------------------
 
 ## Write PDF with description

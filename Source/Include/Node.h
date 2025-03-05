@@ -806,10 +806,9 @@ public:
 			while (this->in_cache_right_->HasNext()) {
 				Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
 				// if left and right caches match on data put it into out_cache with new delta
-				if (in_left_tuple.data == in_right_tuple.data) {
-					Tuple<Type> out_tuple {in_left_tuple.data,
-					                       this->delta_function_(in_left_tuple->delta, in_right_tuple->delta)};
-					this->out_cache_->Insert(out_tuple);
+				if (std::memcmp(&in_left_tuple.data, &in_right_tuple.data, sizeof(Type)) == 0) {
+					this->out_cache_->Insert(in_left_tuple.data,
+					                         this->delta_function_(in_left_tuple.delta, in_right_tuple.delta));
 				}
 			}
 		}
@@ -820,8 +819,8 @@ public:
 
 			// get matching on data from left and iterate it's deltas
 			index idx;
-			if (this->right_table_->Search(in_left_tuple->data, &idx)) {
-				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+			if (this->right_table_->Search(in_left_tuple.data, &idx)) {
+				const std::vector<Delta> &right_deltas = this->right_table_->Scan(idx);
 
 				Tuple<Type> out_tuple;
 				out_tuple.data = in_left_tuple.data;
@@ -840,14 +839,13 @@ public:
 
 			// get matching on data from right and iterate it's deltas
 			index idx;
-			if (this->left_table_->Search(in_right_tuple->data, &idx)) {
-				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+			if (this->left_table_->Search(in_right_tuple.data, &idx)) {
+				const std::vector<Delta> &left_deltas = this->left_table_->Scan(idx);
 
 				Tuple<Type> out_tuple;
 				out_tuple.data = in_right_tuple.data;
 				for (auto &left_delta : left_deltas) {
-					Delta out_delta = this->delta_function_(left_delta, in_right_tuple.delta);
-					out_tuple.delta = out_delta;
+					out_tuple.delta = this->delta_function_(left_delta, in_right_tuple.delta);
 					this->out_cache_->Insert(out_tuple);
 				}
 			}
@@ -856,15 +854,15 @@ public:
 		this->out_cache_->FinishInserting();
 
 		// insert new deltas from in_caches
-		while (this->in_cache_right->HasNext()) {
+		while (this->in_cache_right_->HasNext()) {
 			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
 			index idx = this->right_table_->Insert(in_right_tuple.data);
-			this->table_->InsertDelta(idx, in_right_tuple.delta);
+			this->right_table_->InsertDelta(idx, in_right_tuple.delta);
 		}
-		while (this->in_cache_left->HasNext()) {
+		while (this->in_cache_left_->HasNext()) {
 			Tuple<Type> in_left_tuple = this->in_cache_left_->GetNext();
-			index idx = this->left_table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta);
+			index idx = this->left_table_->Insert(in_left_tuple.data);
+			this->left_table_->InsertDelta(idx, in_left_tuple.delta);
 		}
 
 		// clean in_caches
@@ -916,23 +914,23 @@ public:
 				out_tuple.delta = {std::max(in_left_tuple.delta.ts, in_right_tuple.delta.ts),
 				                   in_left_tuple.delta.count * in_right_tuple.delta.count};
 
-				out_tuple.data = this->join_layout_(in_left_tuple->data, in_right_tuple->data);
+				out_tuple.data = this->join_layout_(in_left_tuple.data, in_right_tuple.data);
 				this->out_cache_->Insert(out_tuple);
 			}
 		}
 
 		// compute left cache against right table
 		// right table
-		for (auto it = this->table_right_->begin(); it != this->table_right_->end(); ++it) {
+		for (auto it = this->right_table_->begin(); it != this->right_table_->end(); ++it) {
 			auto [data, idx] = it.Get();
 			// left cache
 			while (this->in_cache_left_->HasNext()) {
 				Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
 
 				// deltas from right table
-				std::multiset<Delta, DeltaComparator> &right_deltas = this->right_table_->Scan(idx);
+				const std::vector<Delta> &right_deltas = this->right_table_->Scan(idx);
 				Tuple<OutType> out_tuple;
-				out_tuple.data = this->join_layout_(in_left_tuple.data, data);
+				out_tuple.data = this->join_layout_(in_left_tuple.data, *data);
 				for (auto &right_delta : right_deltas) {
 					out_tuple.delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
 					                   in_left_tuple.delta.count * right_delta.count};
@@ -943,16 +941,16 @@ public:
 
 		// compute right cache against left table
 		// right table
-		for (auto it = this->table_left_->begin(); it != this->table_left_->end(); ++it) {
+		for (auto it = this->left_table_->begin(); it != this->left_table_->end(); ++it) {
 			auto [data, idx] = it.Get();
 			// left cache
 			while (this->in_cache_right_->HasNext()) {
 				Tuple<InTypeLeft> in_right_tuple = this->in_cache_right_->GetNext();
 
 				// deltas from right table
-				std::multiset<Delta, DeltaComparator> &left_deltas = this->left_table_->Scan(idx);
+				const std::vector<Delta> &left_deltas = this->left_table_->Scan(idx);
 				Tuple<OutType> out_tuple;
-				out_tuple.data = this->join_layout_(data, in_right_tuple.data);
+				out_tuple.data = this->join_layout_(*data, in_right_tuple.data);
 				for (auto &left_delta : left_deltas) {
 					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
 					                   in_right_tuple.delta.count * left_delta.count};
@@ -964,15 +962,15 @@ public:
 		this->out_cache_->FinishInserting();
 
 		// insert new deltas from in_caches
-		while (this->in_cache_right->HasNext()) {
+		while (this->in_cache_right_->HasNext()) {
 			Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
 			index idx = this->right_table_->Insert(in_right_tuple.data);
-			this->table_->InsertDelta(idx, in_right_tuple.delta);
+			this->right_table_->InsertDelta(idx, in_right_tuple.delta);
 		}
-		while (this->in_cache_left->HasNext()) {
+		while (this->in_cache_left_->HasNext()) {
 			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
-			index idx = this->left_table_->Insert(in_left_tuple->data);
-			this->table_->InsertDelta(idx, in_left_tuple->delta);
+			index idx = this->left_table_->Insert(in_left_tuple.data);
+			this->left_table_->InsertDelta(idx, in_left_tuple.delta);
 		}
 
 		// clean in_caches
@@ -1069,8 +1067,8 @@ public:
 				Tuple<OutType> out_tuple;
 				out_tuple.data = this->join_layout_(in_left_tuple.data, right_data);
 				for (auto &right_delta : right_deltas) {
-					out_tuple->delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
-					                    in_left_tuple.delta.count * right_delta.count};
+					out_tuple.delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
+					                   in_left_tuple.delta.count * right_delta.count};
 					this->out_cache_->Insert(out_tuple);
 				}
 			}
@@ -1079,7 +1077,7 @@ public:
 		// compute right cache against left table
 		while (this->in_cache_right_->HasNext()) {
 			Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
-			MatchType match = this->get_match_right_(in_right_tuple->data);
+			MatchType match = this->get_match_right_(in_right_tuple.data);
 			auto matches = this->left_table_->MatchSearch(match);
 
 			for (auto it = matches.begin(); it != matches.end(); it++) {
@@ -1101,15 +1099,15 @@ public:
 		this->out_cache_->FinishInserting();
 
 		// insert new deltas from in_caches
-		while (this->in_cache_right->HasNext()) {
+		while (this->in_cache_right_->HasNext()) {
 			Tuple<InTypeRight> in_right_tuple = this->in_cache_right_->GetNext();
 			index idx = this->right_table_->Insert(in_right_tuple.data);
-			this->table_->InsertDelta(idx, in_right_tuple.delta);
+			this->right_table_->InsertDelta(idx, in_right_tuple.delta);
 		}
-		while (this->in_cache_left->HasNext()) {
+		while (this->in_cache_left_->HasNext()) {
 			Tuple<InTypeLeft> in_left_tuple = this->in_cache_left_->GetNext();
 			index idx = this->left_table_->Insert(in_left_tuple.data);
-			this->table_->InsertDelta(idx, in_left_tuple.delta);
+			this->left_table_->InsertDelta(idx, in_left_tuple.delta);
 		}
 
 		// clean in_caches
@@ -1327,9 +1325,9 @@ public:
 					insert_tpl.data = this->aggr_fun_(matched_data, count, insert_tpl.data, first);
 					first = false;
 				}
-				this->out_cache->Insert(insert_tpl);
+				this->out_cache_->Insert(insert_tpl);
 				if (first_delete == false) {
-					this->out_cache->Insert(delete_tpl);
+					this->out_cache_->Insert(delete_tpl);
 				}
 			}
 

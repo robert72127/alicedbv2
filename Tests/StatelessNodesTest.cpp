@@ -104,8 +104,6 @@ void print_name(const char *data){
     std::cout<< n->name.data()<< std::endl; 
 } 
 
-
-
 TEST(STATELESS_TEST, FILTER){
 
     std::string people_fname = "people.txt";
@@ -175,4 +173,3 @@ TEST(STATELESS_TEST, PROJECTION){
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-

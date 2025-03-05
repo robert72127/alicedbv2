@@ -1282,7 +1282,6 @@ public:
 			// insert and delete index in out edge cache, for this match type
 
 			for (const auto &idx : recompute_indexes_) {
-
 				InType data = this->table_->Get(idx);
 				MatchType match = this->get_match_(data);
 
@@ -1308,7 +1307,7 @@ public:
 					int delete_count = 0;
 					int count = 0;
 					for (const auto &delta : deltas) {
-						if (delta.ts <= this->previous_ts_) {
+						if (delta.ts < this->previous_ts_) {
 							delete_count += delta.count;
 						}
 						if (delta.ts > this->ts_) {
@@ -1325,6 +1324,7 @@ public:
 					insert_tpl.data = this->aggr_fun_(matched_data, count, insert_tpl.data, first);
 					first = false;
 				}
+
 				this->out_cache_->Insert(insert_tpl);
 				if (first_delete == false) {
 					this->out_cache_->Insert(delete_tpl);
@@ -1337,6 +1337,7 @@ public:
 			recompute_indexes_ = {};
 		}
 
+		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
 
 		// periodically call garbage collector

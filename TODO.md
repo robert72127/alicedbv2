@@ -39,7 +39,6 @@
     * write tests for the whole system, that performs both inserts and deletes of tuples []
 
 ## Fix:
-    AggregateNode []
     WorkerPoolTest []
 
 ## Add:

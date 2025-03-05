@@ -274,7 +274,6 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             return true;
 }
 
-/*
 TEST(STATEFULL_TEST, UNION){
 
     std::string people_fname = "people.txt";
@@ -309,9 +308,7 @@ TEST(STATEFULL_TEST, UNION){
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-*/
 
-/*
 TEST(STATEFULL_TEST, EXCEPT){
 
     std::string people_fname = "people.txt";
@@ -346,9 +343,7 @@ TEST(STATEFULL_TEST, EXCEPT){
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-*/
 
-/*
 TEST(STATEFULL_TEST, INTERSECT){
 
     std::string people_fname = "people.txt";
@@ -383,8 +378,7 @@ TEST(STATEFULL_TEST, INTERSECT){
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-*/
-/*
+
 void print_pairpeople(const char *data){
     const PairPeople *p = reinterpret_cast<const PairPeople*>(data);
 
@@ -436,12 +430,10 @@ TEST(SIMPLESTATE_TEST, CROSSJOIN){
     db = nullptr;
     std::filesystem::remove_all("database");
    
-    std::filesystem::remove("./people2.txt");
-    std::filesystem::remove("./people1.txt");
 }
-*/
 
-/*
+
+
 void print_sameagedpeople(const char *data){
     const SameAgedPeople *p = reinterpret_cast<const SameAgedPeople*>(data);
     std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->age << " "<< p->rname.data() << " " << p->rsurname.data()  << std::endl; 
@@ -491,11 +483,8 @@ TEST(SIMPLESTATE_TEST, JOIN){
     // delete database directory
     db = nullptr;
     std::filesystem::remove_all("database");
-   
-    std::filesystem::remove("./people2.txt");
-    std::filesystem::remove("./people1.txt");
 }
-*/
+
 
 TEST(STATEFULL_TEST, AGGREGATEBY){
 
@@ -536,13 +525,9 @@ TEST(STATEFULL_TEST, AGGREGATEBY){
     // delete database directory
     db = nullptr;
     std::filesystem::remove_all("database");
-    std::filesystem::remove("./people2.txt");
-    std::filesystem::remove("./people1.txt");
 }
 
 
-
-/*
 TEST(MULTINODE_TEST, multinode_test){
     std::string dogs_fname = "dogs.txt";
     std::string people_fname = "people.txt";
@@ -643,5 +628,3 @@ TEST(MULTINODE_TEST, multinode_test){
     db->Shutdown();
 
 }
-
-*/

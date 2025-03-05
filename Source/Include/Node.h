@@ -113,6 +113,8 @@ public:
 			prod_tuple.delta.ts = get_current_timestamp();
 			produce_cache_->Insert(prod_tuple);
 		}
+
+		this->produce_cache_->FinishInserting();
 	}
 
 	Cache<Type> *Output() {
@@ -295,6 +297,7 @@ public:
 				this->out_cache_->Insert(tuple);
 			}
 		}
+		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
 	}
 
@@ -363,6 +366,7 @@ public:
 			out_cache_->Insert(out_tuple, in_tuple.delta);
 		}
 
+		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
 	}
 
@@ -539,6 +543,7 @@ public:
 			this->Compact(); // after this iteration oldest version keep will be one with timestamp of current compact
 			this->compact_ = false;
 			recompute_indexes_ = {};
+			this->out_cache_->FinishInserting();
 		}
 
 		// periodically call garbage collector
@@ -649,8 +654,9 @@ public:
 			Tuple<Type> in_tuple = in_cache_right_->GetNext();
 			out_cache_->Insert(in_tuple);
 		}
-
 		this->in_node_right_->CleanCache();
+
+		this->out_cache_->FinishInserting();
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -847,6 +853,8 @@ public:
 			}
 		}
 
+		this->out_cache_->FinishInserting();
+
 		// insert new deltas from in_caches
 		while (this->in_cache_right->HasNext()) {
 			Tuple<Type> in_right_tuple = this->in_cache_right_->GetNext();
@@ -952,6 +960,8 @@ public:
 				}
 			}
 		}
+
+		this->out_cache_->FinishInserting();
 
 		// insert new deltas from in_caches
 		while (this->in_cache_right->HasNext()) {
@@ -1087,6 +1097,8 @@ public:
 				}
 			}
 		}
+
+		this->out_cache_->FinishInserting();
 
 		// insert new deltas from in_caches
 		while (this->in_cache_right->HasNext()) {

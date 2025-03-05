@@ -31,6 +31,7 @@ class Cache {
 public:
 	Cache(size_t initial_size) {
 		tuples_.reserve(initial_size);
+		ResetIteration();
 	}
 
 	void Clean() {
@@ -43,8 +44,9 @@ public:
 			this->ResetIteration();
 			return false;
 		}
-		if (delta_index_ < current_->second.size())
+		if (delta_index_ < current_->second.size()) {
 			return true;
+		}
 		current_++;
 		delta_index_ = 0;
 		return HasNext();
@@ -69,6 +71,10 @@ public:
 		tuples_[key].push_back(delta);
 	}
 
+	void FinishInserting() {
+		ResetIteration();
+	}
+
 private:
 	void ResetIteration() {
 		current_ = tuples_.begin();
@@ -76,8 +82,7 @@ private:
 	}
 
 	// current operation
-	size_t tuple_index_;
-	size_t delta_index_;
+	size_t delta_index_ = 0;
 	typename std::unordered_map<std::array<char, sizeof(Type)>, std::vector<Delta>>::iterator current_;
 
 	// storage

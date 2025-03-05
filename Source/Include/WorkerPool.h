@@ -56,7 +56,7 @@ struct GraphState {
 
 class WorkerPool {
 public:
-	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt} {
+	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_ {false} {
 		this->stop_worker_.resize(this->workers_cnt_);
 		for (int i = 0; i < this->workers_cnt_; i++) {
 			this->stop_worker_[i] = false;
@@ -106,6 +106,7 @@ public:
 		graphs_.emplace_back(std::make_shared<GraphState>(g));
 	}
 
+private:
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
@@ -134,7 +135,6 @@ public:
 		}
 	}
 
-private:
 	/**
 	 * @brief Iterates all graphs, and returns next graph with work to do
 	 *  called by worker thread that is currently free, to get new work assigned
@@ -167,7 +167,7 @@ private:
 	std::vector<std::thread> workers_;
 	std::vector<bool> stop_worker_;
 
-	bool stop_all_ = false;
+	bool stop_all_;
 
 	const int workers_cnt_;
 };

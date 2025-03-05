@@ -16,23 +16,6 @@
 #include <set>
 #include <type_traits>
 
-template <typename Type>
-std::array<char, sizeof(Type)> Key(const Type &type) {
-	std::array<char, sizeof(Type)> key;
-	std::memcpy(key.data(), &type, sizeof(Type));
-	return key;
-}
-template <typename Type>
-struct KeyHash {
-	std::size_t operator()(const std::array<char, sizeof(Type)> &key) const {
-		// You can use any suitable hash algorithm. Here, we'll use std::hash with
-		// std::string_view
-		return std::hash<std::string_view>()(std::string_view(key.data(), key.size()));
-	}
-};
-
-#define DEFAULT_CACHE_SIZE (200)
-
 namespace AliceDB {
 
 struct GarbageCollectSettings {
@@ -376,8 +359,8 @@ public:
 	void Compute() {
 		while (in_cache_->HasNext()) {
 			Tuple<InType> in_tuple = this->in_cache_->GetNext();
-			Tuple<InType> out_tuple {this->projection_(in_tuple.data), in_tuple.delta};
-			out_cache_->Insert(out_tuple);
+			OutType out_tuple = this->projection_(in_tuple.data);
+			out_cache_->Insert(out_tuple, in_tuple.delta);
 		}
 
 		this->in_node_->CleanCache();
@@ -548,8 +531,8 @@ public:
 				if ((prev_not_emited && current_positive) ||
 				    (previous_positive && !current_positive && ~prev_not_emited) ||
 				    (!previous_positive && current_positive && ~prev_not_emited)) {
-					Tuple<Type> update_tpl(this->table_->Get(idx), {this->ts_, current_positive ? 1 : -1});
-					this->out_cache_->Insert(update_tpl);
+					Type tp = this->table_->Get(idx);
+					this->out_cache_->Insert(tp, Delta {this->ts_, current_positive ? 1 : -1});
 				}
 			}
 

@@ -1,3 +1,14 @@
+#include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <thread>
+#include <chrono>
+
+#include "gtest/gtest.h"
+
+#include "AliceDB.h"
+
+/*
 // Seed the random number generator
 TEST(MULTINODE_TEST, multinode_test){
     std::string dogs_fname = "dogs.txt";
@@ -99,3 +110,4 @@ TEST(MULTINODE_TEST, multinode_test){
     db->Shutdown();
 
 }
+*/

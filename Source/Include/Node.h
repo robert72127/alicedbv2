@@ -41,7 +41,7 @@ class Node {
 public:
 	virtual ~Node() {};
 
-	virtual void Compute() = 0;
+	virtual bool Compute() = 0;
 
 	virtual void CleanCache() = 0;
 	/**
@@ -99,7 +99,9 @@ public:
 		delete produce_cache_;
 	}
 
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
+
 		auto start = std::chrono::steady_clock::now();
 		std::chrono::microseconds duration(this->duration_us_);
 		auto end = start + duration;
@@ -110,11 +112,13 @@ public:
 			if (!success) {
 				break;
 			}
+			produced = true;
 			prod_tuple.delta.ts = get_current_timestamp();
 			produce_cache_->Insert(prod_tuple);
 		}
 
 		this->produce_cache_->FinishInserting();
+		return produced;
 	}
 
 	Cache<Type> *Output() {
@@ -123,10 +127,10 @@ public:
 	}
 
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->produce_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
@@ -150,7 +154,7 @@ private:
 	// table and passed to output nodes
 	Cache<Type> *produce_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	int duration_us_;
 
@@ -182,7 +186,7 @@ public:
 		delete table_;
 	}
 
-	void Compute() {
+	bool Compute() {
 		// write in cache into out_table
 		const char *in_data;
 		while (this->in_cache_->HasNext()) {
@@ -205,6 +209,9 @@ public:
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
+
+		// never produces
+		return false;
 	}
 
 	// print state of table at this moment, used for debugging only
@@ -289,27 +296,32 @@ public:
 
 	// filters node
 	// those that pass are put into output cache, this is all that this node does
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
 		// pass function that match condition to output
 		while (this->in_cache_->HasNext()) {
 			Tuple<Type> tuple = this->in_cache_->GetNext();
 			if (this->condition_(tuple.data)) {
 				this->out_cache_->Insert(tuple);
+				produced = true;
 			}
 		}
 		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
+
+		return produced;
 	}
 
 	Cache<Type> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
@@ -336,7 +348,7 @@ private:
 	Cache<Type> *in_cache_;
 	Cache<Type> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	// acquired from in node, this will be passed to output node
 	timestamp frontier_ts_;
@@ -359,26 +371,31 @@ public:
 		delete out_cache_;
 	}
 
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
 		while (in_cache_->HasNext()) {
 			Tuple<InType> in_tuple = this->in_cache_->GetNext();
 			OutType out_tuple = this->projection_(in_tuple.data);
 			out_cache_->Insert(out_tuple, in_tuple.delta);
+			produced = true;
 		}
 
 		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
+
+		return produced;
 	}
 
 	Cache<OutType> *Output() {
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
@@ -405,7 +422,7 @@ private:
 	Cache<InType> *in_cache_;
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	// current timestamp
 	timestamp ts_;
@@ -457,11 +474,12 @@ public:
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
@@ -469,7 +487,8 @@ public:
 		return this->frontier_ts_;
 	}
 
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
 
 		// first insert all new data from cache to table
 		while (this->in_cache_->HasNext()) {
@@ -537,6 +556,7 @@ public:
 				    (!previous_positive && current_positive && ~prev_not_emited)) {
 					Type tp = this->table_->Get(idx);
 					this->out_cache_->Insert(tp, Delta {this->ts_, current_positive ? 1 : -1});
+					produced = true;
 				}
 			}
 
@@ -553,6 +573,8 @@ public:
 		}
 
 		this->in_node_->CleanCache();
+
+		return produced;
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -580,7 +602,7 @@ private:
 	Cache<Type> *in_cache_;
 	Cache<Type> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -627,25 +649,28 @@ public:
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
-
 	timestamp GetFrontierTs() const {
 		return this->frontier_ts_;
 	}
 
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
+
 		// process left input
 		const char *in_data;
 		char *out_data;
 		while (in_cache_left_->HasNext()) {
 			Tuple<Type> in_tuple = in_cache_left_->GetNext();
 			out_cache_->Insert(in_tuple);
+			produced = true;
 		}
 		this->in_node_left_->CleanCache();
 
@@ -653,10 +678,13 @@ public:
 		while (in_cache_right_->HasNext()) {
 			Tuple<Type> in_tuple = in_cache_right_->GetNext();
 			out_cache_->Insert(in_tuple);
+			produced = true;
 		}
 		this->in_node_right_->CleanCache();
 
 		this->out_cache_->FinishInserting();
+
+		return produced;
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -678,7 +706,7 @@ private:
 
 	Cache<Type> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	timestamp ts_;
 
@@ -730,18 +758,19 @@ public:
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
 	timestamp GetFrontierTs() const {
 		return this->frontier_ts_;
 	}
-	virtual void Compute() = 0;
+	virtual bool Compute() = 0;
 
 	void UpdateTimestamp(timestamp ts) {
 		if (this->ts_ + this->frontier_ts_ < ts) {
@@ -771,7 +800,7 @@ protected:
 
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -798,7 +827,9 @@ public:
 	                                           right_meta, left_table_index, right_table_index) {
 	}
 
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
+
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
 		while (this->in_cache_left_->HasNext()) {
@@ -809,6 +840,7 @@ public:
 				if (std::memcmp(&in_left_tuple.data, &in_right_tuple.data, sizeof(Type)) == 0) {
 					this->out_cache_->Insert(in_left_tuple.data,
 					                         this->delta_function_(in_left_tuple.delta, in_right_tuple.delta));
+					produced = true;
 				}
 			}
 		}
@@ -828,6 +860,7 @@ public:
 					Delta out_delta = this->delta_function_(in_left_tuple.delta, right_delta);
 					out_tuple.delta = out_delta;
 					this->out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -847,6 +880,7 @@ public:
 				for (auto &left_delta : left_deltas) {
 					out_tuple.delta = this->delta_function_(left_delta, in_right_tuple.delta);
 					this->out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -879,6 +913,8 @@ public:
 			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
+
+		return produced;
 	}
 
 private:
@@ -901,7 +937,9 @@ public:
 	      join_layout_ {join_layout} {
 	}
 
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
+
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
 		while (this->in_cache_left_->HasNext()) {
@@ -916,6 +954,7 @@ public:
 
 				out_tuple.data = this->join_layout_(in_left_tuple.data, in_right_tuple.data);
 				this->out_cache_->Insert(out_tuple);
+				produced = true;
 			}
 		}
 
@@ -935,6 +974,7 @@ public:
 					out_tuple.delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
 					                   in_left_tuple.delta.count * right_delta.count};
 					this->out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -955,6 +995,7 @@ public:
 					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
 					                   in_right_tuple.delta.count * left_delta.count};
 					this->out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -987,6 +1028,8 @@ public:
 			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
+
+		return produced;
 	}
 
 private:
@@ -1030,7 +1073,8 @@ public:
 	}
 
 	// this function changes
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
 		while (this->in_cache_left_->HasNext()) {
@@ -1046,6 +1090,7 @@ public:
 
 					out_tuple.data = this->join_layout_(in_left_tuple.data, in_right_tuple.data);
 					out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -1070,6 +1115,7 @@ public:
 					out_tuple.delta = {std::max(in_left_tuple.delta.ts, right_delta.ts),
 					                   in_left_tuple.delta.count * right_delta.count};
 					this->out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -1092,6 +1138,7 @@ public:
 					out_tuple.delta = {std::max(in_right_tuple.delta.ts, left_delta.ts),
 					                   in_right_tuple.delta.count * left_delta.count};
 					this->out_cache_->Insert(out_tuple);
+					produced = true;
 				}
 			}
 		}
@@ -1125,6 +1172,8 @@ public:
 
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
+
+		return produced;
 	}
 
 	~JoinNode() {
@@ -1137,11 +1186,12 @@ public:
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
@@ -1187,7 +1237,7 @@ private:
 
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -1241,11 +1291,12 @@ public:
 		this->out_count++;
 		return this->out_cache_;
 	}
+
 	void CleanCache() {
-		clean_count++;
-		if (this->clean_count == this->out_count) {
+		this->clean_count.fetch_add(1);
+		if (this->clean_count.load() == this->out_count) {
 			this->out_cache_->Clean();
-			this->clean_count = 0;
+			this->clean_count.exchange(0);
 		}
 	}
 
@@ -1259,7 +1310,8 @@ public:
 	// also will be wrong what if we would do : insert previous value with count
 	// -1 and insert current with count 1 at the same time then old should get
 	// discarded
-	void Compute() {
+	bool Compute() {
+		bool produced = false;
 
 		// first insert all new data from cache to table
 		while (this->in_cache_->HasNext()) {
@@ -1328,6 +1380,7 @@ public:
 				this->out_cache_->Insert(insert_tpl);
 				if (first_delete == false) {
 					this->out_cache_->Insert(delete_tpl);
+					produced = true;
 				}
 			}
 
@@ -1345,6 +1398,8 @@ public:
 			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
+
+		return produced;
 	}
 
 	void UpdateTimestamp(timestamp ts) {
@@ -1377,7 +1432,7 @@ private:
 	Cache<InType> *in_cache_;
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	int clean_count = 0;
+	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;

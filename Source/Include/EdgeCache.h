@@ -3,6 +3,7 @@
 
 #include "Common.h"
 
+#include <iostream>
 #include <unordered_map>
 #include <vector>
 
@@ -62,6 +63,7 @@ public:
 	}
 
 	void Insert(const Tuple<Type> &tpl) {
+		// std::cout<<static_cast<void*>(this)<<std::endl;
 		auto key = Key(tpl.data);
 		tuples_[key].push_back(tpl.delta);
 	}

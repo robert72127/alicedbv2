@@ -12,6 +12,11 @@ foreach(TEST_SRC ${TEST_SOURCES})
         GTest::gtest 
         GTest::gtest_main)
 
+        # Add AddressSanitizer compile/link flags
+        target_compile_options(${TEST_NAME} PRIVATE -fsanitize=address -fno-omit-frame-pointer -g -O1)
+        target_link_options(${TEST_NAME} PRIVATE -fsanitize=address)
+
+
         # Discover and register tests with CTest
         gtest_discover_tests(${TEST_NAME})
 endforeach()

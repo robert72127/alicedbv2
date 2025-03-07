@@ -421,38 +421,19 @@ public:
 	 */
 	bool GetNext(Node **next_node) {
 		std::scoped_lock(graph_latch_);
-		// this means we can reset levels
-		if (this->current_level_ >= this->levels_.size() - 1 && AllProcesed()) {
-			// great all processed, reet state ad start from beginning
-			this->current_level_ = 0;
-			this->current_index_ = 0;
-			for (const auto &node : this->all_nodes_) {
-				this->nodes_state_[node] = NodeState::NOT_PROCESSED;
-			}
-		}
-		// we assigned all nodes at highest level but some were not processed yet, return false
-		if (this->current_level_ >= this->levels_.size()) {
-			this->graph_latch_.unlock();
-			return false;
-		}
 
-		*next_node = this->levels_[current_level_][current_index_];
-		for (const auto &node : this->node_dependencies_[*next_node]) {
-			if (this->nodes_state_[node] != NodeState::PROCESSED) {
-				*next_node = nullptr;
+		if (this->produce_queue_.empty()) {
+			if (AllProcesed()) {
+				bool any_produced = FinishProduceRound();
+				if (!any_produced) {
+					return false;
+				}
+			} else {
 				return false;
 			}
 		}
-
-		// all nodes at current level were assigned, graduate to new level
-		current_index_++;
-		if (current_index_ >= this->levels_[current_level_].size()) {
-			current_index_ = 0;
-			current_level_++;
-		}
-
-		this->SetState(*next_node, NodeState::PROCESSING);
-
+		*next_node = this->produce_queue_.back();
+		this->produce_queue_.pop_back();
 		return true;
 	}
 
@@ -462,15 +443,61 @@ public:
 	bool AllProcesed() {
 		// all nodes are processed when all sink nodes are processed
 		for (const auto &node : this->sinks_) {
-			if (this->nodes_state_[node] != NodeState::PROCESSED) {
+			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
 				return false;
 			}
 		}
 		return true;
 	}
 
-	void SetState(Node *node, NodeState state) {
-		this->nodes_state_[node] = state;
+	bool FinishProduceRound() {
+		bool produced = false;
+		for (const auto &node : this->all_nodes_) {
+			produced |= this->nodes_state_[node].second;
+			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
+		}
+
+		this->produce_queue_ = {};
+		// insert all source nodes into produce_queue_
+		std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
+
+		return produced;
+	}
+
+	/** @todo put output nodes into produce queue if other is satisfied */
+	void Produced(Node *node, bool produced) {
+		std::scoped_lock(graph_latch_);
+
+		std::deque<Node *> processed = {node};
+
+		while (!processed.empty()) {
+			node = processed.back();
+			processed.pop_back();
+
+			// set state of the node, check if we can set state of out node also
+			for (const auto &out_node : this->out_edges_[node]) {
+				bool any_work = produced;
+				bool all_deps_processed = true;
+				for (const auto &in_node : this->node_dependencies_[out_node]) {
+					if (this->nodes_state_[in_node].first != NodeState::PROCESSED) {
+						all_deps_processed = false;
+						break;
+					} else {
+						any_work = any_work || this->nodes_state_[in_node].second;
+					}
+				}
+				if (all_deps_processed) {
+					// add node to work queue
+					if (any_work) {
+						// add this node to produce queue, someone will pick and process it
+						this->produce_queue_.push_back(out_node);
+					} else {
+						// no work to do perform same checks as on node that was just produced
+						processed.push_back(out_node);
+					}
+				}
+			}
+		}
 	}
 
 	/**
@@ -484,6 +511,8 @@ public:
 		if (this->topo_graph_.empty()) {
 			this->topo_sort();
 		}
+		// insert all source nodes into produce_queue_
+		std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
 	}
 
 private:
@@ -644,10 +673,10 @@ private:
 	std::list<Node *> topo_graph_;
 	// topolist but leveled, where node at level n can only depends on nodes on levels < n
 	std::vector<std::vector<Node *>> levels_;
-	// map of all dependencies for given node
+	// map of all dependencies for given node (in edges)
 	std::unordered_map<Node *, std::set<Node *>> node_dependencies_;
 
-	std::unordered_map<Node *, NodeState> nodes_state_;
+	std::unordered_map<Node *, std::pair<NodeState, bool>> nodes_state_;
 
 	std::mutex graph_latch_;
 
@@ -665,6 +694,9 @@ private:
 	BufferPool *bp_;
 
 	GarbageCollectSettings &gb_settings_;
+
+	// for get next, list of available nodes
+	std::vector<Node *> produce_queue_;
 };
 
 } // namespace AliceDB

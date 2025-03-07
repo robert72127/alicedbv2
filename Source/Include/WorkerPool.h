@@ -42,11 +42,20 @@ namespace AliceDB {
  */
 
 /**
- * @brief initial simple worker pool implementation
- * we keep:
- *  at least 1 worker thread
- *  if there are G graphs there should be at most N <= G threads,
- *  thread i is responsible for processing G % N == i graphs,
+ * New design:
+ * each node will return boolean after compute true - at least one tuple was inserted to outqueue, false otherwise
+ *
+ * and we will store state for each node of (bool, processed_state) and then we will check nodes that depends on it,
+ * if such node has other dependency already fulfilled, we will add itself to available queue to be processed,
+ * if other dependency is already fulfilled we will be grab it instantly
+ * or set it to processed instantly if both are false
+ *
+ *
+ * and now for sleeping / waiting
+ * 	We can sleep some time on all threads if there is no work to do
+ *
+ *
+ * and for optimal performance we want guarantee that there is no less graphs than threads
  */
 
 struct GraphState {
@@ -57,10 +66,8 @@ struct GraphState {
 class WorkerPool {
 public:
 	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_ {false} {
-		this->stop_worker_.resize(this->workers_cnt_);
 		for (int i = 0; i < this->workers_cnt_; i++) {
-			this->stop_worker_[i] = false;
-			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, workers_cnt_);
+			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, i);
 		}
 	}
 
@@ -110,22 +117,27 @@ private:
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
-			while (!this->stop_worker_[index] && !this->stop_all_) {
+			while (!this->stop_all_) {
 				auto task = this->GetWork();
 				if (!task) {
-					std::this_thread::yield();
+					// std::this_thread::yield();
+					//  no graphs, go to sleep
+					std::this_thread::sleep_for(std::chrono::seconds(1));
 					continue;
 				}
 				Node *n;
 				if (!task->g_->GetNext(&n)) {
 					// no work to be done for this graph, continue
 					task->shared_lock_.unlock_shared();
+					// pick some better way
 					std::this_thread::yield();
+					// std::this_thread::sleep_for(std::chrono::seconds(1));
+
 					continue;
 				}
 				// process this node
-				n->Compute();
-				task->g_->SetState(n, NodeState::PROCESSED);
+				bool produced = n->Compute();
+				task->g_->Produced(n, produced);
 				task->shared_lock_.unlock_shared();
 				// if there is no work left to do find mechanism for waiting
 			}
@@ -165,7 +177,6 @@ private:
 	int next_index_ = 0;
 
 	std::vector<std::thread> workers_;
-	std::vector<bool> stop_worker_;
 
 	bool stop_all_;
 

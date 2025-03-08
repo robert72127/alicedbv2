@@ -629,6 +629,9 @@ private:
 		} else {
 			in_edges_[out_node] = {in_node};
 		}
+
+		// this is not used at graph level but rather internally by node for ts updating
+		in_node->AddOutNode(out_node);
 	}
 
 	void check_running() {

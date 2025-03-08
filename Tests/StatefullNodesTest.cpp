@@ -386,7 +386,6 @@ void print_pairpeople(const char *data){
     std::cout<<p->rname.data() << " " << p->rsurname.data() << " " << p->rage << std::endl; 
 } 
 
-
 TEST(SIMPLESTATE_TEST, CROSSJOIN){
 
     std::string people_fname = "people.txt";
@@ -438,7 +437,6 @@ void print_sameagedpeople(const char *data){
     const SameAgedPeople *p = reinterpret_cast<const SameAgedPeople*>(data);
     std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->age << " "<< p->rname.data() << " " << p->rsurname.data()  << std::endl; 
 } 
-
 
 TEST(SIMPLESTATE_TEST, JOIN){
 
@@ -526,4 +524,3 @@ TEST(STATEFULL_TEST, AGGREGATEBY){
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-

@@ -47,9 +47,33 @@ public:
 	/**
 	 * @brief update lowest ts this node will need to hold
 	 */
-	virtual void UpdateTimestamp(timestamp ts) = 0;
+	virtual void UpdateTimestamp() = 0;
 
 	virtual timestamp GetFrontierTs() const = 0;
+
+	void AddOutNode(Node *node) {
+		out_nodes_.push_back(node);
+	}
+
+	/** @brief return oldest ts that we need to keep */
+	timestamp OldestTsToKeep() {
+		timestamp ts = get_current_timestamp();
+		for (const auto out : out_nodes_) {
+			ts = std::min(ts, out->GetTs());
+		}
+		return ts;
+	}
+
+	timestamp GetTs() {
+		return ts_;
+	}
+
+protected:
+	// list of out nodes for keeping track of oldest time we need to store
+	std::vector<Node *> out_nodes_;
+
+	// what is oldest timestamp that needs to be keept by this table
+	timestamp ts_;
 };
 
 template <typename OutType>
@@ -134,7 +158,8 @@ public:
 		}
 	}
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->ts_ = ts;
 		}
@@ -162,9 +187,6 @@ private:
 
 	// how much time back from current time do we have to store values
 	timestamp frontier_ts_;
-
-	// what is oldest timestamp that needs to be keept by this table
-	timestamp ts_;
 };
 
 template <typename Type>
@@ -176,7 +198,7 @@ public:
 	      frontier_ts_ {in_node->GetFrontierTs()} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = ts_;
+		this->next_clean_ts_ = this->ts_;
 
 		// init table from graph metastate based on index
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
@@ -196,7 +218,7 @@ public:
 		}
 
 		// get current timestamp that can be considered
-		this->UpdateTimestamp(get_current_timestamp());
+		this->UpdateTimestamp();
 
 		if (this->compact_) {
 			this->Compact();
@@ -240,11 +262,12 @@ public:
 		this->in_node_->CleanCache();
 	}
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = get_current_timestamp();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->update_ts_ = true;
 			this->ts_ = ts;
-			this->in_node_->UpdateTimestamp(ts);
+			this->in_node_->UpdateTimestamp();
 		}
 	}
 
@@ -276,8 +299,6 @@ private:
 
 	// how much time back from current time do we have to store values
 	timestamp frontier_ts_;
-	// what is oldest timestamp that needs to be keept by this Node Tables
-	timestamp ts_;
 };
 
 template <typename Type>
@@ -331,10 +352,11 @@ public:
 
 	// timestamp is not used here but will be used for global state for
 	// propagation
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->ts_ = ts;
-			this->in_node_->UpdateTimestamp(ts);
+			this->in_node_->UpdateTimestamp();
 		}
 	}
 
@@ -352,9 +374,6 @@ private:
 
 	// acquired from in node, this will be passed to output node
 	timestamp frontier_ts_;
-
-	// track this for global timestamp state update
-	timestamp ts_;
 };
 // projection can be represented by single node
 template <typename InType, typename OutType>
@@ -404,10 +423,11 @@ public:
 	}
 
 	// timestamp is not used here but might be helpful to store for propagatio
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->ts_ = ts;
-			this->in_node_->UpdateTimestamp(ts);
+			this->in_node_->UpdateTimestamp();
 		}
 	}
 
@@ -424,8 +444,6 @@ private:
 	int out_count = 0;
 	std::atomic<int> clean_count {0};
 
-	// current timestamp
-	timestamp ts_;
 	// acquired from in node, this will be passed to output node
 	timestamp frontier_ts_;
 };
@@ -455,7 +473,7 @@ public:
 	      previous_ts_ {meta.previous_ts_}, recompute_indexes_ {meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = ts_;
+		this->next_clean_ts_ = this->ts_;
 		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 
 		// init table from graph metastate based on index
@@ -524,7 +542,6 @@ public:
 
 		    then we can compact
 		*/
-
 		if (this->compact_) {
 			// delta_count for oldest keept verson fro this we can deduce what tuples
 			// to emit;
@@ -577,12 +594,13 @@ public:
 		return produced;
 	}
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
 			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
-			this->in_node_->UpdateTimestamp(ts);
+			this->in_node_->UpdateTimestamp();
 		}
 	}
 
@@ -612,7 +630,6 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp ts_;
 
 	timestamp &previous_ts_;
 
@@ -687,11 +704,12 @@ public:
 		return produced;
 	}
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->ts_ = ts;
-			this->in_node_left_->UpdateTimestamp(ts);
-			this->in_node_right_->UpdateTimestamp(ts);
+			this->in_node_left_->UpdateTimestamp();
+			this->in_node_right_->UpdateTimestamp();
 		}
 	}
 
@@ -707,8 +725,6 @@ private:
 	Cache<Type> *out_cache_;
 	int out_count = 0;
 	std::atomic<int> clean_count {0};
-
-	timestamp ts_;
 
 	timestamp frontier_ts_;
 
@@ -731,7 +747,7 @@ public:
 	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = ts_;
+		this->next_clean_ts_ = this->ts_;
 
 		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
@@ -772,12 +788,13 @@ public:
 	}
 	virtual bool Compute() = 0;
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
 			this->ts_ = ts;
-			this->in_node_left_->UpdateTimestamp(ts);
-			this->in_node_right_->UpdateTimestamp(ts);
+			this->in_node_left_->UpdateTimestamp();
+			this->in_node_right_->UpdateTimestamp();
 		}
 	}
 
@@ -811,7 +828,6 @@ protected:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp ts_;
 
 	timestamp frontier_ts_;
 };
@@ -1055,7 +1071,7 @@ public:
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = ts_;
+		this->next_clean_ts_ = this->ts_;
 
 		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
@@ -1199,12 +1215,13 @@ public:
 		return this->frontier_ts_;
 	}
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
 			this->ts_ = ts;
-			this->in_node_left_->UpdateTimestamp(ts);
-			this->in_node_right_->UpdateTimestamp(ts);
+			this->in_node_left_->UpdateTimestamp();
+			this->in_node_right_->UpdateTimestamp();
 		}
 	}
 
@@ -1248,7 +1265,6 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp ts_;
 
 	timestamp frontier_ts_;
 };
@@ -1272,7 +1288,7 @@ public:
 	                                                                                     meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = ts_;
+		this->next_clean_ts_ = this->ts_;
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
 		this->out_cache_ = new Cache<OutType>(2);
@@ -1402,12 +1418,13 @@ public:
 		return produced;
 	}
 
-	void UpdateTimestamp(timestamp ts) {
+	void UpdateTimestamp() {
+		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
 			this->compact_ = true;
-			this->in_node_->UpdateTimestamp(ts);
+			this->in_node_->UpdateTimestamp();
 		}
 	}
 
@@ -1442,7 +1459,6 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-	timestamp ts_;
 	timestamp &previous_ts_;
 
 	timestamp frontier_ts_;

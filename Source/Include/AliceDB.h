@@ -2,6 +2,7 @@
 #define ALICEDBALICEDB
 
 #include "BufferPool.h"
+#include "Common.h"
 #include "DiskManager.h"
 #include "Graph.h"
 #include "WorkerPool.h"

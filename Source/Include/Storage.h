@@ -223,6 +223,12 @@ public:
 	      pages_count_ {pages_count}, start_page_idx_ {page_idx} {
 	}
 
+	HeapIterator(const HeapIterator &other)
+	    : page_idx_ {other.page_idx_}, tpl_idx_ {other.tpl_idx_}, bp_ {other.bp_},
+	      tuples_per_page_ {other.tuples_per_page_}, pages_count_ {other.pages_count_}, start_page_idx_ {
+	                                                                                        other.start_page_idx_} {
+	}
+
 	HeapState<Type> Get() {
 		this->LoadPage();
 		// when returning heap state we want to return page index corresponding to position in vector of pages, not

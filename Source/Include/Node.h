@@ -94,6 +94,45 @@ public:
  * node needs to specify how long delayed data might arrive
  */
 
+template <typename Type>
+class ViewIterator {
+public:
+	ViewIterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts)
+	    : heap_iterator_(iter), table_ {table}, ts_ {ts} {
+	}
+
+	ViewIterator &operator++() {
+		++this->heap_iterator_;
+		return *this;
+	}
+
+	Tuple<Type> operator*() {
+
+		auto [data, idx] = heap_iterator_.Get();
+		Tuple<Type> tpl;
+		tpl.data = *data;
+		tpl.delta.count = 0;
+		for (auto dit : this->table_->Scan(idx)) {
+			if (dit.ts > this->ts_) {
+				break;
+			} else {
+				tpl.delta.count += dit.count;
+				tpl.delta.ts = dit.ts;
+			}
+		}
+		return tpl;
+	}
+
+	bool operator!=(const ViewIterator &other) const {
+		return this->heap_iterator_ != other.heap_iterator_;
+	}
+
+private:
+	HeapIterator<Type> heap_iterator_;
+	Table<Type> *table_;
+	timestamp ts_;
+};
+
 // add new producers here
 enum class ProducerType { FILE, TCPCLIENT };
 
@@ -236,23 +275,6 @@ public:
 		return false;
 	}
 
-	// print state of table at this moment, used for debugging only
-	void Print(timestamp ts, std::function<void(const char *)> print) {
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
-			auto [data, idx] = it.Get();
-			int total = 0;
-			for (auto dit : this->table_->Scan(idx)) {
-				if (dit.ts > ts) {
-					break;
-				} else {
-					total += dit.count;
-				}
-			}
-			std::cout << "COUNT : " << total << " |\t ";
-			print((char *)data);
-		}
-	}
-
 	// since all sink does is store state we can treat incache as out cache when we use sink(view)
 	// as source
 	Cache<Type> *Output() {
@@ -273,6 +295,31 @@ public:
 
 	timestamp GetFrontierTs() const {
 		return this->frontier_ts_;
+	}
+
+	// print state of table at this moment, used for debugging only
+	void Print(timestamp ts, std::function<void(const char *)> print) {
+		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
+			auto [data, idx] = it.Get();
+			int total = 0;
+			for (auto dit : this->table_->Scan(idx)) {
+				if (dit.ts > ts) {
+					break;
+				} else {
+					total += dit.count;
+				}
+			}
+			std::cout << "COUNT : " << total << " |\t ";
+			print((char *)data);
+		}
+	}
+
+	ViewIterator<Type> begin(timestamp ts) {
+		return ViewIterator<Type>(this->table_->begin(), this->table_, ts);
+	}
+
+	ViewIterator<Type> end() {
+		return ViewIterator<Type>(this->table_->end(), this->table_, 0);
 	}
 
 private:

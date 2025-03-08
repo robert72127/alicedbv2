@@ -167,7 +167,14 @@ TEST(STATELESS_TEST, PROJECTION){
 
     // debugging
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_name );
+    
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        AliceDB::Tuple<Name> current_tuple = *it;
+        std::cout<<current_tuple.delta.count << " " << current_tuple.data.name.data() << std::endl;
+
+    }
+
+    //real_sink->Print(AliceDB::get_current_timestamp(), print_name );
 
     // delete database directory
     db = nullptr;

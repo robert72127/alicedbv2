@@ -91,7 +91,6 @@ bool parsePerson(std::istringstream &iss, Person *p) {
             return true;
 }
 
-/*
 TEST(WorkerPoolTest, StartStopTest) {
 
     std::string people_fname = "people.txt";
@@ -125,11 +124,10 @@ TEST(WorkerPoolTest, StartStopTest) {
     std::filesystem::remove_all("database");
 }
 
-*/
 TEST(WorkerPoolTest, GraphsThreadsSameCount) {
 
-    int worker_threads_cnt = 10;
-    int graphs_cnt = 10;
+    int worker_threads_cnt = 50;
+    int graphs_cnt = 50;
     
     for(int i = 0; i < graphs_cnt; i++){
         std::string people_fname = "people_" + std::to_string(i) + ".txt";
@@ -169,7 +167,6 @@ TEST(WorkerPoolTest, GraphsThreadsSameCount) {
 }
 
 
-/*
 TEST(WorkerPoolTest, MoreGraphs) {
 
     int worker_threads_cnt = 3;
@@ -211,4 +208,3 @@ TEST(WorkerPoolTest, MoreGraphs) {
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-*/

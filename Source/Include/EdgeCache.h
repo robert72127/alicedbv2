@@ -62,6 +62,7 @@ public:
 	}
 
 	void Insert(const Tuple<Type> &tpl) {
+		// std::cout<<static_cast<void*>(this)<<std::endl;
 		auto key = Key(tpl.data);
 		tuples_[key].push_back(tpl.delta);
 	}

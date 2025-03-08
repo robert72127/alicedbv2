@@ -82,8 +82,6 @@ public:
 	/**
 	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
 	 */
-	// generic compact deltas work's for almost any kind of node (doesn't work for
-	// aggregations we will see :) )
 	void Merge(const timestamp end_ts) {
 		for (auto &[idx, deltas] : deltas_) {
 			int previous_count = 0;

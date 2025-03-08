@@ -3,146 +3,92 @@
 
 #include "Common.h"
 
-#include <cstdlib>
-#include <cstring>
-#include <new>
+#include <unordered_map>
+#include <vector>
 
 namespace AliceDB {
 
-/** @todo
- * store same tuple with multipled deltas as single data field and multiple deltas,
- * instead of storing copy of tuple for each delta
- *
- */
+#define DEFAULT_CACHE_SIZE (200)
 
-struct Cache {
-	/**
-	 * @brief create cache with given size of cache_size * tuple_size where
-	 * iterator jumps by tuple_size
-	 * tuple size is size of cacheTuple<Type> size but we make it untyped on
-	 * purpouse, for easier chaining using abstract base class
-	 */
-	Cache(size_t cache_size, size_t tuple_size)
-	    : tuple_size_ {tuple_size}, cache_size_ {cache_size}, current_size_ {0},
-	      current_offset_ {0}, storage_ {new char[cache_size * tuple_size]} {
+template <typename Type>
+std::array<char, sizeof(Type)> Key(const Type &type) {
+	std::array<char, sizeof(Type)> key;
+	std::memcpy(key.data(), &type, sizeof(Type));
+	return key;
+}
+
+template <typename Type>
+struct KeyHash {
+	std::size_t operator()(const std::array<char, sizeof(Type)> &key) const {
+		// You can use any suitable hash algorithm. Here, we'll use std::hash with
+		// std::string_view
+		return std::hash<std::string_view>()(std::string_view(key.data(), key.size()));
+	}
+};
+
+template <typename Type>
+class Cache {
+public:
+	Cache(size_t initial_size) {
+		tuples_.reserve(initial_size);
+		ResetIteration();
 	}
 
-	/**
-	 * @brief deallocate cache memory
-	 */
-	~Cache() {
-		delete[] storage_;
-	}
-
-	/**
-	 * @brief insert new element into cache
-	 */
-	void Insert(const char *data) {
-		if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
-			// just resize :)
-			this->Resize(current_size_ * 2);
-		}
-		std::memcpy(this->storage_ + this->current_size_, data, this->tuple_size_);
-
-		index ret_idx = this->current_size_ / this->tuple_size_;
-		this->current_size_ += tuple_size_;
-	}
-
-	/**
-	 * this is for writing
-	 * @brief  reserve next free position in cache,
-	 * set data to point to next free position
-	 * and assume user will insert's data there thus
-	 * increase metadata as in Insert
-	 */
-	void ReserveNext(char **data) {
-		if (this->current_size_ + this->tuple_size_ > this->cache_size_) {
-			this->Resize(current_size_ * 2);
-		}
-		*data = this->storage_ + this->current_size_;
-		index ret_idx = this->current_size_ / this->tuple_size_;
-		this->current_size_ += tuple_size_;
-	}
-	/**
-	 * @brief set's cache memory to 0
-	 * and reset internal state
-	 */
 	void Clean() {
-		this->last_10_max_size_ =
-		    this->last_10_max_size_ > this->current_size_ ? this->last_10_max_size_ : this->current_size_;
-		this->check_resize_++;
-		if (this->check_resize_ > 9) {
-			if (this->cache_size_ > this->last_10_max_size_) {
-				this->Resize(last_10_max_size_);
-			}
-			this->check_resize_ = 0;
-		}
-
-		std::memset(this->storage_, 0, cache_size_);
-		this->current_offset_ = 0;
-		this->current_size_ = 0;
+		this->tuples_.clear();
+		this->ResetIteration();
 	}
-	/**
-	 * this is used for reading
-	 * set tuple to next tuple in cache,
-	 * @return true if there are tuples left
-	 * false otherwise, then also reset current_offset to allow for new iteration
-	 */
-	bool GetNext(const char **tuple) {
-		if (this->current_offset_ + this->tuple_size_ > this->current_size_) {
-			this->current_offset_ = 0;
+
+	bool HasNext() {
+		if (current_ == tuples_.end()) {
+			this->ResetIteration();
 			return false;
 		}
-		*tuple = this->storage_ + this->current_offset_;
-		current_offset_ += tuple_size_;
-		return true;
+		if (delta_index_ < current_->second.size()) {
+			return true;
+		}
+		current_++;
+		delta_index_ = 0;
+		return HasNext();
 	}
 
-	// get index'th tuple
-	char *Get(index index) {
-		return (this->storage_ + index * this->tuple_size_);
+	Tuple<Type> GetNext() {
+		Tuple<Type> out_tuple;
+		std::array<char, sizeof(Type)> key = current_->first;
+		std::memcpy(&out_tuple.data, key.data(), sizeof(Type));
+		out_tuple.delta = current_->second[delta_index_];
+		delta_index_++;
+		return out_tuple;
 	}
 
-	void RemoveLast() {
-		current_size_ -= tuple_size_;
+	void Insert(const Tuple<Type> &tpl) {
+		// std::cout<<static_cast<void*>(this)<<std::endl;
+		auto key = Key(tpl.data);
+		tuples_[key].push_back(tpl.delta);
 	}
 
-	char *storage_;
-	size_t cache_size_;
-	size_t tuple_size_;
-	// used for insterting
-	size_t current_size_;
-	// used for GetNext
-	size_t current_offset_;
+	void Insert(const Type &data, const Delta &delta) {
+		auto key = Key(data);
+		tuples_[key].push_back(delta);
+	}
+
+	void FinishInserting() {
+		ResetIteration();
+	}
 
 private:
-	bool Resize(size_t new_size) {
-		// Resize down only from statistics
-		if (new_size <= this->cache_size_ && this->check_resize_ < 9) {
-			return false;
-		}
-
-		char *new_storage = new (std::nothrow) char[new_size];
-		if (!new_storage) {
-			return false;
-		}
-
-		// Copy existing data
-		std::memcpy(new_storage, this->storage_, this->current_size_);
-
-		// Clean up old storage
-		delete[] this->storage_;
-
-		// Update pointers and size
-		this->storage_ = new_storage;
-		this->cache_size_ = new_size;
-		return true;
+	void ResetIteration() {
+		current_ = tuples_.begin();
+		delta_index_ = 0;
 	}
-	// statistics
-	// if we have statistics from last 10 usages, resize to max size of those if it's smaller than
-	// current one
-	size_t last_10_max_size_;
-	int check_resize_;
+
+	// current operation
+	size_t delta_index_ = 0;
+	typename std::unordered_map<std::array<char, sizeof(Type)>, std::vector<Delta>>::iterator current_;
+
+	// storage
+
+	std::unordered_map<std::array<char, sizeof(Type)>, std::vector<Delta>, KeyHash<Type>> tuples_;
 };
 
 } // namespace AliceDB

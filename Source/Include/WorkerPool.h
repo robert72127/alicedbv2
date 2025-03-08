@@ -13,50 +13,6 @@
 #include <vector>
 
 namespace AliceDB {
-/*
-  We can process many graphs in parallel that's first point
-  Second point is that we can actually process any level K in parallel for given graph,
-  since we are sure those nodes are independent.
-  And finally when we still process level K we can process level K+1 node if we know all it's
-  dependencies from level < K+1 are already processed, so now for new algorithm:
-
-
-  for each node in graph keep binary field processed?,
-
-  assign nodes at level 0 to worker pool,
-
-  if all processed at level K append level k+1,
-
-  after worker ends processing node check if it's out nodes can be processed
-
-  if all nodes in graph are visited processed, set processed to true?
-
-*/
-
-/**
- * maybe instead submit all tasks at once, when thread dependencies are processed, put future ready on future tasks
- * use 1 thread per 1 graph
- *
- *
- * use lock free queue to submit and pop requests
- */
-
-/**
- * New design:
- * each node will return boolean after compute true - at least one tuple was inserted to outqueue, false otherwise
- *
- * and we will store state for each node of (bool, processed_state) and then we will check nodes that depends on it,
- * if such node has other dependency already fulfilled, we will add itself to available queue to be processed,
- * if other dependency is already fulfilled we will be grab it instantly
- * or set it to processed instantly if both are false
- *
- *
- * and now for sleeping / waiting
- * 	We can sleep some time on all threads if there is no work to do
- *
- *
- * and for optimal performance we want guarantee that there is no less graphs than threads
- */
 
 class WorkerPool {
 public:
@@ -114,8 +70,8 @@ private:
 
 				auto [node, graph] = this->GetWork();
 				if (node == nullptr) {
-					std::this_thread::yield();
-					// std::this_thread::sleep_for(std::chrono::seconds(1));
+					// std::this_thread::yield();
+					std::this_thread::sleep_for(std::chrono::milliseconds(200));
 					continue;
 				}
 

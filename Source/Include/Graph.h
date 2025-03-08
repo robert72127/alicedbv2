@@ -422,14 +422,14 @@ public:
 	 * @brief set next_node to next node to be processed
 	 * @return all nodes from this graph that can be processed
 	 */
-	std::vector<Node*> GetNext() {
+	std::vector<Node *> GetNext() {
 		std::scoped_lock(graph_latch_);
 		if (AllProcesedPreviousLevel()) {
 			// ok all nodes processed at last level we can restart
 			if (current_level_ == this->levels_.size()) {
 				this->FinishProduceRound();
 			}
-			
+
 			const auto &ret = this->levels_[current_level_];
 			this->current_level_++;
 			return ret;
@@ -437,17 +437,18 @@ public:
 			// produce queue is empty but current level isn't finished yet, no work to be done on this graph
 			return {};
 		}
-}
+	}
+
 	/**
 	 * @return true if all nodes were processed in current iteration
 	 */
 	bool AllProcesedPreviousLevel() {
 		// all nodes are processed when all sink nodes are processed
-		if(this->current_level_ == 0){
+		if (this->current_level_ == 0) {
 			return true;
 		}
 
-		for (const auto &node : this->levels_[this->current_level_-1]) {
+		for (const auto &node : this->levels_[this->current_level_ - 1]) {
 			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
 				return false;
 			}
@@ -682,7 +683,6 @@ private:
 	BufferPool *bp_;
 
 	GarbageCollectSettings &gb_settings_;
-
 };
 
 } // namespace AliceDB

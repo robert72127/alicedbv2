@@ -432,6 +432,11 @@ public:
 				return false;
 			}
 		}
+
+		if (this->produce_queue_.empty()) {
+			return false;
+		}
+		// std::cout<<"PRODUCE QUEUE SIZE : \t" <<this->produce_queue_.size()<<std::endl;
 		*next_node = this->produce_queue_.back();
 		this->produce_queue_.pop_back();
 		return true;
@@ -453,13 +458,16 @@ public:
 	bool FinishProduceRound() {
 		bool produced = false;
 		for (const auto &node : this->all_nodes_) {
-			produced |= this->nodes_state_[node].second;
+			produced = produced || this->nodes_state_[node].second;
 			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
 		}
 
 		this->produce_queue_ = {};
 		// insert all source nodes into produce_queue_
-		std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
+		// std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
+		for (auto &node : this->sources_) {
+			this->produce_queue_.push_back(node);
+		}
 
 		return produced;
 	}
@@ -468,11 +476,15 @@ public:
 	void Produced(Node *node, bool produced) {
 		std::scoped_lock(graph_latch_);
 
+		// check if any of dependent nodes can be added
 		std::deque<Node *> processed = {node};
 
 		while (!processed.empty()) {
 			node = processed.back();
 			processed.pop_back();
+
+			// set correct state to current node
+			this->nodes_state_[node] = {NodeState::PROCESSED, produced};
 
 			// set state of the node, check if we can set state of out node also
 			for (const auto &out_node : this->out_edges_[node]) {
@@ -493,7 +505,7 @@ public:
 						this->produce_queue_.push_back(out_node);
 					} else {
 						// no work to do perform same checks as on node that was just produced
-						processed.push_back(out_node);
+						// processed.push_back(out_node);
 					}
 				}
 			}
@@ -506,13 +518,24 @@ public:
 	 * this is called by WorkerPool->Start(Graph *g)
 	 */
 	void Start() {
+		std::scoped_lock(graph_latch_);
 		// after calling process once graph no longer will accept adding new nodes
 		this->is_graph_running_ = true;
 		if (this->topo_graph_.empty()) {
 			this->topo_sort();
 		}
+
+		// init node states for all nodes
+		for (auto node : this->all_nodes_) {
+			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
+		}
+
 		// insert all source nodes into produce_queue_
-		std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
+		//	std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
+		this->produce_queue_ = {};
+		for (auto &node : this->sources_) {
+			this->produce_queue_.push_back(node);
+		}
 	}
 
 private:
@@ -565,10 +588,10 @@ private:
 		}
 
 		// Organize nodes into levels
-		this->levels_.resize(max_level + 1);
-		for (const auto &[node, level] : node_levels) {
-			this->levels_[level].push_back(node);
-		}
+		// this->levels_.resize(max_level + 1);
+		// for (const auto &[node, level] : node_levels) {
+		//	this->levels_[level].push_back(node);
+		//}
 	}
 
 	void append_parent_dependencies(Node *child_node, Node *parent_node) {
@@ -696,7 +719,7 @@ private:
 	GarbageCollectSettings &gb_settings_;
 
 	// for get next, list of available nodes
-	std::vector<Node *> produce_queue_;
+	std::deque<Node *> produce_queue_;
 };
 
 } // namespace AliceDB

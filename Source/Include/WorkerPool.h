@@ -120,9 +120,9 @@ private:
 			while (!this->stop_all_) {
 				auto task = this->GetWork();
 				if (!task) {
-					// std::this_thread::yield();
+					std::this_thread::yield();
 					//  no graphs, go to sleep
-					std::this_thread::sleep_for(std::chrono::seconds(1));
+					// std::this_thread::sleep_for(std::chrono::seconds(1));
 					continue;
 				}
 				Node *n;
@@ -154,18 +154,18 @@ private:
 	 */
 	std::shared_ptr<GraphState> GetWork() {
 		// waits to graph locks, but it's held by thread that is waiting for current thread to end
-		std::shared_lock lock(graphs_lock_);
+		std::scoped_lock lock(graphs_lock_);
 		size_t g_size = this->graphs_.size();
 
 		if (g_size == 0) [[unlikely]] {
 			return nullptr;
 		}
 
-		int index = this->next_index_;
-		next_index_ = (next_index_ + 1) % g_size;
-
-		this->graphs_[index]->shared_lock_.lock_shared();
-		return this->graphs_[index];
+		unsigned int idx = next_index_.fetch_add(1);
+		idx = idx % g_size;
+		// std::cout<<" idx : " << idx <<	 std::endl;
+		this->graphs_[idx]->shared_lock_.lock_shared();
+		return this->graphs_[idx];
 	}
 
 	// all graphs that we are processing
@@ -174,7 +174,7 @@ private:
 	// we want to prevent situation where worker acquired graph node to be processed, and before
 	// calling compute on it, graph get's removed
 	// index next graph to be processed
-	int next_index_ = 0;
+	std::atomic<unsigned int> next_index_ {0};
 
 	std::vector<std::thread> workers_;
 

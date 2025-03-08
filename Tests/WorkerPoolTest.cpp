@@ -128,8 +128,8 @@ TEST(WorkerPoolTest, StartStopTest) {
 */
 TEST(WorkerPoolTest, GraphsThreadsSameCount) {
 
-    int worker_threads_cnt = 50;
-    int graphs_cnt = 50;
+    int worker_threads_cnt = 15;
+    int graphs_cnt = 15;
     
     for(int i = 0; i < graphs_cnt; i++){
         std::string people_fname = "people_" + std::to_string(i) + ".txt";

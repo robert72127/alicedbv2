@@ -32,6 +32,10 @@ public:
 	 * load garbage collector settings that will be applied for all nodes */
 	Graph(std::filesystem::path graph_directory, BufferPool *bp, GarbageCollectSettings &gb_settings)
 	    : graph_directory_ {graph_directory}, bp_ {bp}, gb_settings_ {gb_settings} {
+
+		out_edges_ = {};
+		in_edges_ = {};
+
 		// graph file format:
 		/*
 		INDEX <idx>
@@ -423,31 +427,37 @@ public:
 		std::scoped_lock(graph_latch_);
 
 		if (this->produce_queue_.empty()) {
-			if (AllProcesed()) {
-				bool any_produced = FinishProduceRound();
-				if (!any_produced) {
-					return false;
+			if (AllProcesedCurrentLevel()) {
+				// ok all nodes processed at last level we can restart
+				if (current_level_ == this->levels_.size() - 1) {
+					this->FinishProduceRound();
+				} else {
+					this->UpdateLevel();
 				}
 			} else {
+				// produce queue is empty but current level isn't finished yet, no work to be done on this graph
 				return false;
 			}
 		}
 
-		if (this->produce_queue_.empty()) {
-			return false;
-		}
-		// std::cout<<"PRODUCE QUEUE SIZE : \t" <<this->produce_queue_.size()<<std::endl;
 		*next_node = this->produce_queue_.back();
 		this->produce_queue_.pop_back();
 		return true;
 	}
 
+	void UpdateLevel() {
+		this->current_level_++;
+		for (auto &node : this->levels_[current_level_]) {
+			this->produce_queue_.push_back(node);
+		}
+	}
+
 	/**
 	 * @return true if all nodes were processed in current iteration
 	 */
-	bool AllProcesed() {
+	bool AllProcesedCurrentLevel() {
 		// all nodes are processed when all sink nodes are processed
-		for (const auto &node : this->sinks_) {
+		for (const auto &node : this->levels_[this->current_level_]) {
 			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
 				return false;
 			}
@@ -463,9 +473,10 @@ public:
 		}
 
 		this->produce_queue_ = {};
-		// insert all source nodes into produce_queue_
-		// std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
-		for (auto &node : this->sources_) {
+		this->current_level_ = 0;
+
+		// insert all nodes from first level as dependencies
+		for (auto &node : this->levels_[current_level_]) {
 			this->produce_queue_.push_back(node);
 		}
 
@@ -475,41 +486,8 @@ public:
 	/** @todo put output nodes into produce queue if other is satisfied */
 	void Produced(Node *node, bool produced) {
 		std::scoped_lock(graph_latch_);
-
-		// check if any of dependent nodes can be added
-		std::deque<Node *> processed = {node};
-
-		while (!processed.empty()) {
-			node = processed.back();
-			processed.pop_back();
-
-			// set correct state to current node
-			this->nodes_state_[node] = {NodeState::PROCESSED, produced};
-
-			// set state of the node, check if we can set state of out node also
-			for (const auto &out_node : this->out_edges_[node]) {
-				bool any_work = produced;
-				bool all_deps_processed = true;
-				for (const auto &in_node : this->node_dependencies_[out_node]) {
-					if (this->nodes_state_[in_node].first != NodeState::PROCESSED) {
-						all_deps_processed = false;
-						break;
-					} else {
-						any_work = any_work || this->nodes_state_[in_node].second;
-					}
-				}
-				if (all_deps_processed) {
-					// add node to work queue
-					if (any_work) {
-						// add this node to produce queue, someone will pick and process it
-						this->produce_queue_.push_back(out_node);
-					} else {
-						// no work to do perform same checks as on node that was just produced
-						// processed.push_back(out_node);
-					}
-				}
-			}
-		}
+		// set correct state to current node
+		this->nodes_state_[node] = {NodeState::PROCESSED, produced};
 	}
 
 	/**
@@ -525,17 +503,8 @@ public:
 			this->topo_sort();
 		}
 
-		// init node states for all nodes
-		for (auto node : this->all_nodes_) {
-			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
-		}
-
-		// insert all source nodes into produce_queue_
-		//	std::copy(this->sources_.begin(), this->sources_.end(), std::back_inserter(this->produce_queue_));
-		this->produce_queue_ = {};
-		for (auto &node : this->sources_) {
-			this->produce_queue_.push_back(node);
-		}
+		// this inits state
+		FinishProduceRound();
 	}
 
 private:
@@ -583,28 +552,32 @@ private:
 					max_level = node_levels[child];
 				}
 
-				this->append_parent_dependencies(child, node);
+				// this->append_parent_dependencies(child, node);
+				//  node will only be dependent on its parents
+				this->node_dependencies_[child].insert(node);
 			}
 		}
 
 		// Organize nodes into levels
-		// this->levels_.resize(max_level + 1);
-		// for (const auto &[node, level] : node_levels) {
-		//	this->levels_[level].push_back(node);
-		//}
+		this->levels_.resize(max_level + 1);
+		for (const auto &[node, level] : node_levels) {
+			this->levels_[level].push_back(node);
+		}
 	}
 
+	/*
 	void append_parent_dependencies(Node *child_node, Node *parent_node) {
-		if (!this->node_dependencies_.contains(child_node)) {
-			this->node_dependencies_[child_node] = {};
-		}
-		std::set<Node *> &child_deps = this->node_dependencies_[child_node];
-		std::set<Node *> &parent_deps = this->node_dependencies_[parent_node];
-		child_deps.insert(parent_node);
-		for (const auto &dep : parent_deps) {
-			child_deps.insert(dep);
-		}
+	    if (!this->node_dependencies_.contains(child_node)) {
+	        this->node_dependencies_[child_node] = {};
+	    }
+	    std::set<Node *> &child_deps = this->node_dependencies_[child_node];
+	    std::set<Node *> &parent_deps = this->node_dependencies_[parent_node];
+	    child_deps.insert(parent_node);
+	    for (const auto &dep : parent_deps) {
+	        child_deps.insert(dep);
+	    }
 	}
+	*/
 
 	void topo_sort() {
 		std::set<Node *> visited;
@@ -664,6 +637,12 @@ private:
 		} else {
 			out_edges_[in_node] = {out_node};
 		}
+
+		if (in_edges_.contains(out_node)) {
+			in_edges_[out_node].emplace_front(in_node);
+		} else {
+			in_edges_[out_node] = {in_node};
+		}
 	}
 
 	void check_running() {
@@ -685,6 +664,7 @@ private:
 	}
 
 	std::unordered_map<Node *, std::list<Node *>> out_edges_;
+	std::unordered_map<Node *, std::list<Node *>> in_edges_;
 
 	std::unordered_set<Node *> all_nodes_;
 
@@ -706,7 +686,7 @@ private:
 	bool is_graph_running_ = false;
 
 	int current_level_ = 0;
-	int current_index_ = 0;
+	// int current_index_ = 0;
 
 	// for persisten storage, each node might store from 0 to 2 tables
 	std::unordered_map<index, MetaState> tables_metadata_;

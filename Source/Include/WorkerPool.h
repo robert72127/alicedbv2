@@ -65,7 +65,7 @@ struct GraphState {
 
 class WorkerPool {
 public:
-	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_ {false} {
+	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt} {
 		for (int i = 0; i < this->workers_cnt_; i++) {
 			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, i);
 		}
@@ -81,7 +81,7 @@ public:
 	}
 
 	void StopAll() {
-		this->stop_all_ = true;
+		this->stop_all.store(true);
 	}
 
 	// remove graph g from being processed by worker poll
@@ -117,7 +117,7 @@ private:
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
-			while (!this->stop_all_) {
+			while (!this->stop_all.load()) {
 				auto task = this->GetWork();
 				if (!task) {
 					std::this_thread::yield();
@@ -178,7 +178,7 @@ private:
 
 	std::vector<std::thread> workers_;
 
-	bool stop_all_;
+	std::atomic<bool> stop_all {0};
 
 	const int workers_cnt_;
 };

@@ -418,50 +418,41 @@ public:
 
 	// Node processing
 
-	// return next node of the graph to be processed
 	/**
 	 * @brief set next_node to next node to be processed
-	 * @return true on succes, false when there is no nodes at the current time to be processed
+	 * @return all nodes from this graph that can be processed
 	 */
-	bool GetNext(Node **next_node) {
+	std::vector<Node*> GetNext() {
 		std::scoped_lock(graph_latch_);
-
-		if (this->produce_queue_.empty()) {
-			if (AllProcesedCurrentLevel()) {
-				// ok all nodes processed at last level we can restart
-				if (current_level_ == this->levels_.size() - 1) {
-					this->FinishProduceRound();
-				} else {
-					this->UpdateLevel();
-				}
-			} else {
-				// produce queue is empty but current level isn't finished yet, no work to be done on this graph
-				return false;
+		if (AllProcesedPreviousLevel()) {
+			// ok all nodes processed at last level we can restart
+			if (current_level_ == this->levels_.size()) {
+				this->FinishProduceRound();
 			}
+			
+			const auto &ret = this->levels_[current_level_];
+			this->current_level_++;
+			return ret;
+		} else {
+			// produce queue is empty but current level isn't finished yet, no work to be done on this graph
+			return {};
 		}
-
-		*next_node = this->produce_queue_.back();
-		this->produce_queue_.pop_back();
-		return true;
-	}
-
-	void UpdateLevel() {
-		this->current_level_++;
-		for (auto &node : this->levels_[current_level_]) {
-			this->produce_queue_.push_back(node);
-		}
-	}
-
+}
 	/**
 	 * @return true if all nodes were processed in current iteration
 	 */
-	bool AllProcesedCurrentLevel() {
+	bool AllProcesedPreviousLevel() {
 		// all nodes are processed when all sink nodes are processed
-		for (const auto &node : this->levels_[this->current_level_]) {
+		if(this->current_level_ == 0){
+			return true;
+		}
+
+		for (const auto &node : this->levels_[this->current_level_-1]) {
 			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
 				return false;
 			}
 		}
+
 		return true;
 	}
 
@@ -472,13 +463,7 @@ public:
 			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
 		}
 
-		this->produce_queue_ = {};
 		this->current_level_ = 0;
-
-		// insert all nodes from first level as dependencies
-		for (auto &node : this->levels_[current_level_]) {
-			this->produce_queue_.push_back(node);
-		}
 
 		return produced;
 	}
@@ -698,8 +683,6 @@ private:
 
 	GarbageCollectSettings &gb_settings_;
 
-	// for get next, list of available nodes
-	std::deque<Node *> produce_queue_;
 };
 
 } // namespace AliceDB

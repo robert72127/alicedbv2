@@ -58,11 +58,6 @@ namespace AliceDB {
  * and for optimal performance we want guarantee that there is no less graphs than threads
  */
 
-struct GraphState {
-	Graph *g_;
-	std::shared_mutex shared_lock_;
-};
-
 class WorkerPool {
 public:
 	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt} {
@@ -89,11 +84,8 @@ public:
 	void Stop(Graph *g) {
 		std::unique_lock lock(graphs_lock_);
 		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
-			if ((*it)->g_ == g) {
-				(*it)->shared_lock_.lock();
-				auto state = *it;
+			if ((*it) == g) {
 				this->graphs_.erase(it);
-				state->shared_lock_.unlock();
 				break;
 			}
 		}
@@ -105,12 +97,12 @@ public:
 			g->Start();
 		}
 		// this->graphs_lock_.lock();
-		for (const auto &state : graphs_) {
-			if (state->g_ == g) {
+		for (const auto &present : graphs_) {
+			if (present == g) {
 				return;
 			}
 		}
-		graphs_.emplace_back(std::make_shared<GraphState>(g));
+		graphs_.emplace_back(g);
 	}
 
 private:
@@ -118,28 +110,18 @@ private:
 		try {
 			// process untill stop is called on this thread, or on all threads
 			while (!this->stop_all.load()) {
-				auto task = this->GetWork();
-				if (!task) {
-					std::this_thread::yield();
-					//  no graphs, go to sleep
-					// std::this_thread::sleep_for(std::chrono::seconds(1));
-					continue;
-				}
-				Node *n;
-				if (!task->g_->GetNext(&n)) {
-					// no work to be done for this graph, continue
-					task->shared_lock_.unlock_shared();
-					// pick some better way
-					std::this_thread::yield();
-					// std::this_thread::sleep_for(std::chrono::seconds(1));
+				// get work
 
+				auto [node, graph] = this->GetWork();
+				if (node == nullptr) {
+					std::this_thread::yield();
+					// std::this_thread::sleep_for(std::chrono::seconds(1));
 					continue;
 				}
-				// process this node
-				bool produced = n->Compute();
-				task->g_->Produced(n, produced);
-				task->shared_lock_.unlock_shared();
-				// if there is no work left to do find mechanism for waiting
+
+				bool produced = node->Compute();
+				// we somehow must know g, maybe we should store pairs of node and graph pointers
+				graph->Produced(node, produced);
 			}
 		} catch (const std::exception &e) {
 			std::cerr << "[Error] Exception in worker thread: " << e.what() << std::endl;
@@ -152,24 +134,35 @@ private:
 	 *  called by worker thread that is currently free, to get new work assigned
 	 * @return function that needs to be performed
 	 */
-	std::shared_ptr<GraphState> GetWork() {
+	std::pair<Node *, Graph *> GetWork() {
 		// waits to graph locks, but it's held by thread that is waiting for current thread to end
 		std::scoped_lock lock(graphs_lock_);
-		size_t g_size = this->graphs_.size();
 
-		if (g_size == 0) [[unlikely]] {
-			return nullptr;
+		// populate work_queue
+		if (this->work_queue_.empty()) {
+			bool any_produced = false;
+			for (const auto g : this->graphs_) {
+				std::vector<Node *> nodes = g->GetNext();
+				if (!nodes.empty()) {
+					any_produced = true;
+				}
+				for (auto node : nodes) {
+					this->work_queue_.push_back({node, g});
+				}
+			}
+
+			if (!any_produced) {
+				return {nullptr, nullptr};
+			}
 		}
 
-		unsigned int idx = next_index_.fetch_add(1);
-		idx = idx % g_size;
-		// std::cout<<" idx : " << idx <<	 std::endl;
-		this->graphs_[idx]->shared_lock_.lock_shared();
-		return this->graphs_[idx];
+		auto ret = this->work_queue_.back();
+		work_queue_.pop_back();
+		return ret;
 	}
 
 	// all graphs that we are processing
-	std::vector<std::shared_ptr<GraphState>> graphs_;
+	std::vector<Graph *> graphs_;
 	std::shared_mutex graphs_lock_;
 	// we want to prevent situation where worker acquired graph node to be processed, and before
 	// calling compute on it, graph get's removed
@@ -181,6 +174,8 @@ private:
 	std::atomic<bool> stop_all {0};
 
 	const int workers_cnt_;
+
+	std::deque<std::pair<Node *, Graph *>> work_queue_;
 };
 
 } // namespace AliceDB

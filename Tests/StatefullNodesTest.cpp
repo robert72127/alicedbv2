@@ -123,9 +123,9 @@ void prepare_people_data_file_random(std::string people_fname){
                 //std::cout << test_str <<std::endl;
                 people_writter << person_str << std::endl;
                 cnt++;
-                if(cnt > 1){ break;}
+                if(cnt > 10){ break;}
         }
-        if(cnt > 100){break;}
+        if(cnt > 1000){break;}
     }
 
     people_writter.close();
@@ -493,13 +493,10 @@ TEST(SIMPLESTATE_TEST, JOIN){
     std::filesystem::remove_all("database");
 }
 
-
 TEST(STATEFULL_TEST, AGGREGATEBY){
 
     std::string people_fname = "people.txt";
-    std::string people_fname2 = "people2.txt";
-    prepare_people_data_file(people_fname);
-    prepare_people_data_file(people_fname2);
+    prepare_people_data_file_random(people_fname);
     
     int worker_threads_cnt = 1;
 
@@ -515,6 +512,8 @@ TEST(STATEFULL_TEST, AGGREGATEBY){
                         return NameTotalBalance {
                             .name = p.name,
                             .account_balance = first?  p.account_balance : p.account_balance + nb.account_balance
+                            // max balance
+                            //.account_balance = first?  p.account_balance : std::max( p.account_balance, nb.account_balance)
                         };
                     },
                     g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)

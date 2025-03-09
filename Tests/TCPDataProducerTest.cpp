@@ -12,12 +12,7 @@
 
 #include "gtest/gtest.h"
 
-#include "Node.h"
-#include "Graph.h"
-#include "Producer.h"
-#include "Common.h"
-#include "Tuple.h"
-#include "WorkerPool.h"
+#include "AliceDB.h"
 
 struct Person {
     std::array<char,50> name;
@@ -55,18 +50,12 @@ bool parseLine(std::istringstream &iss, Person *p) {
             return true;
 }
  
- void print_people(const char *data){
-    const Person *p = reinterpret_cast<const Person*>(data);
 
-    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->age << std::endl; 
-}
-
-
-void print_name(const char *data){
-    const Name *n = reinterpret_cast<const Name *>(data);
-
-    std::cout<< n->name.data() <<  std::endl; 
+void print_name(const AliceDB::Tuple<Name> &current_tuple){
+    const Name &p = current_tuple.data;
+    std::cout<<p.name.data() << std::endl; 
 } 
+
 
 
 // generate bunch of people and write this data to some file, thanks chat gpt
@@ -105,7 +94,6 @@ void generate_dummy_data(){
                 int age = std::rand() % 101; // Random number between 0 and 100
                 std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp()) + " "  + name + " " + surname + " " +  std::to_string(age);
             
-
                 dummy_data.push_back(person_str);
             }
     }
@@ -291,20 +279,20 @@ TEST(TCP_TEST, simple_tcp){
     bool *stop = new bool;
     *stop = false;
 
-    std::vector<std::string> messages = {"test"};
-
     std::thread server_thread(Server, std::ref(dummy_data), stop);
 
     int i =0;
     for(;i<10000;i++);
 
+    
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
 
     //Client();
-
-
-    AliceDB::Producer<Person> *prod = new AliceDB::TCPClientProducer<Person>(HOST, parseLine);    
-    AliceDB::WorkerPool *pool = new AliceDB::WorkerPool(1);
-    AliceDB::Graph *g = new AliceDB::Graph();
 
     auto *view = 
         g->View(
@@ -312,12 +300,15 @@ TEST(TCP_TEST, simple_tcp){
                 [](const Person &p) { return Name {.name=p.name}; },
                 g->Filter(
                     [](const Person &p) -> bool {return p.age > 18 && p.name[0] == 'S' ;},
-                    g->Source(prod,5)
+                    g->Source<Person>(AliceDB::ProducerType::TCPCLIENT , HOST, parseLine,0)
                 )
             )
         );
 
-    pool->Start(g);
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
 
     // bussy wait to test if input will get updated
     int j = 0;
@@ -331,16 +322,19 @@ TEST(TCP_TEST, simple_tcp){
 
 
 
-
     // debugging
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_name );
-
-
-
+    
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_name(*it);
+    }
+    
 
     *stop = true;
     if(server_thread.joinable())
         server_thread.join();
     delete stop;
+
+    db = nullptr;
+    std::filesystem::remove_all("database");
 }

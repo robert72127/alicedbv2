@@ -18,7 +18,6 @@
 
 namespace AliceDB {
 
-
 struct MetaState {
 	std::vector<index> pages_;
 	std::vector<index> btree_pages_;
@@ -1309,7 +1308,6 @@ public:
 	// discarded
 	bool Compute() {
 		bool produced = false;
-
 		// first insert all new data from cache to table
 		while (this->in_cache_->HasNext()) {
 			const Tuple<InType> in_tuple = this->in_cache_->GetNext();

@@ -18,11 +18,6 @@
 
 namespace AliceDB {
 
-struct GarbageCollectSettings {
-	timestamp clean_freq_;
-	bool use_garbage_collector;
-	bool remove_zeros_only;
-};
 
 struct MetaState {
 	std::vector<index> pages_;

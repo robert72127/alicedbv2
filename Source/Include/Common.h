@@ -41,6 +41,12 @@ struct TablePosition {
 	uint32_t tuple_index;
 };
 
+struct GarbageCollectSettings {
+	timestamp clean_freq_;
+	bool use_garbage_collector;
+	bool remove_zeros_only;
+};
+
 } // namespace AliceDB
 
 #endif

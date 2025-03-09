@@ -29,8 +29,9 @@ How it works?
 
 first we have to create database instance, and assign numbers of worker thread we want it to use
 
-
+```
 auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+```
 
 then we can create DAGs that will represent our query
 
@@ -80,7 +81,7 @@ and for type inference.
 
 #### WorkerPool:
 
-WorkerPool manages worker threads and assign works to them, by fairly scheduling all graphs that are processed.
+WorkerPool manages worker threads and assign works to them, by scheduling computations for all nodes from all graphs.
 
 #### Storage:
 
@@ -99,29 +100,16 @@ Integrated with disk manager through preregistered buffers, used to load disk pa
 ##### Disk Manager
 
 Disk manager is responsible for disk I/O
-it has it's own single thread that is responsible for
-Compaction, and managing requests with IO_URING
+it has it's own single worker that is responsible for managing R/W requests with IO_URING
 
-Work operationss will return future that will be satisfied when actual operation
+Work operations will return future that will be satisfied when actual operation
 is performed
 
-disk manager, delay disk write, perform in batch when at least some critical %
-of data  set write flag
-
-when to write heuristics ?
-
- if there is read request also use this occasion to perform write on all those
-that want it
-
-file descriptor and
-all pages of buffer pool are  registered for io_uring
-
-Storage layer utilises async disk worker & io_uring preregistered with buffer pool, using single file for storage
+disk manager, tries to perform disk operations in batch
 
 #### Producers
 
 Ingest and parse data into the system, for now limited to reading from file and from tcp server.
-
 
 #### Nodes
 
@@ -139,7 +127,6 @@ for each tuple we want to be able to:
 
  Each Table will maintain it's own indexes.
  
-
 There are following types of nodes:
  
 ###### Projection, 
@@ -167,11 +154,11 @@ here is example combining it with projection
     )
 ```
 
-Stateless node, that filters tuples.
+Stateless node, that filters tuples based on user provided filter function.
 
 ###### Union, Except
 
-Since those work in almost identical way we will only provide example of Union
+Since those work in almost identical way (only difference being adding/subtracting) we will only provide example of Union
 
 ```
     g->Union(
@@ -229,13 +216,11 @@ count should be left_count x right_count
             )
 ```
 	
- It takes two tables as ingerses and produce X product
+ It takes two tables as inputs and produce X product
  it needs to store two Tables
  and it doesn't need to know their fields
  
 This statefull node matches every tuple with every other
-
-count will be multiplied of first and second
  
 ###### Distinct
 
@@ -249,7 +234,7 @@ This node output only single outtuple for given in tuple, its responsible for ma
 
 ###### Join
 
- count will be multiplication of first and second
+ joins nodes from two tuples based on match field
 
 ```
     // joins dog and person on dog race and person's favourite dog race
@@ -303,60 +288,70 @@ This statefull node stores single table
  
  After computation for each node we will update it's timestamp,
  after timestamp is updated on node marked as output
- it will trigger update second update of timestamps in all of it's input node's
- then those node's will know that if they hold multiple version they can delete
- older one's with timestamp smaller than current
+ it will trigger update of timestamps in all of it's input node's
+ then those node's will know that if they hold multiple version they can compact
+ older version with timestamp smaller than current
  
  
-##### Update delete and insert:
+##### Update delete and insert operations:
  
  update is just delete and then insert one after another,
  
- delete is also insert but with negative value, negative values 
- 
+ delete is also insert but with negative value
  
 ##### Garbage collection
- 
- We will iterate all pages of table & delete old tuples and compact pages
- during this iteration we will need to hold some structure that will tell us
- if we already seen given tuple, and for all timestamp less than predefined remove those
- 
- 
+
+We can configure system to use three different garbage collecting polcies
+    * Never delete tuples, store all data
+    * Delete all tuples whose never version is older than current delete timestamp
+    * Delete all tuples whose never version is older than current delete timestamp but whose delta count is 0
+
+Configuration is done throught struct
+```
+struct GarbageCollectSettings {
+	timestamp clean_freq_;
+	bool use_garbage_collector;
+	bool remove_zeros_only;
+};
+```
+
+that can be passed to database instance
+```
+DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 1, GarbageCollectSettings *gb_settings = nullptr)
+```
+
 ##### Node's api:
 
-  all nodes implement following api
+  all nodes implement following api:
 
   Compute: this will perform all computable action <for now> that is:
  
-  Updating timestamp of internal tables, compacting deltas, inserting tuples into persistent storage, providing output into out_cache
- 
-  Output: return out_cache of given node: this will be used by graph layer for chaining nodes
- 
-   UpdateTimestamp: this will be called by output nodes it will update ts and propagate to input nodes
-   updating table state is more costly and will be handled by worker threads
-
-
   CleanCache: - keeps track on nuber of output nodes, to know when all of them processed this node's output cacne and it can be cleaned 
+  
+  UpdateTimestamp - Updating timestamp of internal tables, compacting deltas, inserting tuples into persistent storage, providing output into out_cache
+ 
+  AddOutNode - used by graph layer to keep track of all out nodes of given node, used for timestamp update
+
+  OldestTsToKeep - for all out nodes ts, returns smallest one (oldest ts) this is oldest time for which given node holds tuple noncompacted versions
+
+  Output: return out_cache of given node: this will be used by graph layer for chaining nodes
 
 
   GetFrontierTs: - returns how much time in the past from current time do we have to store deltas
 
+  GetTs - returns current time of node
 
 ### Future Extensions:
 
 #### SQL Layer:
 
-SQL queries can be compiled into our C++ graph program 
-then this program would be compiled using off the shelf C++ compiler such as GCC and linked with currently running process,
-note our generated code wouldn't contain code for general DataStorage. Instead it would just generate structs, and recursively compute 
-graph layout as defined above.
+Our library is implemented in such way that it would allow for accepting sql query as an input, and then generating AliceDB code
+it would generate structs, and recursively compute graph layout, by chaining nodes defined in previous sections.
+Then such code could be compiled as shared lib and dynamically linked to current process.
 
 (cmu 15-721)[https://15721.courses.cs.cmu.edu/spring2024/slides/07-compilation.pdf]
 
-
-
 #### Sources
-
 
 (unixism)[https://unixism.net/loti/tutorial/fixed_buffers.html] - fixed buffers
 

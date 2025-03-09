@@ -225,7 +225,8 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                             this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
@@ -593,7 +594,8 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                             this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
@@ -923,8 +925,10 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->left_table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                                  this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                                   this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
@@ -1038,8 +1042,10 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->left_table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                                  this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                                   this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
@@ -1180,9 +1186,10 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->left_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-			this->right_table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
-
+			this->left_table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                                  this->gb_settings_.remove_zeros_only);
+			this->right_table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                                   this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
@@ -1402,7 +1409,8 @@ public:
 
 		// periodically call garbage collector
 		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->table_->GarbageCollect(this->next_clean_ts_, this->gb_settings_.remove_zeros_only);
+			this->table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+			                             this->gb_settings_.remove_zeros_only);
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 

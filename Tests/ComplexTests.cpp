@@ -286,6 +286,7 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             return true;
 }
 
+
 TEST(MULTINODETEST, INSERTS){
 
     std::string people_fname = "people.txt";
@@ -463,9 +464,6 @@ TEST(DELETE_TEST, DELETE_DISTINCT){
 }
 
 
-
-
-// this isn't required part, but we just need to create our data files
 void prepare_people_data_delete_test_future(std::string people_fname){
     // Seed the random number generator
     std::srand(std::time(nullptr));
@@ -576,11 +574,163 @@ TEST(DELETE_TEST, DELETE_DISTINCT_IN_FUTURE){
     std::filesystem::remove_all("database");
 }
 
-/*
-TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){}
+
+void prepare_people_data_delete_test_non_zero_frontier(std::string people_fname){
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+
+    std::ofstream people_writter{people_fname};
+    
+    int age = std::rand() % 101; // Random number between 0 and 100
+                
+    int dog_race_nr = std::rand() % 50;
+                
+    float account_ballance =  (std::rand() / (float)RAND_MAX) * 2000.0f;
+
+    std::string name = "Joahmin";
+
+    std::string surname = "Smith";
+
+    std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+    //std::cout << test_str <<std::endl;
+    people_writter << person_str << std::endl;
+    
+    person_str = "delete " + std::to_string( (AliceDB::get_current_timestamp() +2) ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+
+    people_writter << person_str << std::endl;
+    
+    people_writter.close();
+}
+
+
+TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
+
+    std::string people_fname = "people.txt";
+    prepare_people_data_delete_test_non_zero_frontier(people_fname);
+     std::string dogs_fname = "dogs.txt";
+
+
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,5)
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()-1) ; it != real_sink->end(); ++it){
+        print_person(*it);
+        AliceDB::Delta d = (*it).delta;
+        ASSERT_EQ ( d.count, 1);
+    }
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+
+
+}
+
+void prepare_data_garbage_collection_test(std::string people_fname){
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+
+    std::ofstream people_writter{people_fname};
+    
+    // parse people
+    
+    // insert enough to fill single page
+    int max = 4096;
+
+    int cnt = 0;
+    for (auto &name : names){
+        for(auto &surname: surnames ){
+                int age =  std::rand() % 101; // Random number between 0 and 100
+                
+                int dog_race_nr = 1; //std::rand() % 50;
+                
+                float account_ballance = 100;// (std::rand() / (float)RAND_MAX) * 2000.0f;
+
+                // half of tuples will be very old
+                std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() / (1 + cnt % 2)  ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+                //std::cout << test_str <<std::endl;
+                people_writter << person_str << std::endl;
+                cnt++;
+                if(cnt > max){ break;}
+        }
+        if(cnt > max){break;}
+    }
+
+    people_writter.close();
+}
+
+
+/** @todo fix this test and we are done */
 
 // insert enough to fill K Pages, then perform garbage collection,
 // after that insert few new tuples, check if they were inserted into empty space, created by garbage collection
-TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){}
+TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){
 
-*/
+    std::string people_fname = "people.txt";
+    prepare_data_garbage_collection_test(people_fname);
+     std::string dogs_fname = "dogs.txt";
+
+
+    int worker_threads_cnt = 1;
+
+
+
+    auto *gb_settings = new AliceDB::GarbageCollectSettings{
+        .clean_freq_ = 1,
+        .delete_age_ = 150,
+        .use_garbage_collector = true,
+        .remove_zeros_only = false
+    };
+
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt, gb_settings);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    db->StopGraph(g);
+
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    int cnt = 0;
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        cnt++;
+    }
+    std::cout<<cnt<<std::endl;
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+
+
+}

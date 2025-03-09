@@ -42,7 +42,10 @@ struct TablePosition {
 };
 
 struct GarbageCollectSettings {
+	// how often to run
 	timestamp clean_freq_;
+	// how old (current_ts - delete_age ) tuples should be deleted
+	timestamp delete_age_;
 	bool use_garbage_collector;
 	bool remove_zeros_only;
 };

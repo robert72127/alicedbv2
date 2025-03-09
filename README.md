@@ -313,6 +313,7 @@ Configuration is done throught struct
 ```
 struct GarbageCollectSettings {
 	timestamp clean_freq_;
+	timestamp delete_age_;
 	bool use_garbage_collector;
 	bool remove_zeros_only;
 };

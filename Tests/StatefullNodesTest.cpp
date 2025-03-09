@@ -203,38 +203,50 @@ struct SameAgedPeople {
     std::array<char, 50> rsurname;
 };
 
-
-
-void print_person(const char *data){
-    const Person *p = reinterpret_cast<const Person*>(data);
-    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " " << p->age << " " << p->account_balance  << std::endl; 
-} 
-
-
-void print_joindogperson(const char *data){
-    const JoinDogPerson *p = reinterpret_cast<const JoinDogPerson*>(data);
-
-    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->favourite_dog_race.data() << " " << p->dog_cost << " " << p->account_balace << " "  << p->age << std::endl; 
-} 
-
-void print_nametotalbalance(const char *data){
-    const NameTotalBalance *p = reinterpret_cast<const NameTotalBalance*>(data);
-    std::cout<<p->name.data() << " " << p->account_balance << std::endl; 
-} 
-
-
-
-
 /// and final state
 struct CanAffordDog{
     std::array<char, 50> name;
     std::array<char, 50> surname;
 };
 
-void print_canafforddog(const char *data){
-    const CanAffordDog *p = reinterpret_cast<const CanAffordDog*>(data);
 
-    std::cout<<p->name.data() << " " << p->surname.data()  << std::endl; 
+
+
+void print_person(const AliceDB::Tuple<Person> &current_tuple){
+    std::cout<<current_tuple.delta.count << "||";
+    const Person &p = current_tuple.data;
+    std::cout<<p.name.data() << " " << p.surname.data() << " " << p.favourite_dog_race.data() << " " << p.age << " " << p.account_balance  << std::endl; 
+} 
+
+void print_joindogperson( const AliceDB::Tuple<JoinDogPerson> &current_tuple ){
+    const JoinDogPerson &p = current_tuple.data;
+    std::cout<<current_tuple.delta.count << "||";
+    std::cout<<p.name.data() << " " << p.surname.data() << " " << p.favourite_dog_race.data() << " " << p.dog_cost << " " << p.account_balace << " "  << p.age << std::endl; 
+} 
+
+void print_nametotalbalance(const AliceDB::Tuple<NameTotalBalance> &current_tuple){
+    const NameTotalBalance &p = current_tuple.data;
+    std::cout<<current_tuple.delta.count << "||";
+    std::cout<<p.name.data() << " " << p.account_balance << std::endl; 
+} 
+
+void print_canafforddog(const AliceDB::Tuple<CanAffordDog> &current_tuple){
+    const CanAffordDog &p = current_tuple.data;
+    std::cout<<current_tuple.delta.count << "||";
+    std::cout<<p.name.data() << " " << p.surname.data()  << std::endl; 
+} 
+
+void print_pairpeople(const AliceDB::Tuple<PairPeople> &current_tuple){
+    const PairPeople &p = current_tuple.data;
+    std::cout<<current_tuple.delta.count << "||";
+    std::cout<<p.lname.data() << " " << p.lsurname.data() << " " << p.lage << "\t\t"; 
+    std::cout<<p.rname.data() << " " << p.rsurname.data() << " " << p.rage << std::endl; 
+} 
+
+void print_sameagedpeople(const AliceDB::Tuple<SameAgedPeople> &current_tuple){
+    const SameAgedPeople &p = current_tuple.data;
+    std::cout<<current_tuple.delta.count << "||";
+    std::cout<<p.lname.data() << " " << p.lsurname.data() << " " << p.age << " "<< p.rname.data() << " " << p.rsurname.data()  << std::endl; 
 } 
 
 
@@ -302,7 +314,9 @@ TEST(STATEFULL_TEST, UNION){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
+    }
 
     // delete database directory
     db = nullptr;
@@ -337,7 +351,9 @@ TEST(STATEFULL_TEST, EXCEPT){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
+    }
 
     // delete database directory
     db = nullptr;
@@ -372,19 +388,14 @@ TEST(STATEFULL_TEST, INTERSECT){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
-
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
+    }
+    
     // delete database directory
     db = nullptr;
     std::filesystem::remove_all("database");
 }
-
-void print_pairpeople(const char *data){
-    const PairPeople *p = reinterpret_cast<const PairPeople*>(data);
-
-    std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->lage << "\t\t"; 
-    std::cout<<p->rname.data() << " " << p->rsurname.data() << " " << p->rage << std::endl; 
-} 
 
 TEST(SIMPLESTATE_TEST, CROSSJOIN){
 
@@ -423,20 +434,16 @@ TEST(SIMPLESTATE_TEST, CROSSJOIN){
     db->StopGraph(g);
 
     AliceDB::SinkNode<PairPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<PairPeople>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_pairpeople);
 
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_pairpeople(*it);
+    }
+    
     // delete database directory
     db = nullptr;
     std::filesystem::remove_all("database");
    
 }
-
-
-
-void print_sameagedpeople(const char *data){
-    const SameAgedPeople *p = reinterpret_cast<const SameAgedPeople*>(data);
-    std::cout<<p->lname.data() << " " << p->lsurname.data() << " " << p->age << " "<< p->rname.data() << " " << p->rsurname.data()  << std::endl; 
-} 
 
 TEST(SIMPLESTATE_TEST, JOIN){
 
@@ -476,7 +483,10 @@ TEST(SIMPLESTATE_TEST, JOIN){
     db->StopGraph(g);
 
     AliceDB::SinkNode<SameAgedPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<SameAgedPeople>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_sameagedpeople);
+
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_sameagedpeople(*it);
+    }
 
     // delete database directory
     db = nullptr;
@@ -518,8 +528,11 @@ TEST(STATEFULL_TEST, AGGREGATEBY){
 
     // debugging
     AliceDB::SinkNode<NameTotalBalance> *real_sink = reinterpret_cast<AliceDB::SinkNode<NameTotalBalance>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_nametotalbalance );
 
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_nametotalbalance(*it);
+    }
+    
     // delete database directory
     db = nullptr;
     std::filesystem::remove_all("database");

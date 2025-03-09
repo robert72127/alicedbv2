@@ -24,7 +24,7 @@ enum class NodeState { PROCESSED, NOT_PROCESSED, PROCESSING };
  * where operators such as Filter etc are wrappers around Node with type inference,
  * and automatically keep track of node inputs and graph they belong to
  *
- * Graph is started by calling Process function, after that no new node can be added
+ * Graph is started by calling Start method, after that no new node can be added
  */
 class Graph {
 public:
@@ -84,11 +84,11 @@ public:
 
 			// Expect the "PAGES" block.
 			input_stream >> token;
-			if (token != "RECOMPUTE_INDEXES") {
-				throw std::runtime_error("Expected RECOMPUTE_INDEXES, got: " + token);
+			if (token != "RECOMPUTEINDEXES") {
+				throw std::runtime_error("Expected RECOMPUTEINDEXES, got: " + token);
 			}
-			// Read all page indices until the ENDPAGES token.
-			while (input_stream >> token && token != "END_RECOMPUTE_INDEXES") {
+			// Read all page indices until the ENDRECOMPUTEINDEXES token.
+			while (input_stream >> token && token != "ENDRECOMPUTEINDEXES") {
 				std::istringstream iss(token);
 				index idx;
 				if (!(iss >> idx)) {
@@ -96,9 +96,9 @@ public:
 				}
 				meta.recompute_idexes_.insert(idx);
 			}
-			// We expect token == "ENDPAGES" here.
-			if (token != "END_RECOMPUTE_INDEXES") {
-				throw std::runtime_error("Did not find END_RECOMPUTE_INDEXES token");
+			// We expect token == "ENDRECOMPUTEINDEXES" here.
+			if (token != "ENDRECOMPUTEINDEXES") {
+				throw std::runtime_error("Did not find ENDRECOMPUTEINDEXES token");
 			}
 
 			// EXPECT DELTAFILENAME <deltafilename>
@@ -187,11 +187,11 @@ public:
 
 			output_stream << "PREVIOUS_TIMESTAMP " << meta.previous_ts_ << "\n";
 
-			output_stream << "RECOMPUTE_INDEXES";
+			output_stream << "RECOMPUTEINDEXES";
 			for (const auto &idx : meta.recompute_idexes_) {
 				output_stream << " " << idx;
 			}
-			output_stream << "\nEND_RECOMPUTE_INDEXES\n";
+			output_stream << "\nENDRECOMPUTEINDEXES\n";
 
 			output_stream << "DELTAFILENAME " << meta.delta_filename_ << "\n";
 
@@ -439,37 +439,7 @@ public:
 		}
 	}
 
-	/**
-	 * @return true if all nodes were processed in current iteration
-	 */
-	bool AllProcesedPreviousLevel() {
-		// all nodes are processed when all sink nodes are processed
-		if (this->current_level_ == 0) {
-			return true;
-		}
-
-		for (const auto &node : this->levels_[this->current_level_ - 1]) {
-			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	bool FinishProduceRound() {
-		bool produced = false;
-		for (const auto &node : this->all_nodes_) {
-			produced = produced || this->nodes_state_[node].second;
-			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
-		}
-
-		this->current_level_ = 0;
-
-		return produced;
-	}
-
-	/** @todo put output nodes into produce queue if other is satisfied */
+	// sets node state
 	void Produced(Node *node, bool produced) {
 		std::scoped_lock(graph_latch_);
 		// set correct state to current node
@@ -494,6 +464,37 @@ public:
 	}
 
 private:
+	/**
+	 * @return true if all nodes were processed in current iteration
+	 */
+	bool AllProcesedPreviousLevel() {
+		// all nodes are processed when all sink nodes are processed
+		if (this->current_level_ == 0) {
+			return true;
+		}
+
+		for (const auto &node : this->levels_[this->current_level_ - 1]) {
+			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	// resets procesing state of graph, after this method
+	bool FinishProduceRound() {
+		bool produced = false;
+		for (const auto &node : this->all_nodes_) {
+			produced = produced || this->nodes_state_[node].second;
+			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
+		}
+
+		this->current_level_ = 0;
+
+		return produced;
+	}
+
 	/*
 	    This datastructure is smiliar to standard topological order
 	    list of graph except it's leveled.

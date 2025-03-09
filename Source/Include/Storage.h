@@ -5,12 +5,11 @@ We need to store following things:
 
 
 <Key(Tuple) | index> - index is naturally computed based on tuple location in heap file,
-but's its also stored in searchtree(couldn't find better name)
+but's its also stored in searchtree(couldn't find better name) and used to acces deltas
 
 <Match | Keys> - recomputed on the fly when restarting the system, also stored in search tree
 
-also all our storage can be single threaded since we work on single node by one thread at once
-
+also classes below can be designed for single thread since we work on single node by one thread at once
 */
 
 #ifndef ALICEDBSTORAGE
@@ -80,7 +79,7 @@ public:
 	}
 
 	/**
-	 * @brief merge tuples by summing values, by index for given table up to end_timestamp
+	 * @brief merge tuples from oldest up to end_ts by summing values, by index for given table up to end_timestamp
 	 */
 	void Merge(const timestamp end_ts) {
 		for (auto &[idx, deltas] : deltas_) {
@@ -215,6 +214,8 @@ struct HeapState {
 	const Type *data_;
 	index idx_;
 };
+/** @brief iterator-like class for iterating all tuples on heap,
+ * instead of * it uses Get method which return tuple's data part, and table interal index corresponding to it */
 template <typename Type>
 class HeapIterator {
 public:
@@ -414,10 +415,6 @@ public:
 
 	// return index if data already present in table, doesn't insert but just return index
 	index Insert(const Type &in_data) {
-		// firt insert into page, if already contains doesn't need to insert
-		// this will return index,
-		// then call insert on b+tree with in_data(key), index(leaf) for btreetable
-		// then call insert on b+tree(match one) with in_data(key), index(leaf) for matchbtreetable
 
 		// first check if already present
 		index idx;
@@ -469,8 +466,7 @@ public:
 		return idx + this->tuples_per_page_ * this->current_page_idx_;
 	}
 
-	// searches for data(key) in table using (btree/ heap search ) if finds returns true and sets index value to found
-	// index
+	/**  @brief searches for data(key) in table using  if finds returns true and sets index value to found */
 	bool Search(const Type &data, index *idx) {
 		StorageIndex strg_idx;
 		bool found = this->tree_->Search(data, strg_idx);

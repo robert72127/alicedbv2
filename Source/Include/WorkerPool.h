@@ -36,7 +36,6 @@ public:
 	}
 
 	// remove graph g from being processed by worker poll
-	/** @todo if after stop there will be more workers than threads stop some worker */
 	void Stop(Graph *g) {
 		std::unique_lock lock(graphs_lock_);
 		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
@@ -47,6 +46,7 @@ public:
 		}
 	}
 
+	/** @brief  add g to workerpool work sources*/
 	void Start(Graph *g) {
 		std::unique_lock lock(this->graphs_lock_);
 		if (g) {
@@ -62,6 +62,9 @@ public:
 	}
 
 private:
+	/**
+	 * @brief worker thread loop, acquires works, and then updates processed node state
+	 */
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
@@ -86,9 +89,8 @@ private:
 	}
 
 	/**
-	 * @brief Iterates all graphs, and returns next graph with work to do
-	 *  called by worker thread that is currently free, to get new work assigned
-	 * @return function that needs to be performed
+	 * @brief This method is repsonsible for getting nodes from graphs and scheduling them to be processed
+	 * @return works to be done by calling worker thread
 	 */
 	std::pair<Node *, Graph *> GetWork() {
 		// waits to graph locks, but it's held by thread that is waiting for current thread to end

@@ -39,6 +39,9 @@ class BufferPool;
 
 class Node {
 public:
+	Node(timestamp frontier_ts) : frontier_ts_ {frontier_ts} {
+	}
+
 	virtual ~Node() {};
 
 	virtual bool Compute() = 0;
@@ -48,8 +51,6 @@ public:
 	 * @brief update lowest ts this node will need to hold
 	 */
 	virtual void UpdateTimestamp() = 0;
-
-	virtual timestamp GetFrontierTs() const = 0;
 
 	void AddOutNode(Node *node) {
 		out_nodes_.push_back(node);
@@ -64,8 +65,12 @@ public:
 		return ts;
 	}
 
-	timestamp GetTs() {
+	timestamp GetTs() const {
 		return ts_;
+	}
+
+	timestamp GetFrontierTs() const {
+		return this->frontier_ts_;
 	}
 
 protected:
@@ -74,11 +79,17 @@ protected:
 
 	// what is oldest timestamp that needs to be keept by this table
 	timestamp ts_;
+
+	// how much time back from current time do we have to store values
+	timestamp frontier_ts_;
 };
 
 template <typename OutType>
 class TypedNode : public Node {
 public:
+	TypedNode(timestamp frontier_ts) : Node {frontier_ts} {
+	}
+
 	using value_type = OutType;
 
 	virtual ~TypedNode() {};
@@ -89,60 +100,20 @@ public:
 	virtual Cache<OutType> *Output() = 0;
 };
 
-/* Source node is responsible for producing data through Compute function and
- * then writing output to both out_cache, and persistent table creator of this
- * node needs to specify how long delayed data might arrive
- */
-
-template <typename Type>
-class ViewIterator {
-public:
-	ViewIterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts)
-	    : heap_iterator_(iter), table_ {table}, ts_ {ts} {
-	}
-
-	ViewIterator &operator++() {
-		++this->heap_iterator_;
-		return *this;
-	}
-
-	Tuple<Type> operator*() {
-
-		auto [data, idx] = heap_iterator_.Get();
-		Tuple<Type> tpl;
-		tpl.data = *data;
-		tpl.delta.count = 0;
-		for (auto dit : this->table_->Scan(idx)) {
-			if (dit.ts > this->ts_) {
-				break;
-			} else {
-				tpl.delta.count += dit.count;
-				tpl.delta.ts = dit.ts;
-			}
-		}
-		return tpl;
-	}
-
-	bool operator!=(const ViewIterator &other) const {
-		return this->heap_iterator_ != other.heap_iterator_;
-	}
-
-private:
-	HeapIterator<Type> heap_iterator_;
-	Table<Type> *table_;
-	timestamp ts_;
-};
-
 // add new producers here
 enum class ProducerType { FILE, TCPCLIENT };
 
+/**  @brief Source node is responsible for producing data through Compute function and
+ * then writing output to both out_cache, and persistent table creator of this
+ * node needs to specify how long delayed data might arrive
+ */
 template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
 	SourceNode(ProducerType prod_type, const std::string &producer_source,
 	           std::function<bool(std::istringstream &, Type *)> parse_input, timestamp frontier_ts, int duration_us,
 	           Graph *graph)
-	    : graph_ {graph}, frontier_ts_ {frontier_ts}, duration_us_ {duration_us} {
+	    : graph_ {graph}, TypedNode<Type> {frontier_ts}, duration_us_ {duration_us} {
 
 		// init producer from args
 		switch (prod_type) {
@@ -205,10 +176,6 @@ public:
 		return;
 	}
 
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
-	}
-
 private:
 	std::unique_ptr<Producer<Type>> produce_;
 
@@ -223,18 +190,18 @@ private:
 	int duration_us_;
 
 	bool update_ts_ = false;
-
-	// how much time back from current time do we have to store values
-	timestamp frontier_ts_;
 };
 
+/**
+ * @brief out node that collect outputs and allow for iterating internal storage
+ */
 template <typename Type>
 class SinkNode : public TypedNode<Type> {
 public:
 	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
 	         MetaState &meta, index table_index)
-	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta},
-	      frontier_ts_ {in_node->GetFrontierTs()} {
+	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()},
+	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_;
@@ -293,33 +260,50 @@ public:
 		}
 	}
 
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
-	}
+	class Iterator {
+	public:
+		Iterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts)
+		    : heap_iterator_(iter), table_ {table}, ts_ {ts} {
+		}
 
-	// print state of table at this moment, used for debugging only
-	void Print(timestamp ts, std::function<void(const char *)> print) {
-		for (auto it = this->table_->begin(); it != this->table_->end(); ++it) {
-			auto [data, idx] = it.Get();
-			int total = 0;
+		Iterator &operator++() {
+			++this->heap_iterator_;
+			return *this;
+		}
+
+		Tuple<Type> operator*() {
+
+			auto [data, idx] = heap_iterator_.Get();
+			Tuple<Type> tpl;
+			tpl.data = *data;
+			tpl.delta.count = 0;
 			for (auto dit : this->table_->Scan(idx)) {
-				if (dit.ts > ts) {
+				if (dit.ts > this->ts_) {
 					break;
 				} else {
-					total += dit.count;
+					tpl.delta.count += dit.count;
+					tpl.delta.ts = dit.ts;
 				}
 			}
-			std::cout << "COUNT : " << total << " |\t ";
-			print((char *)data);
+			return tpl;
 		}
+
+		bool operator!=(const Iterator &other) const {
+			return this->heap_iterator_ != other.heap_iterator_;
+		}
+
+	private:
+		HeapIterator<Type> heap_iterator_;
+		Table<Type> *table_;
+		timestamp ts_;
+	};
+
+	Iterator begin(timestamp ts) {
+		return Iterator(this->table_->begin(), this->table_, ts);
 	}
 
-	ViewIterator<Type> begin(timestamp ts) {
-		return ViewIterator<Type>(this->table_->begin(), this->table_, ts);
-	}
-
-	ViewIterator<Type> end() {
-		return ViewIterator<Type>(this->table_->end(), this->table_, 0);
+	Iterator end() {
+		return Iterator(this->table_->end(), this->table_, 0);
 	}
 
 private:
@@ -343,17 +327,15 @@ private:
 
 	bool compact_;
 	bool update_ts_ = false;
-
-	// how much time back from current time do we have to store values
-	timestamp frontier_ts_;
 };
 
+/** @brief stateless node that filters tuples based on condition function */
 template <typename Type>
 class FilterNode : public TypedNode<Type> {
 public:
 	FilterNode(TypedNode<Type> *in_node, std::function<bool(const Type &)> condition, Graph *graph)
 	    : graph_ {graph}, condition_ {condition}, in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()} {
+	      TypedNode<Type> {in_node->GetFrontierTs()} {
 		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 		this->ts_ = get_current_timestamp();
 	}
@@ -393,10 +375,6 @@ public:
 		}
 	}
 
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
-	}
-
 	// timestamp is not used here but will be used for global state for
 	// propagation
 	void UpdateTimestamp() {
@@ -418,9 +396,6 @@ private:
 	Cache<Type> *out_cache_;
 	int out_count = 0;
 	std::atomic<int> clean_count {0};
-
-	// acquired from in node, this will be passed to output node
-	timestamp frontier_ts_;
 };
 // projection can be represented by single node
 template <typename InType, typename OutType>
@@ -428,7 +403,7 @@ class ProjectionNode : public TypedNode<OutType> {
 public:
 	ProjectionNode(TypedNode<InType> *in_node, std::function<OutType(const InType &)> projection, Graph *graph)
 	    : projection_ {projection}, graph_ {graph}, in_node_ {in_node}, in_cache_ {in_node->Output()},
-	      frontier_ts_ {in_node->GetFrontierTs()} {
+	      TypedNode<OutType> {in_node->GetFrontierTs()} {
 		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE);
 		this->ts_ = get_current_timestamp();
 	}
@@ -465,10 +440,6 @@ public:
 		}
 	}
 
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
-	}
-
 	// timestamp is not used here but might be helpful to store for propagatio
 	void UpdateTimestamp() {
 		timestamp ts = this->OldestTsToKeep();
@@ -490,9 +461,6 @@ private:
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
 	std::atomic<int> clean_count {0};
-
-	// acquired from in node, this will be passed to output node
-	timestamp frontier_ts_;
 };
 
 // we need distinct node that will:
@@ -515,8 +483,8 @@ class DistinctNode : public TypedNode<Type> {
 public:
 	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
 	             MetaState &meta, index table_index)
-	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node},
-	      table_index_(table_index), gb_settings_ {gb_settings}, meta_ {meta}, frontier_ts_ {in_node->GetFrontierTs()},
+	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node}, table_index_(table_index),
+	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()},
 	      previous_ts_ {meta.previous_ts_}, recompute_indexes_ {meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
@@ -546,10 +514,6 @@ public:
 			this->out_cache_->Clean();
 			this->clean_count.exchange(0);
 		}
-	}
-
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
 	}
 
 	bool Compute() {
@@ -680,8 +644,6 @@ private:
 
 	timestamp &previous_ts_;
 
-	timestamp frontier_ts_;
-
 	std::set<index> &recompute_indexes_;
 };
 
@@ -699,7 +661,7 @@ public:
 	PlusNode(TypedNode<Type> *in_node_left, TypedNode<Type> *in_node_right, bool negate_left, Graph *graph)
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
-	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
+	      TypedNode<Type> {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
 	      negate_left_(negate_left) {
 		this->ts_ = get_current_timestamp();
 		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
@@ -720,9 +682,6 @@ public:
 			this->out_cache_->Clean();
 			this->clean_count.exchange(0);
 		}
-	}
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
 	}
 
 	bool Compute() {
@@ -773,8 +732,6 @@ private:
 	int out_count = 0;
 	std::atomic<int> clean_count {0};
 
-	timestamp frontier_ts_;
-
 	bool negate_left_;
 };
 
@@ -791,7 +748,7 @@ public:
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
 	      gb_settings_ {gb_settings}, left_meta_ {left_meta}, right_meta_ {right_meta},
-	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
+	      TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_;
@@ -830,9 +787,6 @@ public:
 		}
 	}
 
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
-	}
 	virtual bool Compute() = 0;
 
 	void UpdateTimestamp() {
@@ -875,8 +829,6 @@ protected:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-
-	timestamp frontier_ts_;
 };
 
 // this is node behind Intersect
@@ -1114,7 +1066,7 @@ public:
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
 	      gb_settings_ {gb_settings}, left_meta_ {left_meta}, right_meta_ {right_meta},
-	      frontier_ts_ {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
+	      TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		this->ts_ = get_current_timestamp();
@@ -1258,10 +1210,6 @@ public:
 		}
 	}
 
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
-	}
-
 	void UpdateTimestamp() {
 		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
@@ -1312,8 +1260,6 @@ private:
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
 	bool compact_ = false;
-
-	timestamp frontier_ts_;
 };
 
 template <typename InType, typename MatchType, typename OutType>
@@ -1331,8 +1277,8 @@ public:
 	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
 	    : aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, in_node_ {in_node},
 	      in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta}, table_index_ {table_index},
-	      frontier_ts_ {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_}, recompute_indexes_ {
-	                                                                                     meta.recompute_idexes_} {
+	      TypedNode<OutType> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_}, recompute_indexes_ {
+	                                                                                           meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_;
@@ -1361,10 +1307,6 @@ public:
 			this->out_cache_->Clean();
 			this->clean_count.exchange(0);
 		}
-	}
-
-	timestamp GetFrontierTs() const {
-		return this->frontier_ts_;
 	}
 
 	// output should be single tuple with updated values for different times
@@ -1507,8 +1449,6 @@ private:
 	// after update propagate it to input nodes
 	bool compact_ = false;
 	timestamp &previous_ts_;
-
-	timestamp frontier_ts_;
 
 	std::set<index> &recompute_indexes_ = {};
 };

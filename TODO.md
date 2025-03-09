@@ -39,10 +39,10 @@
     * write tests for the whole system, that performs both inserts and deletes of tuples []
 
 ## Fix:
-    WorkerPoolTest []
+    WorkerPoolTest [V]
 
 ## Add:
-    Exporting data []
+    Exporting data [V]
 ----------------------------------------------------------------------------------------------
 
 ## Write PDF with description

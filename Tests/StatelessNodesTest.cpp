@@ -94,14 +94,14 @@ bool parsePerson(std::istringstream &iss, Person *p) {
             return true;
 }
 
-void print_person(const char *data){
-    const Person *p = reinterpret_cast<const Person*>(data);
-    std::cout<<p->name.data() << " " << p->surname.data() << " " << p->age << " " << p->account_balance  << std::endl; 
+void print_person(const AliceDB::Tuple<Person> &current_tuple){
+        std::cout<<current_tuple.delta.count << " " << current_tuple.data.name.data() << " " 
+        << current_tuple.data.surname.data() << " " << current_tuple.data.age 
+        << " " << current_tuple.data.account_balance  << std::endl; 
 } 
 
-void print_name(const char *data){
-    const Name *n = reinterpret_cast<const Name*>(data);
-    std::cout<< n->name.data()<< std::endl; 
+void print_name(const AliceDB::Tuple<Name> &current_tuple){
+    std::cout<<current_tuple.delta.count << " " << current_tuple.data.name.data() << std::endl;
 } 
 
 TEST(STATELESS_TEST, FILTER){
@@ -132,7 +132,11 @@ TEST(STATELESS_TEST, FILTER){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    real_sink->Print(AliceDB::get_current_timestamp(), print_person );
+
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
+    }
+
 
     // delete database directory
     db = nullptr;
@@ -169,9 +173,7 @@ TEST(STATELESS_TEST, PROJECTION){
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
     
     for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
-        AliceDB::Tuple<Name> current_tuple = *it;
-        std::cout<<current_tuple.delta.count << " " << current_tuple.data.name.data() << std::endl;
-
+        print_name(*it);
     }
 
     //real_sink->Print(AliceDB::get_current_timestamp(), print_name );

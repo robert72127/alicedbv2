@@ -350,8 +350,237 @@ TEST(MULTINODETEST, INSERTS){
     std::filesystem::remove_all("database");
 }
 
-TEST(MULTINODETEST, DELETES){}
 
-TEST(MULTINODETEST, TIME){}
+// this isn't required part, but we just need to create our data files
+void prepare_people_data_delete_test(std::string people_fname){
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
 
-TEST(MULTINODETEST, GARBAGE_COLLECTION){}
+    // cool we can create  100 00 00 unique people
+    // create file from it
+
+    std::ofstream people_writter{people_fname};
+    
+    int age = std::rand() % 101; // Random number between 0 and 100
+                
+    int dog_race_nr = std::rand() % 50;
+                
+    float account_ballance =  (std::rand() / (float)RAND_MAX) * 2000.0f;
+
+    std::string name = "Joahmin";
+
+    std::string surname = "Smith";
+
+    std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+    //std::cout << test_str <<std::endl;
+    people_writter << person_str << std::endl;
+    people_writter << person_str << std::endl;
+    
+    person_str = "delete " + std::to_string(AliceDB::get_current_timestamp() ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+
+    people_writter << person_str << std::endl;
+    people_writter << person_str << std::endl;
+    people_writter << person_str << std::endl;
+    
+    
+    people_writter.close();
+}
+
+// first insert then delete some tuple, make sure that count is correct
+TEST(DELETE_TEST, DELETE){
+    std::string people_fname = "people.txt";
+    prepare_people_data_delete_test(people_fname);
+     std::string dogs_fname = "dogs.txt";
+
+
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
+        AliceDB::Delta d = (*it).delta;
+        ASSERT_LE ( d.count, 0);
+    }
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+
+}
+
+
+// first insert then delete some tuple, make sure that count is correct
+TEST(DELETE_TEST, DELETE_DISTINCT){
+
+    std::string people_fname = "people.txt";
+    prepare_people_data_delete_test(people_fname);
+
+
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+            g->Distinct(
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+            )
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    int cnt = 0;
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        cnt++;
+    }
+    ASSERT_EQ(cnt, 0);
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+
+
+
+
+// this isn't required part, but we just need to create our data files
+void prepare_people_data_delete_test_future(std::string people_fname){
+    // Seed the random number generator
+    std::srand(std::time(nullptr));
+
+    // cool we can create  100 00 00 unique people
+    // create file from it
+
+    std::ofstream people_writter{people_fname};
+    
+    int age = std::rand() % 101; // Random number between 0 and 100
+                
+    int dog_race_nr = std::rand() % 50;
+                
+    float account_ballance =  (std::rand() / (float)RAND_MAX) * 2000.0f;
+
+    std::string name = "Joahmin";
+
+    std::string surname = "Smith";
+
+    std::string person_str = "insert " + std::to_string(AliceDB::get_current_timestamp() ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+    //std::cout << test_str <<std::endl;
+    people_writter << person_str << std::endl;
+    people_writter << person_str << std::endl;
+    
+    person_str = "delete " + std::to_string( (AliceDB::get_current_timestamp() * 2) ) 
+                    + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
+
+    people_writter << person_str << std::endl;
+    people_writter << person_str << std::endl;
+    people_writter << person_str << std::endl;
+    
+    
+    people_writter.close();
+}
+
+
+// insert and delete tuple with different times, check if view is correct at each time
+// first insert then delete some tuple, make sure that count is correct
+TEST(DELETE_TEST, DELETE_IN_FUTURE){
+    std::string people_fname = "people.txt";
+    prepare_people_data_delete_test_future(people_fname);
+     std::string dogs_fname = "dogs.txt";
+
+
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
+        AliceDB::Delta d = (*it).delta;
+        ASSERT_EQ ( d.count, 2);
+    }
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+
+// insert and delete tuple with different times, check if view is correct at each time
+// first insert then delete some tuple, make sure that count is correct
+TEST(DELETE_TEST, DELETE_DISTINCT_IN_FUTURE){
+
+    std::string people_fname = "people.txt";
+    prepare_people_data_delete_test_future(people_fname);
+
+
+    int worker_threads_cnt = 1;
+
+    auto db = std::make_unique<AliceDB::DataBase>( "./database", worker_threads_cnt);
+
+    auto g = db->CreateGraph();
+
+    auto *view = 
+        g->View(
+            g->Distinct(
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0)
+            )
+        );
+
+    db->StartGraph(g);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    db->StopGraph(g);
+
+    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
+
+    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        AliceDB::Delta d = (*it).delta;
+        ASSERT_EQ ( d.count, 1);
+    }
+
+    // delete database directory
+    db = nullptr;
+    std::filesystem::remove_all("database");
+}
+
+/*
+TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){}
+
+// insert enough to fill K Pages, then perform garbage collection,
+// after that insert few new tuples, check if they were inserted into empty space, created by garbage collection
+TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){}
+
+*/

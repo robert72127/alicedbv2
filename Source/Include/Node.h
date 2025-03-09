@@ -1052,8 +1052,7 @@ private:
 	std::function<OutType(const InTypeLeft &, const InTypeRight &)> join_layout_;
 };
 
-// join on
-// match type could be even char[] in this case
+// join on match type
 template <typename InTypeLeft, typename InTypeRight, typename MatchType, typename OutType>
 class JoinNode : public TypedNode<OutType> {
 public:
@@ -1071,7 +1070,6 @@ public:
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
-
 
 		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
@@ -1265,10 +1263,7 @@ private:
 
 template <typename InType, typename MatchType, typename OutType>
 class AggregateByNode : public TypedNode<OutType> {
-	// now output of aggr might be also dependent of count of in tuple, for
-	// example i sum inserting 5 Alice's should influence it different than one
-	// Alice but with min it should not, so it will be dependent on aggregate
-	// function
+
 public:
 	AggregateByNode(TypedNode<InType> *in_node,
 	                // count corresponds to count from delta, outtype is current aggregated OutType from rest of InType
@@ -1330,13 +1325,10 @@ public:
 		}
 
 		if (this->compact_) {
-			// delta_count for oldest keept verson fro this we can deduce what tuples
+			// delta_count for oldest keept version, from this we can deduce what tuples
 			// to emit;
 
 			//  out node will always have count of each tuple as either 0 or 1
-
-			// use heap iterator to go through all tuples, keep track of each outtuple so that we will be able to update
-			// them
 
 			// insert and delete index in out edge cache, for this match type
 

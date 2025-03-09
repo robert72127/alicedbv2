@@ -539,7 +539,6 @@ private:
 					max_level = node_levels[child];
 				}
 
-				// this->append_parent_dependencies(child, node);
 				//  node will only be dependent on its parents
 				this->node_dependencies_[child].insert(node);
 			}
@@ -551,20 +550,6 @@ private:
 			this->levels_[level].push_back(node);
 		}
 	}
-
-	/*
-	void append_parent_dependencies(Node *child_node, Node *parent_node) {
-	    if (!this->node_dependencies_.contains(child_node)) {
-	        this->node_dependencies_[child_node] = {};
-	    }
-	    std::set<Node *> &child_deps = this->node_dependencies_[child_node];
-	    std::set<Node *> &parent_deps = this->node_dependencies_[parent_node];
-	    child_deps.insert(parent_node);
-	    for (const auto &dep : parent_deps) {
-	        child_deps.insert(dep);
-	    }
-	}
-	*/
 
 	void topo_sort() {
 		std::set<Node *> visited;
@@ -641,7 +626,7 @@ private:
 		}
 	}
 
-	/** @brief it this table state wasn't stored in metadatafile, create new table metadata */
+	/** @brief if this table state wasn't stored in metadatafile, create new table metadata */
 	index maybe_create_table() {
 		index table_index = this->next_table_index_;
 		this->next_table_index_++;
@@ -676,7 +661,6 @@ private:
 	bool is_graph_running_ = false;
 
 	int current_level_ = 0;
-	// int current_index_ = 0;
 
 	// for persisten storage, each node might store from 0 to 2 tables
 	std::unordered_map<index, MetaState> tables_metadata_;

@@ -3,13 +3,12 @@ We need to store following things:
 
 <Index > list of pairs <timestamp| count> sorted by timestamp - this is handled by delta storage
 
-
 <Key(Tuple) | index> - index is naturally computed based on tuple location in heap file,
 but's its also stored in searchtree(couldn't find better name) and used to acces deltas
 
 <Match | Keys> - recomputed on the fly when restarting the system, also stored in search tree
 
-also classes below can be designed for single thread since we work on single node by one thread at once
+classes below can be designed for single thread since we work on single node by one thread at once
 */
 
 #ifndef ALICEDBSTORAGE
@@ -540,10 +539,8 @@ public:
 			this->current_page_idx_ = page_idx;
 		}
 
-
-		// and also when we will insert new pages we will now consider first page that has holes, and then next ones.. till we reach
-		// end, only then we will alloc new page
-
+		// when we will insert new pages we will now consider first page that has holes, and then next ones.. till we
+		// reach end, only then we will alloc new page
 	}
 
 	// return pointer to data corresponding to index, calculated using tuples per page & offset
@@ -557,9 +554,6 @@ public:
 		std::memcpy(&tp, read_page->Get(str_idx.tuple_id_), sizeof(Type));
 		return tp;
 	}
-
-	// other will be iterate all tuples, so heap based for
-	// cross join and compact delta for distinct node
 
 	HeapIterator<Type> begin() {
 		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_,

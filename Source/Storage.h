@@ -80,28 +80,28 @@ public:
 	/**
 	 * @brief merge tuples from oldest up to end_ts by summing values, by index for given table up to end_timestamp
 	 */
+
 	void Merge(const timestamp end_ts) {
 		for (auto &[idx, deltas] : deltas_) {
-			int previous_count = 0;
-			timestamp ts = 0;
-
+			Delta ins_delta = {0, 0};
+			bool first = true;
 			for (auto it = deltas.begin(); it != deltas.end();) {
-				previous_count += it->count;
-				ts = it->ts;
-				it = deltas.erase(it);
-
-				// Check the condition: ts < ts_ - frontier_ts_
-				// if current delta has bigger tiemstamp than one we are setting, or we
-				// iterated all deltas insert accumulated delta and break loop
-				if (it == deltas.end() || it->ts > end_ts) {
-					deltas.push_back(Delta {ts, previous_count});
+				if (it->ts > end_ts) {
+					if (!first)
+						deltas.emplace(deltas.begin(), ins_delta);
 					break;
 				} else {
-					continue;
+					ins_delta.count += it->count;
+					ins_delta.ts = it->ts;
+					it = deltas.erase(it);
+					if (it == deltas.end()) {
+						deltas.emplace(deltas.begin(), ins_delta);
+						break;
+					}
+					first = false;
 				}
 			}
 		}
-
 		UpdateLogFile();
 	}
 
@@ -509,6 +509,7 @@ public:
 				}
 				// ok since we are here we don't care about count, or cout is actually zero, so we can delete
 				delete_indexes.emplace_back(it->first);
+				// remove index from deltas
 				it = this->ds_->deltas_.erase(it);
 			}
 		}

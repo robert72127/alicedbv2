@@ -200,9 +200,10 @@ count should be left_count x right_count
 ###### Product
  
  ```
-        g->CrossJoin(
+        g->View(
+            g->CrossJoin(
                 [](const Person &left, const Person &right){
-                    return CrossPerson{
+                    return PairPeople{
                         .lname=left.name,
                         .lsurname=left.surname,
                         .lage=left.age,
@@ -211,9 +212,11 @@ count should be left_count x right_count
                         .rage=right.age
                     };
                 },
-                g->Source(prod_1, 0),
-                g->Source(prod_2,0)
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,0),
+                g->Source<Person>(AliceDB::ProducerType::FILE , people_fname2, parsePerson,0)
             )
+        );
+
 ```
 	
  It takes two tables as inputs and produce X product

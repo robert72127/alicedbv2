@@ -534,24 +534,16 @@ public:
 			wip_page_->Remove(tpl_idx);
 		}
 
-		// update new insert page
+		// update new insert page to be the first page that had value deleted
 		if (delete_indexes.size() > 0) {
 			auto [page_idx, _] = this->IndexToStorageIndex(delete_indexes[0]);
 			this->current_page_idx_ = page_idx;
 		}
 
-		// then we can return list of deleted indexes, then we set current write page to first one that has holes
 
-		// and also when we will insert new pages we will now consider this page, and then next ones.. till we reach
+		// and also when we will insert new pages we will now consider first page that has holes, and then next ones.. till we reach
 		// end, only then we will alloc new page
 
-		//  alternative
-
-		// move tuples from newest pages, such that those holes are instantly filled, then we need to return not only
-		// list of deletes, but also list of updates, so it seems like more work, but i guess less fragmentation? but
-		// wait is it really bad? eventually those holes will get filled
-
-		// ok first option makes more sense for now so we will use it :)
 	}
 
 	// return pointer to data corresponding to index, calculated using tuples per page & offset

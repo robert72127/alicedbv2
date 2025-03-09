@@ -204,7 +204,7 @@ public:
 	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = this->ts_;
+		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 
 		// init table from graph metastate based on index
 		this->table_ = new Table<Type>(meta.delta_filename_, meta.pages_, meta.btree_pages_, bp, graph_);
@@ -488,7 +488,7 @@ public:
 	      previous_ts_ {meta.previous_ts_}, recompute_indexes_ {meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = this->ts_;
+		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		this->out_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 
 		// init table from graph metastate based on index
@@ -751,7 +751,7 @@ public:
 	      TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = this->ts_;
+		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 
 		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
@@ -1070,7 +1070,8 @@ public:
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = this->ts_;
+		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+
 
 		this->out_cache_ = new Cache<OutType>(DEFAULT_CACHE_SIZE * 2);
 
@@ -1281,7 +1282,8 @@ public:
 	                                                                                           meta.recompute_idexes_} {
 
 		this->ts_ = get_current_timestamp();
-		this->next_clean_ts_ = this->ts_;
+		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+
 		// there will be single tuple emited at once probably, if not it will get
 		// resized so chill
 		this->out_cache_ = new Cache<OutType>(2);

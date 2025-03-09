@@ -41,7 +41,9 @@ public:
 		INDEX <idx>
 		PREVIOUS_TIMESTAMP <ts>
 		RECOMPUTE_INDEXES <recompute indexes ...>
-		ENDINDEX
+		ENDRECOMPUTEINDEXES
+		NOTEMITED <not emited indexes ...>
+		ENDNOTEMITED
 		DELTAFILENAME <metafilename>
 		PAGES <page_idx ....>
 		ENDPAGES
@@ -82,12 +84,12 @@ public:
 			}
 			input_stream >> meta.previous_ts_;
 
-			// Expect the "PAGES" block.
+			// Expect the "RECOMPUTEINDEXES" block.
 			input_stream >> token;
 			if (token != "RECOMPUTEINDEXES") {
 				throw std::runtime_error("Expected RECOMPUTEINDEXES, got: " + token);
 			}
-			// Read all page indices until the ENDRECOMPUTEINDEXES token.
+
 			while (input_stream >> token && token != "ENDRECOMPUTEINDEXES") {
 				std::istringstream iss(token);
 				index idx;
@@ -99,6 +101,25 @@ public:
 			// We expect token == "ENDRECOMPUTEINDEXES" here.
 			if (token != "ENDRECOMPUTEINDEXES") {
 				throw std::runtime_error("Did not find ENDRECOMPUTEINDEXES token");
+			}
+
+			// Expect the "NOTEMITED" block.
+			input_stream >> token;
+			if (token != "NOTEMITED") {
+				throw std::runtime_error("Expected NOTEMITED, got: " + token);
+			}
+
+			while (input_stream >> token && token != "ENDNOTEMITED") {
+				std::istringstream iss(token);
+				index idx;
+				if (!(iss >> idx)) {
+					throw std::runtime_error("Error index: " + token);
+				}
+				meta.recompute_idexes_.insert(idx);
+			}
+			// We expect token == "ENDRECOMPUTEINDEXES" here.
+			if (token != "ENDNOTEMITED") {
+				throw std::runtime_error("Did not find ENDNOTEMITED token");
 			}
 
 			// EXPECT DELTAFILENAME <deltafilename>
@@ -192,6 +213,12 @@ public:
 				output_stream << " " << idx;
 			}
 			output_stream << "\nENDRECOMPUTEINDEXES\n";
+
+			output_stream << "NOTEMITED";
+			for (const auto &idx : meta.not_emited_) {
+				output_stream << " " << idx;
+			}
+			output_stream << "\nENDNOTEMITED\n";
 
 			output_stream << "DELTAFILENAME " << meta.delta_filename_ << "\n";
 
@@ -632,7 +659,7 @@ private:
 		this->next_table_index_++;
 		if (!this->tables_metadata_.contains(table_index)) {
 			this->tables_metadata_[table_index] = MetaState {
-			    {}, {},         {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index) + ".bin"),
+			    {}, {},         {}, {}, this->graph_directory_ / ("delta_log_" + std::to_string(table_index) + ".bin"),
 			    0,  table_index};
 		}
 		return table_index;

@@ -22,6 +22,7 @@ struct MetaState {
 	std::vector<index> pages_;
 	std::vector<index> btree_pages_;
 	std::set<index> recompute_idexes_;
+	std::set<index> not_emited_;
 	std::string delta_filename_;
 	timestamp previous_ts_;
 	index table_idx_;
@@ -141,7 +142,6 @@ public:
 				break;
 			}
 			produced = true;
-			prod_tuple.delta.ts = get_current_timestamp();
 			produce_cache_->Insert(prod_tuple);
 		}
 
@@ -182,8 +182,6 @@ private:
 	std::atomic<int> clean_count {0};
 
 	int duration_us_;
-
-	bool update_ts_ = false;
 };
 
 /**
@@ -222,7 +220,6 @@ public:
 
 		if (this->compact_) {
 			this->Compact();
-			this->update_ts_ = false;
 		}
 		this->in_node_->CleanCache();
 
@@ -248,7 +245,7 @@ public:
 	void UpdateTimestamp() {
 		timestamp ts = get_current_timestamp();
 		if (this->ts_ + this->frontier_ts_ < ts) {
-			this->update_ts_ = true;
+			this->compact_ = true;
 			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp();
 		}
@@ -320,7 +317,6 @@ private:
 	MetaState &meta_;
 
 	bool compact_;
-	bool update_ts_ = false;
 };
 
 /** @brief stateless node that filters tuples based on condition function */
@@ -477,9 +473,10 @@ class DistinctNode : public TypedNode<Type> {
 public:
 	DistinctNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
 	             MetaState &meta, index table_index)
-	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node}, table_index_(table_index),
-	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()},
-	      previous_ts_ {meta.previous_ts_}, recompute_indexes_ {meta.recompute_idexes_} {
+	    : graph_ {graph}, in_cache_ {in_node->Output()}, in_node_ {in_node},
+	      table_index_(table_index), gb_settings_ {gb_settings}, meta_ {meta},
+	      TypedNode<Type> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_},
+	      recompute_indexes_ {meta.recompute_idexes_}, not_emited_ {meta.not_emited_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -517,9 +514,12 @@ public:
 		while (this->in_cache_->HasNext()) {
 			const Tuple<Type> in_tuple = this->in_cache_->GetNext();
 			index idx = this->table_->Insert(in_tuple.data);
-			this->table_->InsertDelta(idx, in_tuple.delta);
+			bool was_present = this->table_->InsertDelta(idx, in_tuple.delta);
 
 			recompute_indexes_.insert(idx);
+			if (!was_present) {
+				this->not_emited_.insert(idx);
+			}
 		}
 
 		/*
@@ -562,7 +562,9 @@ public:
 				// whether previous emited tuple delta had positive count
 				bool previous_positive = current_idx_deltas[0].count > 0;
 				// this means this tuple was never emited, then we discard previous positive, since it's incorrect
-				bool prev_not_emited = current_idx_deltas[0].ts >= this->previous_ts_;
+				/** @todo this might fail if oldest tuple was inserted with lower timestamp than ts_  same for logic in
+				 * aggregate */
+				bool prev_not_emited = this->not_emited_.contains(idx);
 
 				int count = 0;
 				for (const auto &delta : current_idx_deltas) {
@@ -574,8 +576,8 @@ public:
 				bool current_positive = count > 0;
 
 				if ((prev_not_emited && current_positive) ||
-				    (previous_positive && !current_positive && ~prev_not_emited) ||
-				    (!previous_positive && current_positive && ~prev_not_emited)) {
+				    (previous_positive && !current_positive && !prev_not_emited) ||
+				    (!previous_positive && current_positive && !prev_not_emited)) {
 					Type tp = this->table_->Get(idx);
 					this->out_cache_->Insert(tp, Delta {this->ts_, current_positive ? 1 : -1});
 					produced = true;
@@ -585,6 +587,7 @@ public:
 			this->Compact(); // after this iteration oldest version keep will be one with timestamp of current compact
 			this->compact_ = false;
 			recompute_indexes_ = {};
+			not_emited_ = {};
 			this->out_cache_->FinishInserting();
 		}
 
@@ -639,6 +642,8 @@ private:
 	timestamp &previous_ts_;
 
 	std::set<index> &recompute_indexes_;
+	// list of indexes that were not emited yet
+	std::set<index> &not_emited_;
 };
 
 // stateless binary operator, combines data from both in caches and writes them
@@ -1266,9 +1271,9 @@ public:
 	                std::function<MatchType(const InType &)> get_match, Graph *graph, BufferPool *bp,
 	                GarbageCollectSettings &gb_settings, MetaState &meta, index table_index)
 	    : aggr_fun_ {aggr_fun}, get_match_ {get_match}, graph_ {graph}, in_node_ {in_node},
-	      in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta}, table_index_ {table_index},
-	      TypedNode<OutType> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_}, recompute_indexes_ {
-	                                                                                           meta.recompute_idexes_} {
+	      in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta},
+	      table_index_ {table_index}, TypedNode<OutType> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_},
+	      recompute_indexes_ {meta.recompute_idexes_}, not_emited_ {meta.not_emited_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -1313,8 +1318,12 @@ public:
 			const Tuple<InType> in_tuple = this->in_cache_->GetNext();
 
 			index idx = this->table_->Insert(in_tuple.data);
-			this->table_->InsertDelta(idx, in_tuple.delta);
+			bool was_present = this->table_->InsertDelta(idx, in_tuple.delta);
 			recompute_indexes_.insert(idx);
+
+			if (!was_present) {
+				not_emited_.insert(idx);
+			}
 		}
 
 		if (this->compact_) {
@@ -1340,6 +1349,7 @@ public:
 				auto matches = this->table_->MatchSearch(match);
 
 				bool first = true;
+				bool delete_any = false;
 				bool first_delete = true;
 
 				for (auto it = matches.begin(); it != matches.end(); it++) {
@@ -1351,8 +1361,12 @@ public:
 					int delete_count = 0;
 					int count = 0;
 					for (const auto &delta : deltas) {
-						if (delta.ts < this->previous_ts_) {
+						// we might need to emit delete for previous version of this tuple
+						// previous version of this tuple existed if any of matches was already emited
+						// then we sum deltas older/equal to previous compaction ts
+						if (delta.ts <= this->previous_ts_ && !not_emited_.contains(it->second)) {
 							delete_count += delta.count;
+							delete_any = true;
 						}
 						if (delta.ts > this->ts_) {
 							break;
@@ -1370,7 +1384,7 @@ public:
 				}
 
 				this->out_cache_->Insert(insert_tpl);
-				if (first_delete == false) {
+				if (delete_any) {
 					this->out_cache_->Insert(delete_tpl);
 					produced = true;
 				}
@@ -1380,6 +1394,7 @@ public:
 			this->compact_ = false;
 
 			recompute_indexes_ = {};
+			not_emited_ = {};
 		}
 
 		this->out_cache_->FinishInserting();
@@ -1437,7 +1452,9 @@ private:
 	bool compact_ = false;
 	timestamp &previous_ts_;
 
-	std::set<index> &recompute_indexes_ = {};
+	std::set<index> &recompute_indexes_;
+	// list of indexes that were not emited yet
+	std::set<index> &not_emited_;
 };
 
 } // namespace AliceDB

@@ -60,7 +60,7 @@ struct TablePage {
 			throw std::runtime_error("Index doesn't exists");
 		}
 		this->slots_[id] = false;
-		memset(this->storage_ + id, 0, sizeof(Type));
+		memset(this->storage_ + id * sizeof(Type), 0, sizeof(Type));
 	}
 
 	/** @brief Inserts tuple at first free index into table

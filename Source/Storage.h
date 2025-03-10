@@ -218,9 +218,13 @@ struct HeapState {
 template <typename Type>
 class HeapIterator {
 public:
-	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, size_t pages_count)
+	HeapIterator(index *page_idx, index tpl_idx, BufferPool *bp, unsigned int tuples_per_page, size_t pages_count,
+	             bool fix_tpl_idx = false)
 	    : page_idx_ {page_idx}, tpl_idx_ {tpl_idx}, bp_ {bp}, tuples_per_page_ {tuples_per_page},
 	      pages_count_ {pages_count}, start_page_idx_ {page_idx} {
+		if (fix_tpl_idx) {
+			this->SetFirstIndex();
+		}
 	}
 
 	HeapIterator(const HeapIterator &other)
@@ -238,13 +242,11 @@ public:
 	}
 
 	HeapIterator &operator++() {
-
 		this->LoadPage();
 
 		this->tpl_idx_++;
 
 		while (!this->current_page_->Contains(tpl_idx_)) {
-
 			if (this->tpl_idx_ == this->tuples_per_page_) {
 				this->tpl_idx_ = 0;
 				this->page_idx_++;
@@ -252,6 +254,7 @@ public:
 				if (this->page_idx_ == this->start_page_idx_ + this->pages_count_) {
 					return *this;
 				}
+				LoadPage();
 			} else {
 				this->tpl_idx_++;
 			}
@@ -273,6 +276,27 @@ public:
 	}
 
 private:
+	void SetFirstIndex() {
+		if (this->page_idx_ >= this->start_page_idx_ + this->pages_count_) {
+			return;
+		}
+		this->LoadPage();
+		while (!this->current_page_->Contains(tpl_idx_)) {
+			if (this->tpl_idx_ == this->tuples_per_page_) {
+				this->tpl_idx_ = 0;
+				this->page_idx_++;
+				// we reached end, thus we won't find tuple and must return
+				if (this->page_idx_ == this->start_page_idx_ + this->pages_count_) {
+					return;
+				}
+				LoadPage();
+			} else {
+				this->tpl_idx_++;
+			}
+		}
+		return;
+	}
+
 	index *page_idx_;
 	index tpl_idx_;
 
@@ -493,9 +517,9 @@ public:
 		// first we got to iterate delta storage to get vector of all the indexes we wish to delete
 		std::vector<index> delete_indexes;
 
-		for (auto it = this->ds_->deltas_.begin(); it != this->ds_->deltas_.end(); it++) {
+		for (auto it = this->ds_->deltas_.begin(); it != this->ds_->deltas_.end();) {
 
-			if (it->second.rbegin()->ts < ts) {
+			if (it->second.rbegin()->ts <= ts) {
 
 				if (zeros_only) {
 					// calculate count and check if it's zero, then we can delete
@@ -504,6 +528,7 @@ public:
 						sum += dlt.count;
 					}
 					if (sum != 0) {
+						it++;
 						continue;
 					}
 				}
@@ -511,6 +536,8 @@ public:
 				delete_indexes.emplace_back(it->first);
 				// remove index from deltas
 				it = this->ds_->deltas_.erase(it);
+			} else {
+				it++;
 			}
 		}
 
@@ -558,12 +585,12 @@ public:
 
 	HeapIterator<Type> begin() {
 		return HeapIterator<Type>(this->data_page_indexes_.data(), 0, this->bp_, this->tuples_per_page_,
-		                          this->data_page_indexes_.size());
+		                          this->data_page_indexes_.size(), true);
 	}
 
 	HeapIterator<Type> end() {
 		return HeapIterator<Type>(this->data_page_indexes_.data() + this->data_page_indexes_.size(), 0, bp_,
-		                          this->tuples_per_page_, this->data_page_indexes_.size());
+		                          this->tuples_per_page_, this->data_page_indexes_.size(), false);
 	}
 
 	// methods to work with deltas

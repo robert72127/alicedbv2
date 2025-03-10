@@ -213,7 +213,7 @@ struct CanAffordDog{
 
 
 void print_person(const AliceDB::Tuple<Person> &current_tuple){
-    std::cout<<current_tuple.delta.count << "||";
+    std::cout<<current_tuple.delta.count << "|" << current_tuple.delta.ts << "||";
     const Person &p = current_tuple.data;
     std::cout<<p.name.data() << " " << p.surname.data() << " " << p.favourite_dog_race.data() << " " << p.age << " " << p.account_balance  << std::endl; 
 } 
@@ -285,7 +285,6 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             std::strncpy(d->name.data(), name, sizeof(d->name));
             return true;
 }
-
 
 TEST(MULTINODETEST, INSERTS){
 
@@ -500,7 +499,6 @@ void prepare_people_data_delete_test_future(std::string people_fname){
     people_writter.close();
 }
 
-
 // insert and delete tuple with different times, check if view is correct at each time
 // first insert then delete some tuple, make sure that count is correct
 TEST(DELETE_TEST, DELETE_IN_FUTURE){
@@ -674,16 +672,15 @@ void prepare_data_garbage_collection_test(std::string people_fname){
                 //std::cout << test_str <<std::endl;
                 people_writter << person_str << std::endl;
                 cnt++;
-                if(cnt > max){ break;}
+                if(cnt >= max){ break;}
         }
-        if(cnt > max){break;}
+        if(cnt >= max){break;}
     }
 
     people_writter.close();
 }
 
 
-/** @todo fix this test and we are done */
 
 // insert enough to fill K Pages, then perform garbage collection,
 // after that insert few new tuples, check if they were inserted into empty space, created by garbage collection
@@ -716,7 +713,7 @@ TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){
         );
 
     db->StartGraph(g);
-    std::this_thread::sleep_for(std::chrono::seconds(4));
+    std::this_thread::sleep_for(std::chrono::seconds(3));
     db->StopGraph(g);
 
 
@@ -724,13 +721,14 @@ TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){
 
     int cnt = 0;
     for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+        print_person(*it);
         cnt++;
     }
+    ASSERT_EQ(cnt, 4096/2);
     std::cout<<cnt<<std::endl;
 
     // delete database directory
     db = nullptr;
     std::filesystem::remove_all("database");
-
 
 }

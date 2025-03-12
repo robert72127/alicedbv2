@@ -309,7 +309,7 @@ TEST(STATEFULL_TEST, UNION){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
+    db->StopProcessing();
 
 
     // debugging
@@ -346,8 +346,7 @@ TEST(STATEFULL_TEST, EXCEPT){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
-
+    db->StopProcessing();
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
@@ -383,8 +382,7 @@ TEST(STATEFULL_TEST, INTERSECT){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
-
+    db->StopProcessing();
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
@@ -431,7 +429,7 @@ TEST(SIMPLESTATE_TEST, CROSSJOIN){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
+    db->StopProcessing();
 
     AliceDB::SinkNode<PairPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<PairPeople>*>(view);
 
@@ -480,7 +478,7 @@ TEST(SIMPLESTATE_TEST, JOIN){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
+    db->StopProcessing();
 
     AliceDB::SinkNode<SameAgedPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<SameAgedPeople>*>(view);
 
@@ -522,7 +520,7 @@ TEST(STATEFULL_TEST, AGGREGATEBY){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
+    db->StopProcessing();
 
 
     // debugging

@@ -117,7 +117,7 @@ TEST(WorkerPoolTest, StartStopTest) {
 
         std::this_thread::sleep_for(std::chrono::seconds(1));
         
-        db->StopGraph(g);
+        db->StopProcessing();
     }
 
     db = nullptr;
@@ -160,7 +160,6 @@ TEST(WorkerPoolTest, GraphsThreadsSameCount) {
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(2));
-
 
     db = nullptr;
     std::filesystem::remove_all("database");

@@ -307,8 +307,7 @@ TEST(TCP_TEST, simple_tcp){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    db->StopGraph(g);
-
+    db->StopProcessing();
 
     // bussy wait to test if input will get updated
     int j = 0;

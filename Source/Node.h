@@ -78,6 +78,10 @@ public:
 		this->has_work_ = false;
 	}
 
+	bool HasWork(){
+		return this->has_work_;
+	}
+
 protected:
 	// list of out nodes for keeping track of oldest time we need to store
 	std::vector<Node *> out_nodes_;
@@ -139,6 +143,9 @@ public:
 
 		this->produce_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
 		this->ts_ = get_current_timestamp();
+
+		// source nodes should always call compute, since we don't know yet if they have any work or not
+		this->has_work_=true;
 	}
 
 	~SourceNode() {
@@ -163,6 +170,13 @@ public:
 		}
 
 		this->produce_cache_->FinishInserting();
+
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
+
 	}
 
 	Cache<Type> *Output() {
@@ -232,10 +246,10 @@ public:
 			this->table_->InsertDelta(idx, in_tuple.delta);
 		}
 
-		this->UpdateTimestamp();
 		if (this->compact_) {
 			this->Compact();
 		}
+	
 		this->in_node_->CleanCache();
 
 		// periodically call garbage collector
@@ -264,6 +278,7 @@ public:
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
 			this->SubmitWork();
+			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp();
 		}

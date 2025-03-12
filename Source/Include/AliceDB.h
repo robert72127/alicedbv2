@@ -124,6 +124,10 @@ public:
 		}
 	}
 
+	void StopProcessing(){
+		this->pool_->StopAll();
+	}
+
 private:
 	std::filesystem::path database_directory_;
 	// Shared resources:

@@ -286,6 +286,7 @@ bool parseDog(std::istringstream &iss, Dog *d) {
             return true;
 }
 
+
 TEST(MULTINODETEST, INSERTS){
 
     std::string people_fname = "people.txt";
@@ -597,7 +598,7 @@ void prepare_people_data_delete_test_non_zero_frontier(std::string people_fname)
     //std::cout << test_str <<std::endl;
     people_writter << person_str << std::endl;
     
-    person_str = "delete " + std::to_string( (AliceDB::get_current_timestamp() +2) ) 
+    person_str = "delete " + std::to_string( (AliceDB::get_current_timestamp() + 3) ) 
                     + " "  + name + " " + surname + " " + dogbreeds[dog_race_nr] + " "  +  std::to_string(age) + " " +std::to_string(account_ballance);
 
     people_writter << person_str << std::endl;
@@ -605,7 +606,7 @@ void prepare_people_data_delete_test_non_zero_frontier(std::string people_fname)
     people_writter.close();
 }
 
-
+/** @todo fix me */
 TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
 
     std::string people_fname = "people.txt";
@@ -621,11 +622,11 @@ TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
 
     auto *view = 
         g->View(
-            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,5)
+            g->Source<Person>(AliceDB::ProducerType::FILE , people_fname, parsePerson,2)
         );
 
     db->StartGraph(g);
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::seconds(4));
     db->StopGraph(g);
 
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);

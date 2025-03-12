@@ -127,7 +127,7 @@ TEST(STATELESS_TEST, FILTER){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(1));
-    db->StopGraph(g);
+    db->StopProcessing();
 
 
     // debugging
@@ -166,7 +166,7 @@ TEST(STATELESS_TEST, PROJECTION){
 
     db->StartGraph(g);
     std::this_thread::sleep_for(std::chrono::seconds(1));
-    db->StopGraph(g);
+    db->StopProcessing();
 
 
     // debugging

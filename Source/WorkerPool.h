@@ -16,49 +16,75 @@ namespace AliceDB {
 
 class WorkerPool {
 public:
-	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt} {
+	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_{0} {
 		for (int i = 0; i < this->workers_cnt_; i++) {
 			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, i);
 		}
 	}
 
 	~WorkerPool() {
+		if(this->stop_all_ == 0){
+		}
 		this->StopAll();
+}
+
+	void StopAll() {
+		{
+			std::scoped_lock lock(this->control_lock_);
+			auto stop_all = [this](){
+				this->stop_all_ = true;
+			};
+			this->control_tasks_.push_back(stop_all);
+		}
+
+		// wait for controll function to be submitted then join workers
 		for (auto &worker : this->workers_) {
 			if (worker.joinable()) {
 				worker.join();
 			};
 		}
-	}
 
-	void StopAll() {
-		this->stop_all.store(true);
 	}
 
 	// remove graph g from being processed by worker poll
 	void Stop(Graph *g) {
-		std::unique_lock lock(graphs_lock_);
-		for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
-			if ((*it) == g) {
-				this->graphs_.erase(it);
-				break;
+
+		std::scoped_lock lock(this->control_lock_);
+
+		auto stop_g = [this,g](){
+			if(!g){
+				return;
 			}
-		}
+			for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
+				if ((*it) == g) {
+					this->graphs_.erase(it);
+					break;
+				}
+			}
+		};
+		this->control_tasks_.push_back(stop_g);
 	}
 
 	/** @brief  add g to workerpool work sources*/
 	void Start(Graph *g) {
-		std::unique_lock lock(this->graphs_lock_);
-		if (g) {
-			g->Start();
-		}
-		// this->graphs_lock_.lock();
-		for (const auto &present : graphs_) {
-			if (present == g) {
+		std::scoped_lock lock(this->control_lock_);
+
+		auto start_g = [this, g](){
+			if(!g){
 				return;
 			}
-		}
-		graphs_.emplace_back(g);
+			g->Start();
+			
+			// this->graphs_lock_.lock();
+			for (const auto &present : graphs_) {
+				if (present == g) {
+					return;
+				}
+			}
+			this->graphs_.emplace_back(g);
+		};
+
+		this->control_tasks_.push_back(start_g);
 	}
 
 private:
@@ -68,13 +94,11 @@ private:
 	void WorkerThread(int index) {
 		try {
 			// process untill stop is called on this thread, or on all threads
-			while (!this->stop_all.load()) {
+			while (!this->stop_all_) {
 				// get work
 
 				auto [node, graph] = this->GetWork();
 				if (node == nullptr) {
-					// std::this_thread::yield();
-					std::this_thread::sleep_for(std::chrono::milliseconds(200));
 					continue;
 				}
 
@@ -97,7 +121,7 @@ private:
 		std::scoped_lock lock(graphs_lock_);
 
 		// populate work_queue
-		if (this->work_queue_.empty()) {
+		while (this->work_queue_.empty()) {
 			bool any_produced = false;
 			for (const auto g : this->graphs_) {
 				std::vector<Node *> nodes = g->GetNext();
@@ -108,20 +132,37 @@ private:
 					this->work_queue_.push_back({node, g});
 				}
 			}
+			this->perform_control_task();
+			
+			// time to stop we need to actually return now
+			if(this->stop_all_ == 1){
+				return {nullptr, nullptr};
+			}
 
 			if (!any_produced) {
-				return {nullptr, nullptr};
+				// todo sleep for some time on this thread and for all others wait, maybe on cond var? or will current design force them to actually sleep on scoped_lock?
+				std::this_thread::sleep_for(std::chrono::milliseconds(200));
 			}
 		}
 
+		this->perform_control_task();
 		auto ret = this->work_queue_.back();
 		work_queue_.pop_back();
 		return ret;
 	}
 
+	void perform_control_task(){
+		std::scoped_lock lock(this->control_lock_);
+		while(!this->control_tasks_.empty()){
+				auto &task = this->control_tasks_.back();
+				this->control_tasks_.pop_back();	
+				task();
+		}
+	}
+
 	// all graphs that we are processing
 	std::vector<Graph *> graphs_;
-	std::shared_mutex graphs_lock_;
+	std::mutex graphs_lock_;
 	// we want to prevent situation where worker acquired graph node to be processed, and before
 	// calling compute on it, graph get's removed
 	// index next graph to be processed
@@ -129,11 +170,15 @@ private:
 
 	std::vector<std::thread> workers_;
 
-	std::atomic<bool> stop_all {0};
+	bool stop_all_;
 
 	const int workers_cnt_;
 
 	std::deque<std::pair<Node *, Graph *>> work_queue_;
+
+	std::deque<std::function<void()>> control_tasks_ = {};
+	std::mutex control_lock_;
+
 };
 
 } // namespace AliceDB

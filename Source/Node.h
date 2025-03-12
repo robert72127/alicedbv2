@@ -16,7 +16,8 @@
 #include <set>
 #include <type_traits>
 
-/** @todo add locking, when needed, maybe add a way to  perform work asynchronous, then probably workers would have easier job */
+/** @todo add locking, when needed, maybe add a way to  perform work asynchronous, then probably workers would have
+ * easier job */
 
 namespace AliceDB {
 
@@ -70,15 +71,15 @@ public:
 		return this->frontier_ts_;
 	}
 
-	void SubmitWork(){
+	void SubmitWork() {
 		this->has_work_ = true;
 	}
 
-	void CleanWork(){
+	void CleanWork() {
 		this->has_work_ = false;
 	}
 
-	bool HasWork(){
+	bool HasWork() {
 		return this->has_work_;
 	}
 
@@ -94,9 +95,9 @@ protected:
 
 	std::mutex node_lock_;
 
-	// set by in node compute when it produced some tuples 
+	// set by in node compute when it produced some tuples
 	// or by outnode update timestamp when it's time to compact
-	
+
 	bool has_work_;
 };
 
@@ -145,7 +146,7 @@ public:
 		this->ts_ = get_current_timestamp();
 
 		// source nodes should always call compute, since we don't know yet if they have any work or not
-		this->has_work_=true;
+		this->has_work_ = true;
 	}
 
 	~SourceNode() {
@@ -171,12 +172,11 @@ public:
 
 		this->produce_cache_->FinishInserting();
 
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
-
 	}
 
 	Cache<Type> *Output() {
@@ -222,9 +222,8 @@ class SinkNode : public TypedNode<Type> {
 public:
 	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
 	         MetaState &meta, index table_index)
-	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()},
-	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()},
-		  previous_ts_ {meta.previous_ts_}{
+	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta},
+	      TypedNode<Type> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -249,7 +248,7 @@ public:
 		if (this->compact_) {
 			this->Compact();
 		}
-	
+
 		this->in_node_->CleanCache();
 
 		// periodically call garbage collector
@@ -323,7 +322,7 @@ public:
 		timestamp ts_;
 	};
 
-	Iterator begin(timestamp ts) {
+	Iterator begin() {
 		return Iterator(this->table_->begin(), this->table_, this->previous_ts_);
 	}
 
@@ -333,7 +332,7 @@ public:
 
 private:
 	void Compact() {
-		this->table_->MergeDelta(this->ts_);
+		this->table_->MergeDelta(this->previous_ts_);
 	}
 
 	Graph *graph_;
@@ -352,7 +351,7 @@ private:
 
 	// timestamp for which we have seen all the tuples
 	timestamp &previous_ts_;
-	
+
 	bool compact_;
 };
 
@@ -387,8 +386,8 @@ public:
 		this->in_node_->CleanCache();
 
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
@@ -457,12 +456,11 @@ public:
 		this->in_node_->CleanCache();
 
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
-
 	}
 
 	Cache<OutType> *Output() {
@@ -647,10 +645,10 @@ public:
 		}
 
 		this->in_node_->CleanCache();
-		
+
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
@@ -760,14 +758,13 @@ public:
 		this->in_node_right_->CleanCache();
 
 		this->out_cache_->FinishInserting();
-		
+
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
-
 	}
 
 	void UpdateTimestamp() {
@@ -808,7 +805,8 @@ public:
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
 	      gb_settings_ {gb_settings}, left_meta_ {left_meta}, right_meta_ {right_meta},
-	      TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())} {
+	      previous_ts_ {right_meta.previous_ts_}, TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(),
+	                                                                           in_node_right->GetFrontierTs())} {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -854,6 +852,7 @@ public:
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
 			this->SubmitWork();
+			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
 			this->in_node_left_->UpdateTimestamp();
 			this->in_node_right_->UpdateTimestamp();
@@ -862,8 +861,8 @@ public:
 
 protected:
 	void Compact() {
-		this->left_table_->MergeDelta(this->ts_);
-		this->right_table_->MergeDelta(this->ts_);
+		this->left_table_->MergeDelta(this->previous_ts_);
+		this->right_table_->MergeDelta(this->previous_ts_);
 	}
 
 	Graph *graph_;
@@ -886,6 +885,8 @@ protected:
 
 	MetaState &left_meta_;
 	MetaState &right_meta_;
+
+	timestamp &previous_ts_;
 
 	// timestamp will be used to track valid tuples
 	// after update propagate it to input nodes
@@ -992,10 +993,9 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-				
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
@@ -1115,14 +1115,12 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-				
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
-
 	}
 
 private:
@@ -1143,7 +1141,8 @@ public:
 	    : graph_ {graph}, in_node_left_ {in_node_left}, in_node_right_ {in_node_right},
 	      in_cache_left_ {in_node_left->Output()}, in_cache_right_ {in_node_right->Output()},
 	      gb_settings_ {gb_settings}, left_meta_ {left_meta}, right_meta_ {right_meta},
-	      TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(), in_node_right->GetFrontierTs())},
+	      previous_ts_ {right_meta.previous_ts_}, TypedNode<OutType> {std::max(in_node_left->GetFrontierTs(),
+	                                                                           in_node_right->GetFrontierTs())},
 	      get_match_left_(get_match_left), get_match_right_ {get_match_right}, join_layout_ {join_layout} {
 
 		this->ts_ = get_current_timestamp();
@@ -1266,10 +1265,9 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-				
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
@@ -1299,6 +1297,7 @@ public:
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
 			this->SubmitWork();
+			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
 			this->in_node_left_->UpdateTimestamp();
 			this->in_node_right_->UpdateTimestamp();
@@ -1313,8 +1312,8 @@ private:
 	}
 
 	void Compact() {
-		this->left_table_->MergeDelta(this->ts_);
-		this->right_table_->MergeDelta(this->ts_);
+		this->left_table_->MergeDelta(this->previous_ts_);
+		this->right_table_->MergeDelta(this->previous_ts_);
 	}
 
 	std::function<MatchType(const InTypeLeft &)> get_match_left_;
@@ -1338,6 +1337,8 @@ private:
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
+
+	timestamp &previous_ts_;
 
 	MetaState &left_meta_;
 	MetaState &right_meta_;
@@ -1494,23 +1495,21 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-				
 		this->CleanWork();
-		if(produced){
-			for(auto *node :this->out_nodes_){
+		if (produced) {
+			for (auto *node : this->out_nodes_) {
 				node->SubmitWork();
 			}
 		}
-
 	}
 
 	void UpdateTimestamp() {
 		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
-			this->previous_ts_ = this->ts_;
-			this->ts_ = ts;
 			this->compact_ = true;
 			this->SubmitWork();
+			this->previous_ts_ = this->ts_;
+			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp();
 		}
 	}

@@ -455,45 +455,33 @@ public:
 			// ok all nodes processed at last level we can restart
 			if (current_level_ == this->levels_.size()) {
 				// now that we processed all tuples we can run "backward" and check if any node needs compaction
-				for(auto *node: this->sinks_){
+				for (auto *node : this->sinks_) {
 					node->UpdateTimestamp();
 				}
 				this->FinishProduceRound();
 			}
 
-		/*
-			const auto &ret = this->levels_[current_level_];
-			this->current_level_++;
-			return ret;
-		}
-
-		else{
-			return {};
-		}
-		*/
-		
 			// update next level to one that has any work to do
-			while(current_level_ != this->levels_.size()){
+			while (current_level_ != this->levels_.size()) {
 				bool has_any_work = false;
 				std::vector<Node *> ret = {};
 
-				for(auto *node:this->levels_[current_level_]){
-					if (node->HasWork()){
+				for (auto *node : this->levels_[current_level_]) {
+					if (node->HasWork()) {
 						has_any_work = true;
 						ret.push_back(node);
-					}else{
+					} else {
 						this->nodes_state_[node] = {NodeState::PROCESSED};
 					}
 				}
 				this->current_level_++;
-				if(has_any_work){
+				if (has_any_work) {
 					return ret;
 				}
-			}	
+			}
 		}
 		// produce queue is empty but current level isn't finished yet, no work to be done on this graph
 		return {};
-		
 	}
 
 	// sets node state

@@ -124,7 +124,7 @@ public:
 		}
 	}
 
-	void StopProcessing(){
+	void StopProcessing() {
 		this->pool_->StopAll();
 	}
 

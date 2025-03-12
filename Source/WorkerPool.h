@@ -16,22 +16,22 @@ namespace AliceDB {
 
 class WorkerPool {
 public:
-	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_{0} {
+	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_ {0} {
 		for (int i = 0; i < this->workers_cnt_; i++) {
 			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, i);
 		}
 	}
 
 	~WorkerPool() {
-		if(this->stop_all_ == 0){
+		if (this->stop_all_ == 0) {
 		}
 		this->StopAll();
-}
+	}
 
 	void StopAll() {
 		{
 			std::scoped_lock lock(this->control_lock_);
-			auto stop_all = [this](){
+			auto stop_all = [this]() {
 				this->stop_all_ = true;
 			};
 			this->control_tasks_.push_back(stop_all);
@@ -43,7 +43,6 @@ public:
 				worker.join();
 			};
 		}
-
 	}
 
 	// remove graph g from being processed by worker poll
@@ -51,8 +50,8 @@ public:
 
 		std::scoped_lock lock(this->control_lock_);
 
-		auto stop_g = [this,g](){
-			if(!g){
+		auto stop_g = [this, g]() {
+			if (!g) {
 				return;
 			}
 			for (auto it = this->graphs_.begin(); it != this->graphs_.end(); it++) {
@@ -69,12 +68,12 @@ public:
 	void Start(Graph *g) {
 		std::scoped_lock lock(this->control_lock_);
 
-		auto start_g = [this, g](){
-			if(!g){
+		auto start_g = [this, g]() {
+			if (!g) {
 				return;
 			}
 			g->Start();
-			
+
 			// this->graphs_lock_.lock();
 			for (const auto &present : graphs_) {
 				if (present == g) {
@@ -133,14 +132,15 @@ private:
 				}
 			}
 			this->perform_control_task();
-			
+
 			// time to stop we need to actually return now
-			if(this->stop_all_ == 1){
+			if (this->stop_all_ == 1) {
 				return {nullptr, nullptr};
 			}
 
 			if (!any_produced) {
-				// todo sleep for some time on this thread and for all others wait, maybe on cond var? or will current design force them to actually sleep on scoped_lock?
+				// todo sleep for some time on this thread and for all others wait, maybe on cond var? or will current
+				// design force them to actually sleep on scoped_lock?
 				std::this_thread::sleep_for(std::chrono::milliseconds(200));
 			}
 		}
@@ -151,12 +151,12 @@ private:
 		return ret;
 	}
 
-	void perform_control_task(){
+	void perform_control_task() {
 		std::scoped_lock lock(this->control_lock_);
-		while(!this->control_tasks_.empty()){
-				auto &task = this->control_tasks_.back();
-				this->control_tasks_.pop_back();	
-				task();
+		while (!this->control_tasks_.empty()) {
+			auto &task = this->control_tasks_.back();
+			this->control_tasks_.pop_back();
+			task();
 		}
 	}
 
@@ -178,7 +178,6 @@ private:
 
 	std::deque<std::function<void()>> control_tasks_ = {};
 	std::mutex control_lock_;
-
 };
 
 } // namespace AliceDB

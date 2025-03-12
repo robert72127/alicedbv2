@@ -133,7 +133,7 @@ TEST(STATELESS_TEST, FILTER){
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
     }
 
@@ -172,7 +172,7 @@ TEST(STATELESS_TEST, PROJECTION){
     // debugging
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
     
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_name(*it);
     }
 

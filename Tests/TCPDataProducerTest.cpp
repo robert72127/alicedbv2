@@ -309,22 +309,11 @@ TEST(TCP_TEST, simple_tcp){
     std::this_thread::sleep_for(std::chrono::seconds(2));
     db->StopProcessing();
 
-    // bussy wait to test if input will get updated
-    int j = 0;
-    while(j < 10000000){
-        j++;
-    }
-
-    std::cout<<j<<std::endl;
-    // make few iteration, to process whole data
-    //g->Process(10);
-
-
 
     // debugging
     AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
     
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_name(*it);
     }
     

@@ -314,7 +314,7 @@ TEST(STATEFULL_TEST, UNION){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
     }
 
@@ -350,7 +350,7 @@ TEST(STATEFULL_TEST, EXCEPT){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
     }
 
@@ -386,7 +386,7 @@ TEST(STATEFULL_TEST, INTERSECT){
 
     // debugging
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
     }
     
@@ -433,7 +433,7 @@ TEST(SIMPLESTATE_TEST, CROSSJOIN){
 
     AliceDB::SinkNode<PairPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<PairPeople>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_pairpeople(*it);
     }
     
@@ -482,7 +482,7 @@ TEST(SIMPLESTATE_TEST, JOIN){
 
     AliceDB::SinkNode<SameAgedPeople> *real_sink = reinterpret_cast<AliceDB::SinkNode<SameAgedPeople>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_sameagedpeople(*it);
     }
 
@@ -526,7 +526,7 @@ TEST(STATEFULL_TEST, AGGREGATEBY){
     // debugging
     AliceDB::SinkNode<NameTotalBalance> *real_sink = reinterpret_cast<AliceDB::SinkNode<NameTotalBalance>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_nametotalbalance(*it);
     }
     

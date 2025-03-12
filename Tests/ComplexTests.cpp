@@ -342,7 +342,7 @@ TEST(MULTINODETEST, INSERTS){
 
     AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_canafforddog(*it);
     }
 
@@ -413,7 +413,7 @@ TEST(DELETE_TEST, DELETE){
 
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
         AliceDB::Delta d = (*it).delta;
         ASSERT_LE ( d.count, 0);
@@ -453,7 +453,7 @@ TEST(DELETE_TEST, DELETE_DISTINCT){
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
     int cnt = 0;
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         cnt++;
     }
     ASSERT_EQ(cnt, 0);
@@ -525,7 +525,7 @@ TEST(DELETE_TEST, DELETE_IN_FUTURE){
 
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
         AliceDB::Delta d = (*it).delta;
         ASSERT_EQ ( d.count, 2);
@@ -563,7 +563,7 @@ TEST(DELETE_TEST, DELETE_DISTINCT_IN_FUTURE){
 
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         AliceDB::Delta d = (*it).delta;
         ASSERT_EQ ( d.count, 1);
     }
@@ -611,8 +611,6 @@ TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
 
     std::string people_fname = "people.txt";
     prepare_people_data_delete_test_non_zero_frontier(people_fname);
-     std::string dogs_fname = "dogs.txt";
-
 
     int worker_threads_cnt = 1;
 
@@ -631,7 +629,7 @@ TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
 
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()-1) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
         AliceDB::Delta d = (*it).delta;
         ASSERT_EQ ( d.count, 1);
@@ -643,6 +641,7 @@ TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
 
 
 }
+
 
 void prepare_data_garbage_collection_test(std::string people_fname){
     // Seed the random number generator
@@ -680,7 +679,6 @@ void prepare_data_garbage_collection_test(std::string people_fname){
 
     people_writter.close();
 }
-
 
 
 // insert enough to fill K Pages, then perform garbage collection,
@@ -721,7 +719,7 @@ TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){
     AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
     int cnt = 0;
-    for(auto it = real_sink->begin(AliceDB::get_current_timestamp()) ; it != real_sink->end(); ++it){
+    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
         print_person(*it);
         cnt++;
     }

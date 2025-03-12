@@ -16,6 +16,8 @@
 #include <set>
 #include <type_traits>
 
+/** @todo add locking, when needed, maybe add a way to  perform work asynchronous, then probably workers would have easier job */
+
 namespace AliceDB {
 
 struct MetaState {
@@ -39,7 +41,7 @@ public:
 
 	virtual ~Node() {};
 
-	virtual bool Compute() = 0;
+	virtual void Compute() = 0;
 
 	virtual void CleanCache() = 0;
 	/**
@@ -68,6 +70,14 @@ public:
 		return this->frontier_ts_;
 	}
 
+	void SubmitWork(){
+		this->has_work_ = true;
+	}
+
+	void CleanWork(){
+		this->has_work_ = false;
+	}
+
 protected:
 	// list of out nodes for keeping track of oldest time we need to store
 	std::vector<Node *> out_nodes_;
@@ -77,6 +87,13 @@ protected:
 
 	// how much time back from current time do we have to store values
 	timestamp frontier_ts_;
+
+	std::mutex node_lock_;
+
+	// set by in node compute when it produced some tuples 
+	// or by outnode update timestamp when it's time to compact
+	
+	bool has_work_;
 };
 
 template <typename OutType>
@@ -128,7 +145,7 @@ public:
 		delete produce_cache_;
 	}
 
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 
 		auto start = std::chrono::steady_clock::now();
@@ -146,7 +163,6 @@ public:
 		}
 
 		this->produce_cache_->FinishInserting();
-		return produced;
 	}
 
 	Cache<Type> *Output() {
@@ -193,7 +209,8 @@ public:
 	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
 	         MetaState &meta, index table_index)
 	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()},
-	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()} {
+	      gb_settings_ {gb_settings}, meta_ {meta}, TypedNode<Type> {in_node->GetFrontierTs()},
+		  previous_ts_ {meta.previous_ts_}{
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -206,7 +223,7 @@ public:
 		delete table_;
 	}
 
-	bool Compute() {
+	void Compute() {
 		// write in cache into out_table
 		const char *in_data;
 		while (this->in_cache_->HasNext()) {
@@ -215,9 +232,7 @@ public:
 			this->table_->InsertDelta(idx, in_tuple.delta);
 		}
 
-		// get current timestamp that can be considered
 		this->UpdateTimestamp();
-
 		if (this->compact_) {
 			this->Compact();
 		}
@@ -231,7 +246,7 @@ public:
 		}
 
 		// never produces
-		return false;
+		this->CleanWork();
 	}
 
 	// since all sink does is store state we can treat incache as out cache when we use sink(view)
@@ -243,15 +258,18 @@ public:
 		this->in_node_->CleanCache();
 	}
 
+	// get current timestamp that can be considered
 	void UpdateTimestamp() {
 		timestamp ts = get_current_timestamp();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
+			this->SubmitWork();
 			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp();
 		}
 	}
 
+	/** @todo lock node during iterating, and for time use last time that is commited */
 	class Iterator {
 	public:
 		Iterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts)
@@ -291,7 +309,7 @@ public:
 	};
 
 	Iterator begin(timestamp ts) {
-		return Iterator(this->table_->begin(), this->table_, ts);
+		return Iterator(this->table_->begin(), this->table_, this->previous_ts_);
 	}
 
 	Iterator end() {
@@ -317,6 +335,9 @@ private:
 
 	MetaState &meta_;
 
+	// timestamp for which we have seen all the tuples
+	timestamp &previous_ts_;
+	
 	bool compact_;
 };
 
@@ -337,7 +358,7 @@ public:
 
 	// filters node
 	// those that pass are put into output cache, this is all that this node does
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 		// pass function that match condition to output
 		while (this->in_cache_->HasNext()) {
@@ -350,7 +371,12 @@ public:
 		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
 
-		return produced;
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
 	}
 
 	Cache<Type> *Output() {
@@ -403,7 +429,7 @@ public:
 		delete out_cache_;
 	}
 
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 		while (in_cache_->HasNext()) {
 			Tuple<InType> in_tuple = this->in_cache_->GetNext();
@@ -415,7 +441,13 @@ public:
 		this->out_cache_->FinishInserting();
 		this->in_node_->CleanCache();
 
-		return produced;
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
+
 	}
 
 	Cache<OutType> *Output() {
@@ -508,7 +540,7 @@ public:
 		}
 	}
 
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 
 		// first insert all new data from cache to table
@@ -600,14 +632,20 @@ public:
 		}
 
 		this->in_node_->CleanCache();
-
-		return produced;
+		
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
 	}
 
 	void UpdateTimestamp() {
 		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
+			this->SubmitWork();
 			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
 			this->in_node_->UpdateTimestamp();
@@ -685,7 +723,7 @@ public:
 		}
 	}
 
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 
 		// process left input
@@ -707,8 +745,14 @@ public:
 		this->in_node_right_->CleanCache();
 
 		this->out_cache_->FinishInserting();
+		
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
 
-		return produced;
 	}
 
 	void UpdateTimestamp() {
@@ -788,12 +832,13 @@ public:
 		}
 	}
 
-	virtual bool Compute() = 0;
+	virtual void Compute() = 0;
 
 	void UpdateTimestamp() {
 		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
+			this->SubmitWork();
 			this->ts_ = ts;
 			this->in_node_left_->UpdateTimestamp();
 			this->in_node_right_->UpdateTimestamp();
@@ -843,7 +888,7 @@ public:
 	                                           right_meta, left_table_index, right_table_index) {
 	}
 
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 
 		// compute right_cache against left_cache
@@ -932,7 +977,13 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-		return produced;
+				
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
 	}
 
 private:
@@ -955,7 +1006,7 @@ public:
 	      join_layout_ {join_layout} {
 	}
 
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 
 		// compute right_cache against left_cache
@@ -1049,7 +1100,14 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-		return produced;
+				
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
+
 	}
 
 private:
@@ -1092,7 +1150,7 @@ public:
 	}
 
 	// this function changes
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 		// compute right_cache against left_cache
 		// they are small and hold no indexes so we do it just by nested loop
@@ -1193,7 +1251,13 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-		return produced;
+				
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
 	}
 
 	~JoinNode() {
@@ -1219,6 +1283,7 @@ public:
 		timestamp ts = this->OldestTsToKeep();
 		if (this->ts_ + this->frontier_ts_ < ts) {
 			this->compact_ = true;
+			this->SubmitWork();
 			this->ts_ = ts;
 			this->in_node_left_->UpdateTimestamp();
 			this->in_node_right_->UpdateTimestamp();
@@ -1318,7 +1383,7 @@ public:
 	// also will be wrong what if we would do : insert previous value with count
 	// -1 and insert current with count 1 at the same time then old should get
 	// discarded
-	bool Compute() {
+	void Compute() {
 		bool produced = false;
 		// first insert all new data from cache to table
 		while (this->in_cache_->HasNext()) {
@@ -1414,7 +1479,14 @@ public:
 			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
 		}
 
-		return produced;
+				
+		this->CleanWork();
+		if(produced){
+			for(auto *node :this->out_nodes_){
+				node->SubmitWork();
+			}
+		}
+
 	}
 
 	void UpdateTimestamp() {
@@ -1423,6 +1495,7 @@ public:
 			this->previous_ts_ = this->ts_;
 			this->ts_ = ts;
 			this->compact_ = true;
+			this->SubmitWork();
 			this->in_node_->UpdateTimestamp();
 		}
 	}

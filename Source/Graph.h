@@ -454,9 +454,13 @@ public:
 		if (AllProcesedPreviousLevel()) {
 			// ok all nodes processed at last level we can restart
 			if (current_level_ == this->levels_.size()) {
+				// now that we processed all tuples we can run "backward" and check if any node needs compaction
+				for(auto *node: this->sinks_){
+					node->UpdateTimestamp();
+				}
 				this->FinishProduceRound();
 			}
-
+			
 			const auto &ret = this->levels_[current_level_];
 			this->current_level_++;
 			return ret;
@@ -467,10 +471,10 @@ public:
 	}
 
 	// sets node state
-	void Produced(Node *node, bool produced) {
+	void Produced(Node *node) {
 		std::scoped_lock(graph_latch_);
 		// set correct state to current node
-		this->nodes_state_[node] = {NodeState::PROCESSED, produced};
+		this->nodes_state_[node] = {NodeState::PROCESSED};
 	}
 
 	/**
@@ -501,7 +505,7 @@ private:
 		}
 
 		for (const auto &node : this->levels_[this->current_level_ - 1]) {
-			if (this->nodes_state_[node].first != NodeState::PROCESSED) {
+			if (this->nodes_state_[node] != NodeState::PROCESSED) {
 				return false;
 			}
 		}
@@ -510,16 +514,13 @@ private:
 	}
 
 	// resets procesing state of graph, after this method
-	bool FinishProduceRound() {
+	void FinishProduceRound() {
 		bool produced = false;
 		for (const auto &node : this->all_nodes_) {
-			produced = produced || this->nodes_state_[node].second;
-			this->nodes_state_[node] = {NodeState::NOT_PROCESSED, false};
+			this->nodes_state_[node] = {NodeState::NOT_PROCESSED};
 		}
 
 		this->current_level_ = 0;
-
-		return produced;
 	}
 
 	/*
@@ -681,7 +682,7 @@ private:
 	// map of all dependencies for given node (in edges)
 	std::unordered_map<Node *, std::set<Node *>> node_dependencies_;
 
-	std::unordered_map<Node *, std::pair<NodeState, bool>> nodes_state_;
+	std::unordered_map<Node *, NodeState> nodes_state_;
 
 	std::mutex graph_latch_;
 

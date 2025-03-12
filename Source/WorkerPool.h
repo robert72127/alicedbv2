@@ -78,9 +78,9 @@ private:
 					continue;
 				}
 
-				bool produced = node->Compute();
+				node->Compute();
 				// we somehow must know g, maybe we should store pairs of node and graph pointers
-				graph->Produced(node, produced);
+				graph->Produced(node);
 			}
 		} catch (const std::exception &e) {
 			std::cerr << "[Error] Exception in worker thread: " << e.what() << std::endl;

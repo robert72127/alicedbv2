@@ -223,7 +223,7 @@ public:
 	SinkNode(TypedNode<Type> *in_node, Graph *graph, BufferPool *bp, GarbageCollectSettings &gb_settings,
 	         MetaState &meta, index table_index)
 	    : graph_ {graph}, in_node_(in_node), in_cache_ {in_node->Output()}, gb_settings_ {gb_settings}, meta_ {meta},
-	      TypedNode<Type> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_} {
+	      TypedNode<Type> {in_node->GetFrontierTs()}, previous_ts_ {meta.previous_ts_}, iterating_count_(0) {
 
 		this->ts_ = get_current_timestamp();
 		this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
@@ -251,11 +251,14 @@ public:
 
 		this->in_node_->CleanCache();
 
-		// periodically call garbage collector
-		if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
-			this->table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
-			                             this->gb_settings_.remove_zeros_only);
-			this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+		// dont allow for table modification while iterating
+		if (iterating_count_.load() == 0) {
+			// periodically call garbage collector
+			if (this->gb_settings_.use_garbage_collector && this->next_clean_ts_ < this->ts_) {
+				this->table_->GarbageCollect(this->ts_ - this->gb_settings_.delete_age_,
+				                             this->gb_settings_.remove_zeros_only);
+				this->next_clean_ts_ = this->ts_ + this->gb_settings_.clean_freq_;
+			}
 		}
 
 		// never produces
@@ -286,8 +289,19 @@ public:
 	/** @todo lock node during iterating, and for time use last time that is commited */
 	class Iterator {
 	public:
-		Iterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts)
-		    : heap_iterator_(iter), table_ {table}, ts_ {ts} {
+		Iterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts, std::atomic<int> &iter_count,
+		         bool active = false)
+		    : heap_iterator_(iter), table_ {table}, ts_ {ts}, iter_count_(iter_count), active_(active) {
+
+			if (active_) {
+				iter_count_.fetch_add(1);
+			}
+		}
+
+		~Iterator() {
+			if (active_) {
+				iter_count_.fetch_sub(1);
+			}
 		}
 
 		Iterator &operator++() {
@@ -320,14 +334,16 @@ public:
 		HeapIterator<Type> heap_iterator_;
 		Table<Type> *table_;
 		timestamp ts_;
+		std::atomic<int> &iter_count_;
+		bool active_;
 	};
 
 	Iterator begin() {
-		return Iterator(this->table_->begin(), this->table_, this->previous_ts_);
+		return Iterator(this->table_->begin(), this->table_, this->previous_ts_, this->iterating_count_, true);
 	}
 
 	Iterator end() {
-		return Iterator(this->table_->end(), this->table_, 0);
+		return Iterator(this->table_->end(), this->table_, 0, this->iterating_count_, false);
 	}
 
 private:
@@ -351,6 +367,8 @@ private:
 
 	// timestamp for which we have seen all the tuples
 	timestamp &previous_ts_;
+
+	std::atomic<int> iterating_count_;
 
 	bool compact_;
 };

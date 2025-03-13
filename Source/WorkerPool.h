@@ -163,10 +163,6 @@ private:
 	// all graphs that we are processing
 	std::vector<Graph *> graphs_;
 	std::mutex graphs_lock_;
-	// we want to prevent situation where worker acquired graph node to be processed, and before
-	// calling compute on it, graph get's removed
-	// index next graph to be processed
-	std::atomic<unsigned int> next_index_ {0};
 
 	std::vector<std::thread> workers_;
 
@@ -180,5 +176,5 @@ private:
 	std::mutex control_lock_;
 };
 
-} // namespace AliceDB
+} // end namespace AliceDB
 #endif

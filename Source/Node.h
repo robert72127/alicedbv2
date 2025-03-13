@@ -99,6 +99,8 @@ protected:
 	// or by outnode update timestamp when it's time to compact
 
 	bool has_work_;
+
+	std::atomic<int> clean_count {0};
 };
 
 template <typename OutType>
@@ -209,7 +211,6 @@ private:
 	// table and passed to output nodes
 	Cache<Type> *produce_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 
 	int duration_us_;
 };
@@ -444,7 +445,6 @@ private:
 	Cache<Type> *in_cache_;
 	Cache<Type> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 };
 // projection can be represented by single node
 template <typename InType, typename OutType>
@@ -514,7 +514,6 @@ private:
 	Cache<InType> *in_cache_;
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 };
 
 // we need distinct node that will:
@@ -699,7 +698,6 @@ private:
 	Cache<Type> *in_cache_;
 	Cache<Type> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -805,7 +803,6 @@ private:
 
 	Cache<Type> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 
 	bool negate_left_;
 };
@@ -896,7 +893,6 @@ protected:
 
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -1351,7 +1347,6 @@ private:
 
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;
@@ -1553,7 +1548,6 @@ private:
 	Cache<InType> *in_cache_;
 	Cache<OutType> *out_cache_;
 	int out_count = 0;
-	std::atomic<int> clean_count {0};
 
 	GarbageCollectSettings &gb_settings_;
 	timestamp next_clean_ts_;

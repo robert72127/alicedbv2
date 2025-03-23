@@ -340,9 +340,8 @@ TEST(MULTINODETEST, INSERTS){
     std::this_thread::sleep_for(std::chrono::seconds(2));
     db->StopGraph(g);
 
-    AliceDB::SinkNode<CanAffordDog> *real_sink = reinterpret_cast<AliceDB::SinkNode<CanAffordDog>*>(view);
 
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         print_canafforddog(*it);
     }
 
@@ -411,9 +410,8 @@ TEST(DELETE_TEST, DELETE){
     std::this_thread::sleep_for(std::chrono::seconds(2));
     db->StopGraph(g);
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         print_person(*it);
         AliceDB::Delta d = (*it).delta;
         ASSERT_LE ( d.count, 0);
@@ -450,10 +448,9 @@ TEST(DELETE_TEST, DELETE_DISTINCT){
     std::this_thread::sleep_for(std::chrono::seconds(2));
     db->StopGraph(g);
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
     int cnt = 0;
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         cnt++;
     }
     ASSERT_EQ(cnt, 0);
@@ -523,9 +520,8 @@ TEST(DELETE_TEST, DELETE_IN_FUTURE){
     std::this_thread::sleep_for(std::chrono::seconds(2));
     db->StopGraph(g);
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         print_person(*it);
         AliceDB::Delta d = (*it).delta;
         ASSERT_EQ ( d.count, 2);
@@ -561,9 +557,8 @@ TEST(DELETE_TEST, DELETE_DISTINCT_IN_FUTURE){
     std::this_thread::sleep_for(std::chrono::seconds(2));
     db->StopGraph(g);
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         AliceDB::Delta d = (*it).delta;
         ASSERT_EQ ( d.count, 1);
     }
@@ -626,9 +621,8 @@ TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
     std::this_thread::sleep_for(std::chrono::seconds(4));
     db->StopGraph(g);
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
 
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         print_person(*it);
         AliceDB::Delta d = (*it).delta;
         ASSERT_EQ ( d.count, 1);
@@ -715,10 +709,8 @@ TEST(GARBAGE_COLLECTION_TEST, GARBAGE_COLLECTION){
     db->StopGraph(g);
 
 
-    AliceDB::SinkNode<Person> *real_sink = reinterpret_cast<AliceDB::SinkNode<Person>*>(view);
-
     int cnt = 0;
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         print_person(*it);
         cnt++;
     }

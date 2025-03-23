@@ -268,10 +268,10 @@ public:
 		return Source;
 	}
 
-
-	// Allows for storing output state of any node
+	// Allows for storing output state of any node, only node in graph that return's as it's actuall class, and not base
+	// class
 	template <typename N>
-	auto View(N *in_node) -> TypedNode<typename N::value_type> * {
+	auto View(N *in_node) -> SinkNode<typename N::value_type> * {
 		this->check_running();
 
 		index table_index = this->maybe_create_table();
@@ -282,7 +282,9 @@ public:
 		make_edge(static_cast<Node *>(in_node), static_cast<Node *>(sink));
 		all_nodes_.insert(static_cast<Node *>(sink));
 		sinks_.insert(static_cast<Node *>(sink));
-		return sink;
+		// return sink;
+
+		return reinterpret_cast<AliceDB::SinkNode<InType> *>(sink);
 	}
 
 	// stateless node that filters tuples based on condition applied to it

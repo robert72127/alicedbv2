@@ -311,9 +311,8 @@ TEST(TCP_TEST, simple_tcp){
 
 
     // debugging
-    AliceDB::SinkNode<Name> *real_sink = reinterpret_cast<AliceDB::SinkNode<Name>*>(view);
     
-    for(auto it = real_sink->begin() ; it != real_sink->end(); ++it){
+    for(auto it = view->begin() ; it != view->end(); ++it){
         print_name(*it);
     }
     

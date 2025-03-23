@@ -47,7 +47,6 @@ public:
 
 		this->pool_ = new WorkerPool(worker_threads_count);
 
-		/** @todo decide on default garbage collector policy */
 		if (!gb_settings) {
 			gb_settings = new GarbageCollectSettings {
 			    .clean_freq_ = 5000, .use_garbage_collector = false, .remove_zeros_only = true};

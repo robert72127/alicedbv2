@@ -18,11 +18,27 @@
 
 namespace AliceDB {
 
+/** @attention in current implementation, writer(whoever is responsible for writing to file) 
+ * needs to flush after writing to file to make sure producer see's full lines,
+ * otherwise producer might read part of line while rest isn't fully written.
+ * 
+ * 
+ * File based producers: and input file infinite growth problem:
+ * regarding infinite fie growth we can handle it as follows:
+ * 1) first option: writing process will stop writing to some file, then writer renames it after some time, and creates new one,
+ * after some time and when hit eof our reader(producer) stop reading file and open newly created one
+ * 
+ * 2) Use namedpipe, for reader(producer) use nonblocking approach
+ * 
+ */
+
+/** @todo test read binary, test read with new data arriving */
+
+
 /** @brief abstract source producer, producer will provide buffered new input
  * this could represent wrapper around kafka source, network socket, or simple
  * file
  */
-
 template <typename Type>
 class Producer {
 public:
@@ -65,6 +81,9 @@ public:
 
 		std::string line;
 		if (!std::getline(file_stream_, line)) {
+			if (file_stream_.eof()) {
+				file_stream_.clear(); 
+			}
 			return false; // no more data
 		}
 
@@ -87,19 +106,43 @@ public:
 	}
 
 private:
-	/**
-	 * @brief Parse a line into the given Type.
-	 * Since Type is trivial, you can use either:
-	 * - std::istringstream with operator>> if Type fields are individually
-	 * readable.
-	 * - sscanf if you know the exact format string.
-	 */
 
 	// std::function<bool(std::string, Tuple<Type> *)> produce_;
 	std::function<bool(std::istringstream &, Type *)> parse_;
 	std::ifstream file_stream_;
 	unsigned long current_line_;
 };
+
+
+template <typename Type>
+class FileProducerBinary : public Producer<Type> {
+public:
+    FileProducerBinary(const std::string &filename)
+    {
+        file_stream_.open(filename, std::ios::binary);
+        if (!file_stream_) {
+            throw std::runtime_error("Failed to open file: " + filename);
+        }
+    }
+
+    bool next(Tuple<Type>* storage) override {
+		// in this impl delta is written directly
+        if (!file_stream_.read(reinterpret_cast<char*>(&storage->delta), sizeof(storage->delta))) {
+			if (file_stream_.eof()) {
+            	file_stream_.clear();
+   		    }
+            return false;
+        }
+
+        file_stream_.read(reinterpret_cast<char*>(&storage->data), sizeof(Type));
+
+        return true;
+    }
+
+private:
+    std::ifstream file_stream_;
+};
+
 
 // assumes format:
 // insert/delete | timestamp | struct fields

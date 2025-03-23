@@ -606,7 +606,6 @@ void prepare_people_data_delete_test_non_zero_frontier(std::string people_fname)
     people_writter.close();
 }
 
-/** @todo fix me */
 TEST(DELETE_TEST, DELETE_NON_ZERO_FRONTIER){
 
     std::string people_fname = "people.txt";

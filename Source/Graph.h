@@ -257,6 +257,18 @@ public:
 		return Source;
 	}
 
+	template <typename Type>
+	auto Source(ProducerType prod_type, const std::string &prod_source, timestamp frontier_ts, int duration_us = 500)
+	    -> TypedNode<Type> * {
+		this->check_running();
+		TypedNode<Type> *Source =
+		    new SourceNode<Type>(prod_type, prod_source, nullptr, frontier_ts, duration_us = 500, this);
+		all_nodes_.insert(static_cast<Node *>(Source));
+		sources_.insert(static_cast<Node *>(Source));
+		return Source;
+	}
+
+
 	// Allows for storing output state of any node
 	template <typename N>
 	auto View(N *in_node) -> TypedNode<typename N::value_type> * {

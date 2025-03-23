@@ -18,7 +18,7 @@ class WorkerPool {
 public:
 	explicit WorkerPool(int workers_cnt = 1) : workers_cnt_ {workers_cnt}, stop_all_ {0} {
 		for (int i = 0; i < this->workers_cnt_; i++) {
-			this->workers_.emplace_back(&WorkerPool::WorkerThread, this, i);
+			this->workers_.emplace_back(&WorkerPool::WorkerThread, this);
 		}
 	}
 
@@ -90,7 +90,7 @@ private:
 	/**
 	 * @brief worker thread loop, acquires works, and then updates processed node state
 	 */
-	void WorkerThread(int index) {
+	void WorkerThread() {
 		try {
 			// process untill stop is called on this thread, or on all threads
 			while (!this->stop_all_) {
@@ -102,7 +102,7 @@ private:
 				}
 
 				node->Compute();
-				// we somehow must know g, maybe we should store pairs of node and graph pointers
+				
 				graph->Produced(node);
 			}
 		} catch (const std::exception &e) {
@@ -139,8 +139,6 @@ private:
 			}
 
 			if (!any_produced) {
-				// todo sleep for some time on this thread and for all others wait, maybe on cond var? or will current
-				// design force them to actually sleep on scoped_lock?
 				std::this_thread::sleep_for(std::chrono::milliseconds(200));
 			}
 		}

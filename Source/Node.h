@@ -16,8 +16,6 @@
 #include <set>
 #include <type_traits>
 
-/** @todo add locking, when needed, maybe add a way to  perform work asynchronous, then probably workers would have
- * easier job */
 
 namespace AliceDB {
 
@@ -120,7 +118,7 @@ public:
 };
 
 // add new producers here
-enum class ProducerType { FILE, TCPCLIENT };
+enum class ProducerType { FILE, FILE_BINARY, TCPCLIENT };
 
 /**  @brief Source node is responsible for producing data through Compute function and
  * then writing output to both out_cache, and persistent table creator of this
@@ -130,7 +128,9 @@ template <typename Type>
 class SourceNode : public TypedNode<Type> {
 public:
 	SourceNode(ProducerType prod_type, const std::string &producer_source,
-	           std::function<bool(std::istringstream &, Type *)> parse_input, timestamp frontier_ts, int duration_us,
+	           std::function<bool(std::istringstream &, Type *)> parse_input,
+			   timestamp frontier_ts, 
+			   int duration_us,
 	           Graph *graph)
 	    : graph_ {graph}, TypedNode<Type> {frontier_ts}, duration_us_ {duration_us} {
 
@@ -142,6 +142,11 @@ public:
 		case ProducerType::TCPCLIENT:
 			this->produce_ = std::make_unique<TCPClientProducer<Type>>(producer_source, parse_input);
 			break;
+		case ProducerType::FILE_BINARY:
+        	this->produce_ = std::make_unique<FileProducerBinary<Type>>(producer_source);
+        	break;
+	   	default:
+     	   throw std::invalid_argument("Unsupported Producer");
 		}
 
 		this->produce_cache_ = new Cache<Type>(DEFAULT_CACHE_SIZE);
@@ -287,7 +292,6 @@ public:
 		}
 	}
 
-	/** @todo lock node during iterating, and for time use last time that is commited */
 	class Iterator {
 	public:
 		Iterator(HeapIterator<Type> iter, Table<Type> *table, timestamp ts, std::atomic<int> &iter_count,
@@ -530,6 +534,9 @@ private:
                 if now negative emit -1
         if there was no previous state:
           if now positive emit 1
+*/
+/** 
+* @todo we need to fix garbage collection situation, probably best way is to always emit, but sometimes sometimes just with vaule of 0, which will update timestamp 
 */
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {

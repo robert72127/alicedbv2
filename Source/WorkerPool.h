@@ -102,7 +102,7 @@ private:
 				}
 
 				node->Compute();
-				
+
 				graph->Produced(node);
 			}
 		} catch (const std::exception &e) {

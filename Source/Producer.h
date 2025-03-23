@@ -32,7 +32,6 @@ namespace AliceDB {
  * 
  */
 
-/** @todo test read binary, test read with new data arriving */
 
 
 /** @brief abstract source producer, producer will provide buffered new input

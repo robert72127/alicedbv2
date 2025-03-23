@@ -464,7 +464,7 @@ public:
 	 * @return all nodes from this graph that can be processed
 	 */
 	std::vector<Node *> GetNext() {
-		std::scoped_lock(graph_latch_);
+		std::scoped_lock{graph_latch_};
 		if (AllProcesedPreviousLevel()) {
 			// ok all nodes processed at last level we can restart
 			if (current_level_ == this->levels_.size()) {
@@ -500,7 +500,7 @@ public:
 
 	// sets node state
 	void Produced(Node *node) {
-		std::scoped_lock(graph_latch_);
+		std::scoped_lock{graph_latch_};
 		// set correct state to current node
 		this->nodes_state_[node] = {NodeState::PROCESSED};
 	}
@@ -511,7 +511,7 @@ public:
 	 * this is called by WorkerPool->Start(Graph *g)
 	 */
 	void Start() {
-		std::scoped_lock(graph_latch_);
+		std::scoped_lock{graph_latch_};
 		// after calling process once graph no longer will accept adding new nodes
 		this->is_graph_running_ = true;
 		if (this->topo_graph_.empty()) {

@@ -532,10 +532,6 @@ private:
         if there was no previous state:
           if now positive emit 1
 */
-/**
- * @todo we need to fix garbage collection situation, probably best way is to always emit, but sometimes sometimes just
- * with vaule of 0, which will update timestamp
- */
 template <typename Type>
 class DistinctNode : public TypedNode<Type> {
 public:
@@ -630,8 +626,6 @@ public:
 				// whether previous emited tuple delta had positive count
 				bool previous_positive = current_idx_deltas[0].count > 0;
 				// this means this tuple was never emited, then we discard previous positive, since it's incorrect
-				/** @todo this might fail if oldest tuple was inserted with lower timestamp than ts_  same for logic in
-				 * aggregate */
 				bool prev_not_emited = this->not_emited_.contains(idx);
 
 				int count = 0;
@@ -649,6 +643,14 @@ public:
 					Type tp = this->table_->Get(idx);
 					this->out_cache_->Insert(tp, Delta {this->ts_, current_positive ? 1 : -1});
 					produced = true;
+				}
+				// tuple was emited, we don't update count, but we need to update timestamp so garbage collector in out
+				// node won't delete it
+				else if (!prev_not_emited) {
+					// count not chaged, but we still should emit something so that garbage collector won't delete this
+					// tuple
+					Type tp = this->table_->Get(idx);
+					this->out_cache_->Insert(tp, Delta {this->ts_, 0});
 				}
 			}
 

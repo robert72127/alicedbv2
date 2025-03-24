@@ -70,6 +70,13 @@ and stop it, using
 db->StopGraph(g);
 ```
 
+output data can be accesed from view by iterator
+
+```
+for(auto it = view->begin() ; it != view->end(); ++it){
+    // perform some action on output
+}
+```
 
 ### How it works:
 
@@ -323,27 +330,6 @@ that can be passed to database instance
 ```
 DataBase(std::filesystem::path database_directory, unsigned int worker_threads_count = 1, GarbageCollectSettings *gb_settings = nullptr)
 ```
-
-##### Node's api:
-
-  all nodes implement following api:
-
-  Compute: this will perform all computable action <for now> that is:
- 
-  CleanCache: - keeps track on nuber of output nodes, to know when all of them processed this node's output cacne and it can be cleaned 
-  
-  UpdateTimestamp - Updating timestamp of internal tables, compacting deltas, inserting tuples into persistent storage, providing output into out_cache
- 
-  AddOutNode - used by graph layer to keep track of all out nodes of given node, used for timestamp update
-
-  OldestTsToKeep - for all out nodes ts, returns smallest one (oldest ts) this is oldest time for which given node holds tuple noncompacted versions
-
-  Output: return out_cache of given node: this will be used by graph layer for chaining nodes
-
-
-  GetFrontierTs: - returns how much time in the past from current time do we have to store deltas
-
-  GetTs - returns current time of node
 
 ### Future Extensions:
 
